@@ -1,0 +1,249 @@
+name: ci-release
+
+on:
+  push:
+    tags:
+      - v*
+
+concurrency:
+  group: ci-release-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+  actions: write
+
+env:
+  PYTHONUNBUFFERED: "1"
+  FORCE_COLOR: "1"
+  RELEASE_CONSTRAINTS: scripts/release-constraints.txt
+
+jobs:
+  test:
+    name: test-${{ matrix.os }}-py${{ matrix.python-version }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            python-version: "3.13"
+          - os: macos-latest
+            python-version: "3.13"
+          - os: windows-latest
+            python-version: "3.13"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Install test dependencies
+        run: |
+          python -m pip install --upgrade pip setuptools wheel
+          python -m pip install -e .[test]
+
+      - name: Run test suite
+        run: python -m pytest -q
+
+  prepare-release-matrix:
+    name: prepare-release-matrix
+    runs-on: ubuntu-latest
+
+    outputs:
+      runtime_matrix: ${{ steps.runtime-matrix.outputs.matrix }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - id: runtime-matrix
+        name: Export runtime pack release matrix
+        shell: bash
+        run: |
+          echo 'matrix<<EOF' >> "$GITHUB_OUTPUT"
+          python - <<'PY' >> "$GITHUB_OUTPUT"
+          import json
+          import sys
+          from pathlib import Path
+
+          project_root = Path.cwd()
+          sys.path.insert(0, str(project_root / "src"))
+          from shotsieve.release_targets import tier1_release_matrix
+
+          print(json.dumps({"include": tier1_release_matrix()}))
+          PY
+          echo 'EOF' >> "$GITHUB_OUTPUT"
+
+  build-python-dist:
+    name: build-python-dist
+    runs-on: ubuntu-latest
+    needs: test
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Build sdist and wheel
+        run: |
+          python -m pip install --upgrade pip build
+          python -m build
+
+      - name: Upload Python distributions
+        if: ${{ github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/v') }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: python-dist
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 3
+
+  build-tier1-portable-bundles:
+    name: build-${{ matrix.id }}
+    runs-on: ${{ matrix.runsOn }}
+    if: ${{ github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/v') }}
+    needs:
+      - test
+      - prepare-release-matrix
+    env:
+      PIP_NO_CACHE_DIR: "1"
+      PIP_DISABLE_PIP_VERSION_CHECK: "1"
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.prepare-release-matrix.outputs.runtime_matrix) }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.pythonVersion }}
+
+      - name: Free disk space on Linux runners
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          df -h
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc || true
+          sudo docker image prune --all --force || true
+          df -h
+
+      - name: Upgrade packaging tools
+        run: |
+          python -m pip install --upgrade pip setuptools wheel -c ${{ env.RELEASE_CONSTRAINTS }}
+
+      - name: Install CPU Torch runtime
+        if: matrix.torchVariant == 'cpu'
+        run: |
+          python -m pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu -c ${{ env.RELEASE_CONSTRAINTS }}
+
+      - name: Install default Torch runtime
+        if: matrix.torchVariant == 'default' || matrix.torchVariant == 'directml'
+        run: |
+          python -m pip install torch torchvision -c ${{ env.RELEASE_CONSTRAINTS }}
+
+      - name: Install ShotSieve build dependencies
+        run: |
+          python -m pip install -e ".[${{ join(matrix.extras, ',') }}]" -c ${{ env.RELEASE_CONSTRAINTS }}
+          python -m pip install pyinstaller -c ${{ env.RELEASE_CONSTRAINTS }}
+
+      - name: Build portable bundle
+        env:
+          SHOTSIEVE_SKIP_BUNDLED_TORCH: ${{ matrix.torchVariant == 'cuda' && '1' || '' }}
+        run: |
+          python scripts/build_portable_bundle.py --target ${{ matrix.id }}
+
+      - name: Export portable bundle plan
+        shell: pwsh
+        run: |
+          python scripts/build_portable_bundle.py --target ${{ matrix.id }} --plan | Set-Content -Path bundle-plan.json
+
+      - name: Smoke test portable bundle
+        shell: pwsh
+        run: |
+          $plan = Get-Content bundle-plan.json -Raw | ConvertFrom-Json
+          if (-not (Test-Path $plan.archivePath)) {
+            throw "Expected archive not found at $($plan.archivePath)"
+          }
+
+          $launcher = Join-Path $plan.distPath $plan.target.executableName
+          if (-not (Test-Path $launcher)) {
+            throw "Expected launcher not found at $launcher"
+          }
+
+          & $launcher --help | Out-Null
+
+      - name: Upload portable bundle artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.id }}-portable-bundle
+          path: dist/${{ matrix.archiveName }}
+          if-no-files-found: error
+          retention-days: 3
+
+  publish-release:
+    name: publish-release
+    runs-on: ubuntu-latest
+    needs:
+      - build-python-dist
+      - build-tier1-portable-bundles
+    if: startsWith(github.ref, 'refs/tags/v')
+
+    steps:
+      - name: Download all build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+
+      - name: Publish GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            release-assets/**/*.whl
+            release-assets/**/*.zip
+            release-assets/**/*.tar.gz
+          generate_release_notes: true
+
+      - name: Delete workflow artifacts after publishing release
+        if: ${{ success() }}
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            const run_id = context.runId;
+            const artifacts = await github.paginate(
+              github.rest.actions.listWorkflowRunArtifacts,
+              {
+                owner,
+                repo,
+                run_id,
+                per_page: 100,
+              }
+            );
+
+            for (const artifact of artifacts) {
+              await github.rest.actions.deleteArtifact({
+                owner,
+                repo,
+                artifact_id: artifact.id,
+              });
+              core.info(`Deleted artifact: ${artifact.name}`);
+            }

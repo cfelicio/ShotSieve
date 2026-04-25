@@ -1,0 +1,481 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="ShotSieve - local-first photo quality scanner. Scan, score, review, and cull your photo library.">
+  <title>ShotSieve</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📷</text></svg>">
+  <link rel="stylesheet" href="/styles.css">
+  <link rel="stylesheet" href="/styles-layout.css">
+  <link rel="stylesheet" href="/styles-polish.css">
+</head>
+<body>
+  <div class="grain" data-modal-root="true"></div>
+  <div class="bench-glow" data-modal-root="true"></div>
+  <main class="shell" data-modal-root="true">
+    <header class="topbar">
+      <h1 class="brand-name">ShotSieve</h1>
+      <nav class="topbar-nav" aria-label="Main navigation" role="tablist">
+        <button id="tab-workspace-button" class="tab-button active" data-tab="workspace" type="button" role="tab" aria-controls="tab-workspace" aria-selected="true" tabindex="0">Library</button>
+        <button id="tab-compare-button" class="tab-button" data-tab="compare" type="button" role="tab" aria-controls="tab-compare" aria-selected="false" tabindex="-1">Compare</button>
+        <button id="tab-review-button" class="tab-button" data-tab="review" type="button" role="tab" aria-controls="tab-review" aria-selected="false" tabindex="-1">Review</button>
+        <button id="tab-settings-button" class="tab-button" data-tab="settings" type="button" role="tab" aria-controls="tab-settings" aria-selected="false" tabindex="-1">Settings</button>
+      </nav>
+      <div class="topbar-stats" id="summary-strip"></div>
+      <div class="topbar-actions">
+        <button id="theme-toggle" type="button" class="ghost icon-btn" aria-label="Switch theme" title="Switch theme">🌙</button>
+        <button id="refresh-all" type="button" class="ghost icon-btn" data-busy-lock="true" aria-label="Refresh workspace" title="Refresh workspace">⟳</button>
+      </div>
+    </header>
+
+    <!-- ─── LIBRARY TAB ─── -->
+    <section class="tab-panel active" id="tab-workspace" role="tabpanel" aria-labelledby="tab-workspace-button">
+      <div class="library-layout">
+        <section class="panel library-panel">
+          <div class="panel-topline">
+            <div>
+              <p class="eyebrow">Workspace</p>
+              <h2>Library</h2>
+            </div>
+          </div>
+
+          <div class="library-input-row">
+            <div class="field-with-action library-folder-label">
+              <label class="label-text" for="library-root-input">Photo Folder</label>
+              <div class="input-with-action">
+                <input id="library-root-input" type="text" placeholder="Select the folder containing your photos">
+                <button id="browse-library-root" type="button" class="ghost" aria-label="Browse for photo folder">Browse</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="library-actions">
+            <button id="analyze-library" type="button" class="primary-action" data-busy-lock="true">
+              Analyze
+            </button>
+            <span class="action-help">Scans for photos and scores their quality</span>
+          </div>
+          <div class="library-secondary-actions">
+            <button id="scan-library" type="button" class="ghost" data-busy-lock="true">Scan Only</button>
+            <span class="action-help-small">Find new photos without scoring</span>
+            <span class="action-sep">·</span>
+            <button id="score-library" type="button" class="ghost" data-busy-lock="true">Re-Score</button>
+            <span class="action-help-small">Recompute quality scores for scanned photos</span>
+          </div>
+
+          <div class="busy-status-container hidden" id="busy-status-container">
+            <div class="busy-status-row">
+              <p id="busy-indicator" class="busy-indicator hidden" role="status" aria-live="polite"></p>
+              <button id="cancel-operation" type="button" class="danger-ghost cancel-btn hidden">Cancel</button>
+            </div>
+            <div id="busy-progress" class="busy-progress hidden" role="progressbar" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100" aria-label="Overall operation progress">
+              <div id="busy-progress-fill" class="busy-progress-fill"></div>
+            </div>
+          </div>
+        </section>
+
+        <!-- Analysis Options (moved from Settings) -->
+        <details class="panel library-panel analysis-options" open>
+          <summary class="analysis-toggle">Analysis Options</summary>
+
+          <div class="settings-section">
+            <h3 class="settings-subhead">File Discovery</h3>
+            <p class="settings-help">How ShotSieve finds photos and generates browser-friendly previews.</p>
+            <div class="form-grid two-up">
+              <label>
+                <span>File Types to Scan</span>
+                <input id="extensions-input" type="text" placeholder="jpg,png,heif,raw,dng">
+                <span class="field-hint">Comma-separated list (e.g. jpg, raw, png). "raw" includes all common camera formats.</span>
+              </label>
+            </div>
+            <div class="toggle-row">
+              <label class="checkbox-row"><input id="recursive-toggle" type="checkbox" checked> Search subfolders (recursive)</label>
+            </div>
+          </div>
+
+          <div class="settings-section">
+            <h3 class="settings-subhead">Quality Scoring</h3>
+            <p class="settings-help">These settings control how each photo gets a quality score from 0–100.</p>
+            <div class="form-grid two-up">
+              <label>
+                <span>AI Model</span>
+                <select id="model-select"></select>
+                <span id="model-detail-hint" class="field-hint">Model-specific quality notes appear here when selected.</span>
+              </label>
+              <label>
+                <span>Processing Unit</span>
+                <select id="device-select"></select>
+                <span class="field-hint">GPU is recommended for speed. "Auto" picks the best available hardware.</span>
+              </label>
+            </div>
+            <span id="runtime-model-warning" class="field-hint hidden" role="status" aria-live="polite"></span>
+          </div>
+        </details>
+      </div>
+    </section>
+
+    <!-- ─── COMPARE TAB ─── -->
+    <section class="tab-panel" id="tab-compare" role="tabpanel" aria-labelledby="tab-compare-button" hidden>
+      <div class="compare-layout">
+        <section class="panel compare-control-panel">
+          <div class="panel-topline">
+            <div>
+              <h2>Compare Learned Models</h2>
+            </div>
+          </div>
+          <p class="settings-help compare-intro">Run multiple learned backends against the current library root and inspect their scores side by side before choosing a default.</p>
+          <div class="compare-selection-shell">
+            <div class="compare-selection-header">
+              <div>
+                <h3>Select Models</h3>
+                <p class="field-hint">Pick at least two models to benchmark on the same files.</p>
+              </div>
+              <button id="compare-run" type="button" class="primary-action" data-busy-lock="true">Run Comparison</button>
+            </div>
+            <div id="compare-busy-panel" class="compare-busy-panel hidden">
+              <div class="busy-status-row">
+                <p id="compare-busy-indicator" class="busy-indicator" role="status" aria-live="polite"></p>
+                <button id="compare-cancel-operation" type="button" class="danger-ghost cancel-btn hidden">Cancel</button>
+              </div>
+              <div id="compare-busy-progress" class="busy-progress hidden" role="progressbar" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100" aria-label="Overall comparison progress">
+                <div id="compare-busy-progress-fill" class="busy-progress-fill"></div>
+              </div>
+            </div>
+            <div id="compare-model-grid" class="compare-model-grid"></div>
+          </div>
+          <div id="compare-summary-cards" class="compare-summary-cards"></div>
+        </section>
+
+        <section class="panel compare-results-panel">
+          <div class="panel-topline">
+            <div>
+              <h2>Visual Compare</h2>
+            </div>
+          </div>
+          <div id="compare-results-warning" class="compare-results-warning hidden" role="status" aria-live="polite"></div>
+          <div id="compare-empty" class="detail-empty">Choose a library root, select at least two models, and run a comparison to see ranked results here.</div>
+          <div id="compare-results" class="compare-results hidden">
+            <div class="compare-results-meta">
+              <p id="compare-results-title" class="detail-scoreline"></p>
+              <p id="compare-results-subtitle" class="field-hint"></p>
+            </div>
+            <div class="compare-sort-row">
+              <label>
+                <span>Photo sort</span>
+                <select id="compare-row-sort">
+                  <option value="input">Original order</option>
+                  <option value="path_asc">Path (A–Z)</option>
+                </select>
+              </label>
+              <label>
+                <span>Visible results</span>
+                <select id="compare-row-filter">
+                  <option value="all">All photos</option>
+                  <option value="min">Lowest only</option>
+                  <option value="max">Highest only</option>
+                  <option value="extremes">Highest &amp; lowest</option>
+                </select>
+              </label>
+            </div>
+            <div id="compare-card-gallery" class="compare-card-gallery"></div>
+            <div id="compare-gallery-empty" class="field-hint hidden">
+              No comparable rows available for the selected sort or filter options.
+            </div>
+          </div>
+        </section>
+      </div>
+    </section>
+
+    <!-- ─── REVIEW TAB ─── -->
+    <section class="tab-panel" id="tab-review" role="tabpanel" aria-labelledby="tab-review-button" hidden>
+      <div class="review-layout">
+        <section class="review-sidebar">
+          <div class="sidebar-scroller">
+            <div class="sidebar-group" aria-label="Review filters">
+              <div class="filter-grid compact-filters">
+                <label class="floating-label filter-span-full">
+                  <span class="label-text">Search</span>
+                  <input id="query-filter" type="search" placeholder="Filename or folder...">
+                </label>
+                <label class="floating-label">
+                  <span class="label-text">Library Root</span>
+                  <select id="root-filter">
+                    <option value="">All scanned roots</option>
+                  </select>
+                </label>
+                <label class="floating-label">
+                  <span class="label-text">Sort</span>
+                  <select id="sort-filter">
+                    <optgroup label="Score">
+                      <option value="learned_asc">Lowest Score</option>
+                      <option value="learned_desc">Highest Score</option>
+                    </optgroup>
+                    <optgroup label="Other">
+                      <option value="date_asc">Oldest Date</option>
+                      <option value="date_desc">Newest Date</option>
+                      <option value="recent">Recent Scan</option>
+                      <option value="path">Path A–Z</option>
+                    </optgroup>
+                  </select>
+                </label>
+                <label class="floating-label">
+                  <span class="label-text">Visibility</span>
+                  <select id="marked-filter">
+                    <option value="all">All Photos</option>
+                    <option value="delete">Rejected</option>
+                    <option value="export">Selected</option>
+                  </select>
+                </label>
+                <label class="floating-label">
+                  <span class="label-text">Issues</span>
+                  <select id="issues-filter">
+                    <option value="all">All Photos</option>
+                    <option value="issues">Issues Only</option>
+                  </select>
+                </label>
+                <div class="filter-inline-pair filter-span-full">
+                  <label class="floating-label">
+                    <span class="label-text">Min AI Score</span>
+                    <input id="min-score" type="number" min="0" max="100" placeholder="0">
+                  </label>
+                  <label class="floating-label">
+                    <span class="label-text">Max AI Score</span>
+                    <input id="max-score" type="number" min="0" max="100" placeholder="100">
+                  </label>
+                </div>
+              </div>
+              <div class="sidebar-actions">
+                <button id="clear-filters" type="button" class="ghost">Reset Filters</button>
+              </div>
+            </div>
+
+
+            <div class="sidebar-group" aria-labelledby="review-batch-heading">
+              <h3 id="review-batch-heading" class="sidebar-label">Batch Actions</h3>
+              <div class="batch-bar" id="batch-bar">
+                <div class="batch-summary">
+                  <span id="selection-label" class="selection-badge">0 selected</span>
+                  <span id="selection-scope-label" class="muted" aria-live="polite">Current photo</span>
+                  <div class="batch-selection-controls">
+                    <button id="select-all-btn" type="button" class="ghost-tiny">Select Page</button>
+                    <button id="select-all-matching-btn" type="button" class="ghost-tiny">Select All <span id="select-all-matching-count"></span></button>
+                    <button id="select-none-btn" type="button" class="ghost-tiny">None</button>
+                  </div>
+                </div>
+                <div class="batch-actions">
+                  <button id="batch-export-mark" type="button" data-busy-lock="true" aria-describedby="selection-scope-label">✓ Keep</button>
+                  <button id="batch-delete-mark" type="button" class="danger-ghost" data-busy-lock="true" aria-describedby="selection-scope-label">✕ Reject</button>
+                  <button id="batch-move" type="button" class="ghost" data-busy-lock="true" title="Move selected to a folder">Move</button>
+                  <button id="batch-delete-disk" type="button" class="danger-ghost" data-busy-lock="true" title="Delete selected from disk">Delete</button>
+                  <button id="batch-clear-mark" type="button" class="ghost" data-busy-lock="true" aria-describedby="selection-scope-label">Clear Mark</button>
+                </div>
+              </div>
+            </div>
+            <div class="pagination-bar" id="pagination-bar">
+              <span id="page-info" class="muted">Showing 0 of 0</span>
+              <div class="pagination-actions">
+                <button id="page-prev" type="button" class="ghost" disabled>← Prev</button>
+                <button id="page-next" type="button" class="ghost" disabled>Next →</button>
+              </div>
+            </div>
+
+            <div id="rejected-actions" class="rejected-actions-bar hidden">
+              <span class="rejected-label" id="rejected-label">0 photos rejected</span>
+              <button id="move-all-rejected" type="button" class="ghost" data-busy-lock="true">Move Rejected…</button>
+              <button id="delete-all-rejected" type="button" class="danger-ghost" data-busy-lock="true">Delete Rejected</button>
+            </div>
+
+            <div id="queue-list" class="queue-list"></div>
+          </div>
+        </section>
+
+        <section class="panel board-panel review-detail" aria-label="Selected photo details">
+          <div id="detail-empty" class="detail-empty">Select a photo from the list to view details, scores, and make your keep/reject decision.</div>
+          <div id="detail-content" class="detail-content hidden">
+            <div class="detail-toolbar">
+              <div>
+                <p id="detail-title" class="detail-title"></p>
+                <p id="review-position" class="review-position"></p>
+                <p id="detail-path" class="detail-path"></p>
+                <p id="detail-scoreline" class="detail-scoreline"></p>
+                <p id="detail-issues-note" class="detail-issues-note hidden"></p>
+              </div>
+              <div class="inline-actions detail-toolbar-actions">
+                <button id="previous-item" type="button" class="ghost" data-review-nav="prev">← Prev</button>
+                <button id="next-item" type="button" class="ghost" data-review-nav="next">Next →</button>
+                <a id="open-original" class="button-link ghost" target="_blank" rel="noreferrer">Open File</a>
+              </div>
+            </div>
+
+            <div class="detail-grid">
+              <div class="detail-media-shell">
+                <img id="detail-image" alt="Selected photo preview" role="button" tabindex="0" aria-label="Open selected photo in lightbox">
+              </div>
+            </div>
+          </div>
+        </section>
+      </div>
+    </section>
+
+    <!-- ─── SETTINGS TAB ─── -->
+    <section class="tab-panel" id="tab-settings" role="tabpanel" aria-labelledby="tab-settings-button" hidden>
+      <div class="settings-layout">
+        <section class="panel settings-panel">
+          <div class="panel-topline">
+            <div>
+              <p class="eyebrow">System Information</p>
+              <h2>Your Setup</h2>
+            </div>
+          </div>
+          <p class="settings-help">ShotSieve runs locally on your machine. Here's what's available for photo analysis.</p>
+
+          <div class="settings-section">
+            <h3 class="settings-subhead">Detected Hardware</h3>
+            <div id="hardware-cards" class="runtime-cards"></div>
+          </div>
+
+          <div class="settings-section">
+            <h3 class="settings-subhead">Runtime & Formats</h3>
+            <div id="runtime-cards" class="runtime-cards"></div>
+          </div>
+
+          <div class="settings-section">
+            <h3 class="settings-subhead">Resource Usage</h3>
+            <p class="settings-help">Controls how aggressively ShotSieve uses your CPU and GPU during analysis. Change this if you need to use your computer for other tasks while scanning.</p>
+            <div class="form-grid two-up">
+              <label>
+                <span>Performance Profile</span>
+                <select id="resource-profile-select">
+                  <option value="aggressive">Aggressive - Uses almost all CPU cores and GPU memory</option>
+                  <option value="normal" selected>Normal - Balanced usage, leaves room for other tasks</option>
+                  <option value="low">Low - Minimal resource usage for background processing</option>
+                </select>
+                <span id="resource-profile-detail" class="field-hint">Current scaling will appear here after hardware detection.</span>
+              </label>
+            </div>
+          </div>
+
+          <div id="system-info" class="system-info-grid"></div>
+        </section>
+
+        <section class="panel settings-panel">
+          <div class="panel-topline">
+            <div>
+              <p class="eyebrow">Maintenance</p>
+              <h2>Database &amp; Cleanup</h2>
+            </div>
+          </div>
+          <p class="settings-help">Manage your ShotSieve database. These actions are permanent and cannot be undone.</p>
+          <div class="maintenance-grid">
+            <div class="maintenance-item">
+              <button id="prune-missing-cache" type="button" data-busy-lock="true"
+                data-confirm="This removes database entries for photos that no longer exist on disk. Your actual files are NOT deleted - only stale references are cleaned up.">
+                Clean Up Missing Files
+              </button>
+              <p class="maintenance-desc">Remove entries for photos that were moved or deleted outside ShotSieve</p>
+            </div>
+            <div class="maintenance-item">
+              <button id="clear-scores" type="button" class="ghost" data-busy-lock="true"
+                data-confirm="This erases all quality scores. You'll need to re-run scoring to get scores back. Your photos and review decisions are not affected.">
+                Reset All Scores
+              </button>
+              <p class="maintenance-desc">Erase quality scores so you can re-analyze with different settings</p>
+            </div>
+            <div class="maintenance-item">
+              <button id="clear-review" type="button" class="ghost" data-busy-lock="true"
+                data-confirm="This clears all keep/reject decisions. Your photos and scores are not affected.">
+                Reset All Reviews
+              </button>
+              <p class="maintenance-desc">Clear all keep/reject decisions</p>
+            </div>
+            <div class="maintenance-item">
+              <button id="clear-all-cache" type="button" class="danger" data-busy-lock="true"
+                data-confirm="This completely resets ShotSieve's database - all scores, reviews, and cached information will be erased. Your original photo files are never touched. You'll start fresh.">
+                Reset Everything
+              </button>
+              <p class="maintenance-desc">Completely wipe the database and start fresh (photos are never deleted)</p>
+            </div>
+          </div>
+        </section>
+      </div>
+    </section>
+  </main>
+
+  <footer class="shortcut-strip" data-modal-root="true">
+    <div class="shortcut-item"><kbd>Arrows</kbd> Navigate</div>
+    <div class="shortcut-item shortcut-item-optional"><kbd>S</kbd> Keep (Selected)</div>
+    <div class="shortcut-item shortcut-item-optional"><kbd>R</kbd> Reject (Deleted)</div>
+  </footer>
+
+  <dialog id="folder-browser" class="folder-dialog" aria-labelledby="folder-browser-title">
+    <form method="dialog" class="dialog-shell">
+      <div class="dialog-header">
+        <div>
+          <p class="eyebrow">Folder Browser</p>
+          <h2 id="folder-browser-title">Select a Directory</h2>
+        </div>
+        <button type="submit" class="ghost">Close</button>
+      </div>
+      <div class="field-with-action dialog-path-field">
+        <label id="browser-path-label" for="browser-path">Current folder path</label>
+        <div class="dialog-toolbar">
+          <button id="browser-up" type="button" class="ghost">Up</button>
+          <input id="browser-path" type="text" readonly>
+        </div>
+      </div>
+      <div id="browser-roots" class="shortcut-list"></div>
+      <div id="browser-list" class="browser-list"></div>
+      <div class="dialog-footer-actions">
+        <button id="browser-choose" type="button" class="primary-action">Choose Folder</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="export-dialog" class="folder-dialog" aria-labelledby="export-dialog-title">
+    <form method="dialog" class="dialog-shell">
+      <div class="dialog-header">
+        <div>
+          <p class="eyebrow">Export</p>
+          <h2 id="export-dialog-title">Export Selected Photos</h2>
+        </div>
+        <button type="submit" class="ghost">Close</button>
+      </div>
+      <div class="export-form">
+        <div class="field-with-action">
+          <label for="export-destination">Destination Folder</label>
+          <div class="input-with-action">
+            <input id="export-destination" type="text" placeholder="Choose a destination folder">
+            <button id="browse-export-dir" type="button" class="ghost" aria-label="Browse for export destination">Browse</button>
+          </div>
+        </div>
+        <label>
+          <span>Mode</span>
+          <select id="export-mode">
+            <option value="copy">Copy (keep originals)</option>
+            <option value="move">Move (relocate files)</option>
+          </select>
+        </label>
+        <div class="inline-actions">
+          <button id="export-confirm" type="button" data-busy-lock="true">Export Now</button>
+        </div>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="lightbox-overlay" class="lightbox-overlay overlay-closed" role="dialog" aria-modal="true" aria-label="Photo preview">
+    <button id="lightbox-close" type="button" class="lightbox-close" aria-label="Close lightbox" autofocus data-overlay-initial-focus>&times;</button>
+    <img id="lightbox-image" class="lightbox-image" alt="Full-size photo">
+  </dialog>
+
+  <div id="toast-region" class="toast-region" data-modal-root="true"></div>
+  <script src="/app-state.js"></script>
+  <script src="/app-utils.js"></script>
+  <script src="/app-busy.js"></script>
+  <script src="/app-review.js"></script>
+  <script src="/app-workflow-polling.js"></script>
+  <script src="/app-workflows.js"></script>
+  <script src="/app-events.js"></script>
+  <script src="/app.js"></script>
+</body>
+</html>

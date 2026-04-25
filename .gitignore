@@ -1,0 +1,88 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual Environments
+.venv/
+.venv*/
+venv/
+ENV/
+
+# Local environment variables
+.env
+.env.*
+!.env.example
+
+# Local-only content and GitHub automation
+blog.md
+.github/agents/
+.github/workflows/
+!.github/workflows/
+!.github/workflows/release.yml
+
+# PyInstaller
+#  Ignore generated manifest files, but keep the checked-in build spec used by release scripts.
+*.manifest
+
+# Installer logs
+*.log
+pyinstaller_build.log
+pyi_stdout.log
+pyi_stderr.log
+exe_out.log
+exe_err.log
+
+# Testing
+.pytest_cache/
+pytest.out
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+
+# Static analysis caches
+.mypy_cache/
+.ruff_cache/
+.pyright/
+
+# Temporary files
+.tmp-*/
+.tmp-*.txt
+shotsieve_pid.txt
+
+# Database and Cache (if local)
+*.db
+*.db-journal
+*.db-wal
+data/
+
+# OS generated files
+.DS_Store
+Thumbs.db
+
+# IDE settings
+.idea/
+.vscode/
+
+# Local release workflow outputs
+bundle-plan.json
+release-assets/
