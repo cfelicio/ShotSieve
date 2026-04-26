@@ -1154,3 +1154,71 @@ def test_embedded_install_torch_sidecar_suppresses_distutils_warning_during_pip_
     assert installed is True
     assert recorded == []
 
+
+def test_embedded_install_torch_sidecar_suppresses_pip_unexpected_import_warning(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    site_packages = tmp_path / "site-packages"
+
+    fake_pip_main_module = _new_module("pip._internal.cli.main")
+
+    class FakePipDeprecationWarning(Warning):
+        pass
+
+    def fake_main(args):
+        warnings.warn(
+            "DEPRECATION: Unexpected import of 'torch' after pip install started. pip 26.3 will enforce this behaviour change.",
+            FakePipDeprecationWarning,
+            stacklevel=1,
+        )
+        return 0
+
+    fake_pip_main_module.main = fake_main
+    monkeypatch.setitem(sys.modules, "pip._internal.cli.main", fake_pip_main_module)
+    monkeypatch.setattr(bootstrap_module, "_path_has_torch", lambda path: True)
+
+    with warnings.catch_warnings(record=True) as recorded:
+        warnings.simplefilter("always")
+        installed = bootstrap_module._install_torch_sidecar_with_embedded_pip(
+            runtime="cuda",
+            site_packages=site_packages,
+        )
+
+    assert installed is True
+    assert recorded == []
+
+
+def test_embedded_install_learned_iqa_sidecar_suppresses_pip_unexpected_import_warning(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    site_packages = tmp_path / "site-packages"
+
+    fake_pip_main_module = _new_module("pip._internal.cli.main")
+
+    class FakePipDeprecationWarning(Warning):
+        pass
+
+    def fake_main(args):
+        warnings.warn(
+            "DEPRECATION: Unexpected import of 'pyiqa' after pip install started. pip 26.3 will enforce this behaviour change.",
+            FakePipDeprecationWarning,
+            stacklevel=1,
+        )
+        return 0
+
+    fake_pip_main_module.main = fake_main
+    monkeypatch.setitem(sys.modules, "pip._internal.cli.main", fake_pip_main_module)
+    monkeypatch.setattr(bootstrap_module, "_path_has_pyiqa", lambda path: True, raising=False)
+
+    with warnings.catch_warnings(record=True) as recorded:
+        warnings.simplefilter("always")
+        installed = bootstrap_module._install_learned_iqa_sidecar_with_embedded_pip(
+            runtime="cuda",
+            site_packages=site_packages,
+        )
+
+    assert installed is True
+    assert recorded == []
+

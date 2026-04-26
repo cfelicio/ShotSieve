@@ -38,6 +38,7 @@ DEFAULT_DOWNLOAD_TIMEOUT_SECONDS = 60
 DEFAULT_TORCH_AUTO_INSTALL_ENV = "SHOTSIEVE_BOOTSTRAP_AUTO_INSTALL_TORCH"
 DEFAULT_TORCH_SITE_PACKAGES_DIRNAME = "site-packages"
 DISTUTILS_REPLACEMENT_WARNING_PATTERN = r"Setuptools is replacing distutils\..*"
+PIP_UNEXPECTED_IMPORT_WARNING_PATTERN = r"DEPRECATION: Unexpected import of '.*' after pip install started\..*"
 
 
 @contextlib.contextmanager
@@ -47,6 +48,22 @@ def _suppress_distutils_replacement_warning():
             "ignore",
             message=DISTUTILS_REPLACEMENT_WARNING_PATTERN,
             category=UserWarning,
+        )
+        yield
+
+
+@contextlib.contextmanager
+def _suppress_embedded_pip_warnings():
+    with warnings.catch_warnings():
+        warnings.filterwarnings(
+            "ignore",
+            message=DISTUTILS_REPLACEMENT_WARNING_PATTERN,
+            category=UserWarning,
+        )
+        warnings.filterwarnings(
+            "ignore",
+            message=PIP_UNEXPECTED_IMPORT_WARNING_PATTERN,
+            category=Warning,
         )
         yield
 
@@ -265,7 +282,7 @@ def _install_torch_sidecar_with_embedded_pip(
     force_reinstall: bool = False,
     output_func=print,
 ) -> bool | None:
-    with _suppress_distutils_replacement_warning():
+    with _suppress_embedded_pip_warnings():
         _patch_distlib_finder_for_frozen()
         _patch_pip_scriptmaker_for_embedded_install()
         pip_main = _load_embedded_pip_main()
@@ -329,7 +346,7 @@ def _install_torch_sidecar_with_embedded_pip(
         exception_text: str | None = None
 
         try:
-            with _suppress_distutils_replacement_warning():
+            with _suppress_embedded_pip_warnings():
                 with contextlib.redirect_stdout(stdout_buffer), contextlib.redirect_stderr(stderr_buffer):
                     return_code = _coerce_pip_main_return_code(pip_main(install_args))
         except SystemExit as exc:
@@ -428,7 +445,7 @@ def _install_learned_iqa_sidecar_with_embedded_pip(
     force_reinstall: bool = False,
     output_func=print,
 ) -> bool | None:
-    with _suppress_distutils_replacement_warning():
+    with _suppress_embedded_pip_warnings():
         _patch_distlib_finder_for_frozen()
         _patch_pip_scriptmaker_for_embedded_install()
         pip_main = _load_embedded_pip_main()
@@ -497,7 +514,7 @@ def _install_learned_iqa_sidecar_with_embedded_pip(
         exception_text: str | None = None
 
         try:
-            with _suppress_distutils_replacement_warning():
+            with _suppress_embedded_pip_warnings():
                 with contextlib.redirect_stdout(stdout_buffer), contextlib.redirect_stderr(stderr_buffer):
                     return_code = _coerce_pip_main_return_code(pip_main(install_args))
         except SystemExit as exc:
