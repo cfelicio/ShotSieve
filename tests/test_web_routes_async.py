@@ -259,7 +259,7 @@ class TestRouteHandlingAsync:
         release_event = threading.Event()
         preview_calls: list[str] = []
 
-        def fake_generate_preview(path: Path, preview_dir: Path):
+        def fake_generate_preview(path: Path, preview_dir: Path, *, raw_preview_mode: str = "auto"):
             preview_calls.append(path.name)
             if len(preview_calls) == 1:
                 started_event.set()
@@ -367,7 +367,7 @@ class TestRouteHandlingAsync:
             def shutdown(self, wait=True):
                 self._delegate.shutdown(wait=wait)
 
-        def fake_generate_preview(path: Path, preview_dir: Path):
+        def fake_generate_preview(path: Path, preview_dir: Path, *, raw_preview_mode: str = "auto"):
             with preview_lock:
                 preview_calls.append(path.name)
                 started_event.set()

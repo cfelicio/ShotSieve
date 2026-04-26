@@ -188,6 +188,8 @@ class TestStaticAssetHeaders:
         assert parser.headings[0] == ("h2", "Library")
         assert ("h3", "File Discovery") in parser.headings
         assert ("h3", "Quality Scoring") in parser.headings
+        assert 'id="preview-mode-select"' in body
+        assert "1024 px on the long edge" in body
 
     def test_static_html_review_tab_has_stable_workspace_and_subsection_headings(self, test_server):
         base_url, _, _ = test_server
@@ -713,6 +715,17 @@ class TestStaticAssetHeaders:
         assert "async function runScan(rootOverride = null, { generatePreviews = true, pipeline = null } = {})" in body
         assert "Scanning metadata only for faster discovery" in body
         assert "runScan(null, { generatePreviews: false })" in body
+        assert 'preview_mode: currentPreviewMode()' in body
+
+    def test_static_js_persists_preview_mode_setting(self, test_server):
+        base_url, _, _ = test_server
+        state_body = urlopen(f"{base_url}/app-state.js").read().decode("utf-8")
+        app_body = urlopen(f"{base_url}/app.js").read().decode("utf-8")
+        events_body = urlopen(f"{base_url}/app-events.js").read().decode("utf-8")
+
+        assert 'previewMode: documentRef.getElementById("preview-mode-select")?.value || "auto"' in state_body
+        assert 'const previewModeSelect = document.getElementById("preview-mode-select");' in app_body
+        assert '"preview-mode-select",' in events_body
 
     def test_static_js_scan_uses_async_job_polling_routes(self, test_server):
         base_url, _, _ = test_server
@@ -854,6 +867,15 @@ class TestStaticAssetHeaders:
         assert 'scoreCard("Overall"' not in body
         assert "Overall ${" not in body
         assert "detail-issues-note" in body
+
+    def test_static_review_open_file_uses_local_open_endpoint(self, test_server):
+        base_url, _, _ = test_server
+        review_body = urlopen(f"{base_url}/app-review.js").read().decode("utf-8")
+        workflows_body = urlopen(f"{base_url}/app-workflows.js").read().decode("utf-8")
+
+        assert "openOriginalFile(detail.id)" in review_body
+        assert "event.preventDefault();" in review_body
+        assert 'postJson("/api/files/open", { file_id: Number(fileId) })' in workflows_body
 
     def test_static_js_compare_cards_use_header_rows_for_alignment(self, test_server):
         base_url, _, _ = test_server

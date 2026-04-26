@@ -43,6 +43,7 @@ def test_reset_everything_clears_persisted_ui_state(frontend_server: str) -> Non
     assert "onSuccess: resetPersistedUiStateAfterFullReset" in events_body
     assert 'localStorage.removeItem("shotsieve_resource_profile");' in events_body
     assert 'profileSelect.value = "normal";' in events_body
+    assert 'previewModeSelect.value = state.options?.default_preview_mode || "auto";' in events_body
 
 
 def test_ui_state_is_scoped_to_database_marker(frontend_server: str) -> None:

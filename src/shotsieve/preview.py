@@ -16,6 +16,7 @@ from PIL import Image, ImageOps, UnidentifiedImageError
 
 from shotsieve.config import (
     ALL_PREVIEWABLE_EXTENSIONS,
+    DEFAULT_RAW_PREVIEW_MODE,
     RAW_CAMERA_EXTENSIONS,
 )
 from shotsieve.db import normalize_resolved_path
@@ -34,6 +35,7 @@ if register_heif_opener is not None:
     register_heif_opener()
 
 MAX_PREVIEW_SIZE = (1024, 1024)
+MIN_RAW_THUMBNAIL_LONG_EDGE = max(MAX_PREVIEW_SIZE)
 CAPTURE_TIME_EXIF_TAGS = (36867, 36868, 306)
 _STDERR_CAPTURE_LOCK = threading.Lock()
 
@@ -135,7 +137,12 @@ def _captured_stderr(stderr_buffer: io.StringIO):
                 os.close(saved_fd)
 
 
-def generate_preview(source_path: Path, preview_dir: Path) -> PreviewResult:
+def generate_preview(
+    source_path: Path,
+    preview_dir: Path,
+    *,
+    raw_preview_mode: str = DEFAULT_RAW_PREVIEW_MODE,
+) -> PreviewResult:
     suffix = source_path.suffix.casefold()
     if suffix not in ALL_PREVIEWABLE_EXTENSIONS:
         return PreviewResult(
@@ -147,7 +154,7 @@ def generate_preview(source_path: Path, preview_dir: Path) -> PreviewResult:
         )
 
     if suffix in RAW_CAMERA_EXTENSIONS:
-        return generate_raw_preview(source_path, preview_dir)
+        return generate_raw_preview(source_path, preview_dir, raw_preview_mode=raw_preview_mode)
 
     preview_dir.mkdir(parents=True, exist_ok=True)
     preview_path, stale_preview_paths = preview_output_paths(source_path, preview_dir)
@@ -190,7 +197,12 @@ def generate_preview(source_path: Path, preview_dir: Path) -> PreviewResult:
     )
 
 
-def generate_raw_preview(source_path: Path, preview_dir: Path) -> PreviewResult:
+def generate_raw_preview(
+    source_path: Path,
+    preview_dir: Path,
+    *,
+    raw_preview_mode: str = DEFAULT_RAW_PREVIEW_MODE,
+) -> PreviewResult:
     if rawpy is None:
         return PreviewResult(
             path=None,
@@ -209,8 +221,13 @@ def generate_raw_preview(source_path: Path, preview_dir: Path) -> PreviewResult:
         with _captured_stderr(stderr_buffer):
             with rawpy.imread(str(source_path)) as raw_image:
                 # Fast path: extract the embedded JPEG thumbnail (most RAW files have one).
-                # This is ~100x faster than full demosaicing via postprocess().
-                result = _try_extract_raw_thumbnail(raw_image, preview_path)
+                # Use it only when it is large enough for our target preview size;
+                # tiny embedded thumbnails look visibly softer than the source.
+                result = _try_extract_raw_thumbnail(
+                    raw_image,
+                    preview_path,
+                    raw_preview_mode=raw_preview_mode,
+                )
                 if result is not None:
                     cleanup_stale_preview_paths(stale_preview_paths)
                     result.error_text = _format_nonfatal_issue(source_path, stderr_buffer.getvalue())
@@ -248,11 +265,19 @@ def generate_raw_preview(source_path: Path, preview_dir: Path) -> PreviewResult:
     )
 
 
-def _try_extract_raw_thumbnail(raw_image, preview_path: Path) -> PreviewResult | None:
+def _try_extract_raw_thumbnail(
+    raw_image,
+    preview_path: Path,
+    *,
+    raw_preview_mode: str = DEFAULT_RAW_PREVIEW_MODE,
+) -> PreviewResult | None:
     """Try to extract the embedded JPEG thumbnail from a RAW file.
 
     Returns a PreviewResult on success, or None if no usable thumbnail exists.
     """
+    if raw_preview_mode == "high-quality":
+        return None
+
     try:
         thumb = raw_image.extract_thumb()
     except Exception:
@@ -264,12 +289,12 @@ def _try_extract_raw_thumbnail(raw_image, preview_path: Path) -> PreviewResult |
     bitmap_format = getattr(thumb_format, "BITMAP", object())
 
     if thumb.format == jpeg_format:
-        # Write the embedded JPEG directly — no decode/encode round-trip needed.
-        preview_path.write_bytes(thumb.data)
-        # Read back to get dimensions and EXIF capture time.
+        # Inspect the embedded JPEG before trusting it as our preview source.
         try:
-            with Image.open(preview_path) as image:
+            with Image.open(io.BytesIO(thumb.data)) as image:
                 width, height = image.size
+                if not _raw_thumbnail_is_acceptable(width, height, raw_preview_mode=raw_preview_mode):
+                    return None
                 capture_time = extract_capture_time(image)
                 # Resize if the embedded thumbnail exceeds our preview size.
                 if width > MAX_PREVIEW_SIZE[0] or height > MAX_PREVIEW_SIZE[1]:
@@ -279,6 +304,8 @@ def _try_extract_raw_thumbnail(raw_image, preview_path: Path) -> PreviewResult |
                     image.thumbnail(MAX_PREVIEW_SIZE, Image.Resampling.LANCZOS)
                     image.save(preview_path, format="JPEG", quality=85, optimize=False)
                     width, height = image.size
+                else:
+                    preview_path.write_bytes(thumb.data)
         except (OSError, UnidentifiedImageError):
             # Thumbnail was written but unreadable — treat as failed extraction.
             return None
@@ -295,6 +322,8 @@ def _try_extract_raw_thumbnail(raw_image, preview_path: Path) -> PreviewResult |
         # Bitmap thumbnail — decode via PIL and save as JPEG.
         image = Image.fromarray(thumb.data)
         width, height = image.size
+        if not _raw_thumbnail_is_acceptable(width, height, raw_preview_mode=raw_preview_mode):
+            return None
         image.thumbnail(MAX_PREVIEW_SIZE, Image.Resampling.LANCZOS)
         image.save(preview_path, format="JPEG", quality=85, optimize=False)
 
@@ -307,6 +336,17 @@ def _try_extract_raw_thumbnail(raw_image, preview_path: Path) -> PreviewResult |
         )
 
     return None
+
+
+def _raw_thumbnail_is_acceptable(
+    width: int,
+    height: int,
+    *,
+    raw_preview_mode: str = DEFAULT_RAW_PREVIEW_MODE,
+) -> bool:
+    if raw_preview_mode == "fast":
+        return True
+    return max(width, height) >= MIN_RAW_THUMBNAIL_LONG_EDGE
 
 
 def stable_preview_name(source_path: Path) -> str:
@@ -491,6 +531,7 @@ def generate_previews_parallel(
     *, 
     max_workers: int | None = None,
     progress_callback: Callable[[int, int], None] | None = None,
+    raw_preview_mode: str = DEFAULT_RAW_PREVIEW_MODE,
 ) -> list[PreviewResult]:
     """Generate previews in parallel, optionally reporting progress via *progress_callback(completed, total)*.
 
@@ -505,7 +546,7 @@ def generate_previews_parallel(
         return []
 
     if total == 1:
-        result = generate_preview(source_paths[0], preview_dir)
+        result = generate_preview(source_paths[0], preview_dir, raw_preview_mode=raw_preview_mode)
         if progress_callback is not None:
             progress_callback(1, 1)
         return [result]
@@ -518,7 +559,7 @@ def generate_previews_parallel(
 
     with ProcessPoolExecutor(max_workers=workers) as executor:
         future_to_index = {
-            executor.submit(generate_preview, path, preview_dir): idx
+            executor.submit(generate_preview, path, preview_dir, raw_preview_mode=raw_preview_mode): idx
             for idx, path in enumerate(source_paths)
         }
         completed = 0

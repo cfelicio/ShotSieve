@@ -289,6 +289,8 @@
       formatNumber: formatNumberFn,
       scoreCard,
       statusPill,
+      openOriginalFile,
+      handleError,
     } = deps;
 
     void modelDisplayNames;
@@ -325,7 +327,15 @@
     updateCompactReviewNavigation(state, { queueIndex });
     document.getElementById("detail-path").textContent = detail.path;
     document.getElementById("detail-image").src = `/api/media/preview?id=${detail.id}`;
-    document.getElementById("open-original").href = `/api/media/source?id=${detail.id}`;
+    const openOriginalLink = document.getElementById("open-original");
+    openOriginalLink.href = `/api/media/source?id=${detail.id}`;
+    openOriginalLink.onclick = (event) => {
+      if (typeof openOriginalFile !== "function") {
+        return;
+      }
+      event.preventDefault();
+      openOriginalFile(detail.id).catch(handleError);
+    };
 
     document.getElementById("detail-scoreline").textContent = `AI score ${formatNumberFn(aiScore)}`;
     if (issuesNote) {

@@ -539,6 +539,10 @@
       });
     }
 
+    function currentPreviewMode() {
+      return document.getElementById("preview-mode-select")?.value || "auto";
+    }
+
     async function runModelComparison() {
       const root = currentLibraryRoot();
       if (!root) {
@@ -639,6 +643,7 @@
         models,
         device: runtimeTarget || null,
         batch_size: requestedBatchSize,
+        preview_mode: currentPreviewMode(),
         resource_profile: currentResourceProfile(),
       }, { signal: state.abortController?.signal });
       const compareJobId = String(compareJobStart?.job_id || "");
@@ -1013,6 +1018,7 @@
       const scanJobStart = await postJson("/api/scan/start", {
         roots: [root],
         extensions: document.getElementById("extensions-input").value.trim() || null,
+        preview_mode: currentPreviewMode(),
         recursive: document.getElementById("recursive-toggle").checked,
         rescan_all: false,
         generate_previews: generatePreviews,
@@ -1092,6 +1098,7 @@
         learned_backend_name: learnedBackend,
         device: runtimeTarget || null,
         batch_size: requestedBatchSize,
+        preview_mode: currentPreviewMode(),
         force: false,
         resource_profile: currentResourceProfile(),
       }, { signal: state.abortController?.signal });
@@ -1215,6 +1222,13 @@
       }
     }
 
+    async function openOriginalFile(fileId) {
+      if (!Number.isInteger(Number(fileId)) || Number(fileId) <= 0) {
+        throw new Error("Pick a file first.");
+      }
+      await postJson("/api/files/open", { file_id: Number(fileId) });
+    }
+
     async function openBrowser(targetId) {
       state.browserTarget = targetId;
       const dialog = document.getElementById("folder-browser");
@@ -1304,6 +1318,7 @@
       clearCache,
       deleteSelectedFiles,
       navigateSelection,
+      openOriginalFile,
       openBrowser,
       browseDirectory,
       chooseBrowserPath,

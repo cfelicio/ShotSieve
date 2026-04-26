@@ -1,6 +1,8 @@
+import io
 import os
 from pathlib import Path
 import sys
+from types import SimpleNamespace
 
 from shotsieve import preview as preview_module
 
@@ -27,9 +29,10 @@ class _FakeExecutor:
     def __exit__(self, exc_type, exc, tb) -> None:
         return None
 
-    def submit(self, fn, source_path: Path, preview_dir: Path):
+    def submit(self, fn, source_path: Path, preview_dir: Path, **kwargs):
         assert fn is preview_module.generate_preview
         assert preview_dir.name == "previews"
+        assert kwargs.get("raw_preview_mode", "auto") in {"fast", "auto", "high-quality"}
         return self._future_map[source_path]
 
 
@@ -294,3 +297,180 @@ def test_generate_preview_falls_back_when_stderr_fd_duplication_is_unavailable(
     assert result.status == "ready"
     assert result.path is not None
     assert result.error_text == "sample.jpg: decoder warning routed through sys.stderr"
+
+
+def test_generate_raw_preview_falls_back_to_demosaic_when_embedded_thumbnail_is_too_small(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    source_path = tmp_path / "sample.nef"
+    preview_dir = tmp_path / "previews"
+    source_path.write_bytes(b"fake-raw")
+
+    thumb_buffer = io.BytesIO()
+    preview_module.Image.new("RGB", (640, 480), color="red").save(thumb_buffer, format="JPEG")
+    thumb_bytes = thumb_buffer.getvalue()
+
+    rendered_image = preview_module.Image.new("RGB", (1600, 1200), color="blue")
+    postprocess_calls: list[dict[str, object]] = []
+
+    class FakeRawImage:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def extract_thumb(self):
+            return SimpleNamespace(format="jpeg", data=thumb_bytes)
+
+        def postprocess(self, **kwargs):
+            postprocess_calls.append(dict(kwargs))
+            return "rendered-array"
+
+    monkeypatch.setattr(
+        preview_module,
+        "rawpy",
+        SimpleNamespace(
+            imread=lambda _path: FakeRawImage(),
+            ThumbFormat=SimpleNamespace(JPEG="jpeg", BITMAP="bitmap"),
+        ),
+    )
+    monkeypatch.setattr(preview_module.Image, "fromarray", lambda _array: rendered_image.copy())
+
+    result = preview_module.generate_raw_preview(source_path, preview_dir)
+
+    assert result.status == "ready"
+    assert result.path is not None
+    assert postprocess_calls == [{"use_camera_wb": True, "no_auto_bright": False}]
+    generated_preview = preview_module.Image.open(result.path)
+    assert max(generated_preview.size) == preview_module.MAX_PREVIEW_SIZE[0]
+
+
+def test_generate_raw_preview_uses_embedded_thumbnail_when_it_is_large_enough(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    source_path = tmp_path / "sample.cr3"
+    preview_dir = tmp_path / "previews"
+    source_path.write_bytes(b"fake-raw")
+
+    thumb_buffer = io.BytesIO()
+    preview_module.Image.new("RGB", (1024, 768), color="green").save(thumb_buffer, format="JPEG")
+    thumb_bytes = thumb_buffer.getvalue()
+
+    class FakeRawImage:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def extract_thumb(self):
+            return SimpleNamespace(format="jpeg", data=thumb_bytes)
+
+        def postprocess(self, **_kwargs):
+            raise AssertionError("postprocess should not be used when the embedded thumbnail is sufficient")
+
+    monkeypatch.setattr(
+        preview_module,
+        "rawpy",
+        SimpleNamespace(
+            imread=lambda _path: FakeRawImage(),
+            ThumbFormat=SimpleNamespace(JPEG="jpeg", BITMAP="bitmap"),
+        ),
+    )
+
+    result = preview_module.generate_raw_preview(source_path, preview_dir)
+
+    assert result.status == "ready"
+    assert result.path is not None
+    assert Path(result.path).read_bytes() == thumb_bytes
+
+
+def test_generate_raw_preview_fast_mode_uses_small_embedded_thumbnail(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    source_path = tmp_path / "sample.raf"
+    preview_dir = tmp_path / "previews"
+    source_path.write_bytes(b"fake-raw")
+
+    thumb_buffer = io.BytesIO()
+    preview_module.Image.new("RGB", (640, 480), color="purple").save(thumb_buffer, format="JPEG")
+    thumb_bytes = thumb_buffer.getvalue()
+
+    class FakeRawImage:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def extract_thumb(self):
+            return SimpleNamespace(format="jpeg", data=thumb_bytes)
+
+        def postprocess(self, **_kwargs):
+            raise AssertionError("fast mode should not demosaic when an embedded thumbnail exists")
+
+    monkeypatch.setattr(
+        preview_module,
+        "rawpy",
+        SimpleNamespace(
+            imread=lambda _path: FakeRawImage(),
+            ThumbFormat=SimpleNamespace(JPEG="jpeg", BITMAP="bitmap"),
+        ),
+    )
+
+    result = preview_module.generate_raw_preview(source_path, preview_dir, raw_preview_mode="fast")
+
+    assert result.status == "ready"
+    assert result.path is not None
+    assert Path(result.path).read_bytes() == thumb_bytes
+
+
+def test_generate_raw_preview_high_quality_mode_skips_embedded_thumbnail(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    source_path = tmp_path / "sample.dng"
+    preview_dir = tmp_path / "previews"
+    source_path.write_bytes(b"fake-raw")
+
+    thumb_buffer = io.BytesIO()
+    preview_module.Image.new("RGB", (2048, 1536), color="orange").save(thumb_buffer, format="JPEG")
+    thumb_bytes = thumb_buffer.getvalue()
+
+    rendered_image = preview_module.Image.new("RGB", (1500, 1000), color="yellow")
+    calls = {"extract_thumb": 0, "postprocess": 0}
+
+    class FakeRawImage:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def extract_thumb(self):
+            calls["extract_thumb"] += 1
+            return SimpleNamespace(format="jpeg", data=thumb_bytes)
+
+        def postprocess(self, **_kwargs):
+            calls["postprocess"] += 1
+            return "rendered-array"
+
+    monkeypatch.setattr(
+        preview_module,
+        "rawpy",
+        SimpleNamespace(
+            imread=lambda _path: FakeRawImage(),
+            ThumbFormat=SimpleNamespace(JPEG="jpeg", BITMAP="bitmap"),
+        ),
+    )
+    monkeypatch.setattr(preview_module.Image, "fromarray", lambda _array: rendered_image.copy())
+
+    result = preview_module.generate_raw_preview(source_path, preview_dir, raw_preview_mode="high-quality")
+
+    assert result.status == "ready"
+    assert result.path is not None
+    assert calls == {"extract_thumb": 0, "postprocess": 1}

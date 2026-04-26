@@ -49,6 +49,7 @@ def test_route_shape_helpers_normalize_scan_compare_and_selection_payloads(tmp_p
         "roots": [str(photo_root)],
         "offset": 2,
         "files_total_hint": 7,
+        "preview_mode": "high-quality",
     })
     compare_request = request_module.parse_compare_request(
         {"models": [" topiq_nr ", "clipiqa"], "offset": 1},
@@ -58,6 +59,7 @@ def test_route_shape_helpers_normalize_scan_compare_and_selection_payloads(tmp_p
     assert route_module._scan_request_roots(scan_request) == [photo_root.resolve()]
     assert route_module._scan_request_offset(scan_request) == 2
     assert route_module._scan_request_total_hint(scan_request) == 7
+    assert scan_request["preview_mode"] == "high-quality"
     assert route_module._compare_request_models(compare_request) == ["topiq_nr", "clipiqa"]
     assert route_module._selection_excluded_ids({"exclude_file_ids": [1, 2]}) == {1, 2}
 
@@ -86,7 +88,88 @@ def test_route_result_helpers_normalize_delete_and_export_payloads() -> None:
     assert export_result == {"copied": 3, "moved": 1, "failed": ["oops"]}
 
 
+def test_reveal_in_file_manager_uses_windows_explorer_select(monkeypatch, tmp_path: Path) -> None:
+    from shotsieve import web as web_module
+
+    target_path = tmp_path / "photos" / "sample.nef"
+    target_path.parent.mkdir(parents=True)
+    target_path.write_bytes(b"raw")
+
+    captured: dict[str, object] = {}
+
+    monkeypatch.setattr(web_module.sys, "platform", "win32")
+    monkeypatch.setattr(web_module.shutil, "which", lambda name: "C:/Windows/explorer.exe" if name.startswith("explorer") else None)
+
+    def fake_popen(args, **_kwargs):
+        captured["args"] = list(args)
+        return SimpleNamespace()
+
+    monkeypatch.setattr(web_module.subprocess, "Popen", fake_popen)
+
+    method = web_module.reveal_in_file_manager(target_path)
+
+    assert method == "windows-explorer"
+    assert captured["args"] == ["C:/Windows/explorer.exe", f"/select,{target_path.resolve()}"]
+
+
 class TestRouteHandling:
+    def test_files_open_route_reveals_source_path_in_file_manager(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+        from shotsieve import web_routes as route_module
+
+        captured: dict[str, object] = {}
+        source_path = (tmp_path / "photos" / "sample.nef").resolve()
+        source_path.parent.mkdir(parents=True)
+        source_path.write_bytes(b"raw")
+
+        def fake_send_json(_handler, payload: object) -> None:
+            captured["payload"] = payload
+
+        monkeypatch.setattr(route_module, "send_json", fake_send_json)
+        monkeypatch.setattr(
+            route_module,
+            "resolve_media_request",
+            lambda **_kwargs: SimpleNamespace(path=source_path, error_status=None, error_message=None),
+        )
+
+        def fake_reveal_in_file_manager(path: Path) -> str:
+            captured["revealed"] = path
+            return "windows-explorer"
+
+        deps = SimpleNamespace(
+            read_json_body=lambda _handler, *, max_body_size: {"file_id": 7},
+            required_int=lambda value, *, name, minimum=0: int(value),
+            database=lambda _path: None,
+            build_config=lambda *_args, **_kwargs: None,
+            is_within_any_root=lambda *_args, **_kwargs: True,
+            media_path_for_file=lambda *_args, **_kwargs: source_path,
+            stable_preview_name=lambda _path: "preview-name",
+            preview_name_candidates=lambda _path: ["preview-name"],
+            guess_media_type=lambda _name: (None, None),
+            reveal_in_file_manager=fake_reveal_in_file_manager,
+        )
+        context = route_module.WebRouteContext(
+            db_path=tmp_path / "shotsieve.db",
+            operation_lock=threading.Lock(),
+            scan_registry=None,
+            score_registry=None,
+            compare_registry=None,
+            max_request_body_size=1024,
+            static_dir=tmp_path,
+            media_mime_fallbacks={},
+            dependencies=deps,
+        )
+        handler = SimpleNamespace(path="/api/files/open", headers={"Content-Length": "20"})
+
+        handled = route_module._handle_file_action_post_routes(handler, context, urlparse(handler.path))
+
+        assert handled is True
+        assert captured["revealed"] == source_path
+        assert captured["payload"] == {
+            "opened": True,
+            "path": str(source_path),
+            "method": "windows-explorer",
+        }
+
     def test_handle_job_result_keeps_completed_summary_after_socket_write_failure(self):
         from shotsieve.job_registry import JobRegistry
         from shotsieve import web_routes as route_module

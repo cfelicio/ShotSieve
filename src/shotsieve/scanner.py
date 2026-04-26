@@ -3,6 +3,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Callable, Iterable, Sequence
 
+from shotsieve.config import DEFAULT_RAW_PREVIEW_MODE
 from shotsieve.db import PREVIEW_CACHE_ROOT_METADATA_KEY, get_metadata_value, infer_preview_cache_roots, normalize_resolved_path, root_path_filter, set_preview_cache_root
 from shotsieve.models import ScanSummary
 from shotsieve.preview import generate_preview
@@ -67,6 +68,7 @@ def scan_root(
     preview_dir: Path,
     rescan_all: bool = False,
     generate_previews: bool = True,
+    raw_preview_mode: str = DEFAULT_RAW_PREVIEW_MODE,
     resource_profile: str | None = None,
     progress_callback: Callable[[int, int, str], None] | None = None,
     files_total_hint: int | None = None,
@@ -170,6 +172,7 @@ def scan_root(
                         pending_paths, connection, summary, max_workers,
                         preview_dir=preview_dir, rescan_all=rescan_all,
                         generate_previews=generate_previews,
+                        raw_preview_mode=raw_preview_mode,
                         executor=shared_executor,
                         existing_rows=existing_rows,
                         cancel_check=cancel_check,
@@ -203,6 +206,7 @@ def scan_root(
                     pending_paths, connection, summary, max_workers,
                     preview_dir=preview_dir, rescan_all=rescan_all,
                     generate_previews=generate_previews,
+                    raw_preview_mode=raw_preview_mode,
                     executor=shared_executor,
                     existing_rows=existing_rows,
                     cancel_check=cancel_check,
@@ -306,6 +310,7 @@ def _process_scan_batch(
     preview_dir: Path,
     rescan_all: bool,
     generate_previews: bool,
+    raw_preview_mode: str = DEFAULT_RAW_PREVIEW_MODE,
     executor: concurrent.futures.ProcessPoolExecutor | None = None,
     existing_rows: dict[str, dict] | None = None,
     cancel_check: Callable[[], None] | None = None,
@@ -343,6 +348,7 @@ def _process_scan_batch(
                             preview_dir=preview_dir,
                             rescan_all=rescan_all,
                             generate_previews=generate_previews,
+                            raw_preview_mode=raw_preview_mode,
                             existing_metadata=existing_rows.get(pk),
                         )
                     )
@@ -380,6 +386,7 @@ def _process_scan_batch(
                             preview_dir=preview_dir,
                             rescan_all=rescan_all,
                             generate_previews=generate_previews,
+                            raw_preview_mode=raw_preview_mode,
                             existing_metadata=existing_rows.get(canonical_path_key(path)),
                         )
                     )
@@ -503,6 +510,7 @@ def gather_file_metadata(
     preview_dir: Path,
     rescan_all: bool,
     generate_previews: bool = True,
+    raw_preview_mode: str = DEFAULT_RAW_PREVIEW_MODE,
     existing_metadata: dict | None = None,
 ) -> dict:
     stat = path.stat()
@@ -563,7 +571,7 @@ def gather_file_metadata(
 
     if generate_previews:
         # Previews are CPU intensive, but generate_preview handles its own errors
-        preview = generate_preview(path, preview_dir)
+        preview = generate_preview(path, preview_dir, raw_preview_mode=raw_preview_mode)
         metadata.update({
             "preview_path": preview.path,
             "preview_status": preview.status,

@@ -204,13 +204,14 @@ class TestRouteHandlingIntegration:
 
         def fake_score_files(connection, **kwargs):
             captured["preview_dir"] = kwargs["preview_dir"]
+            captured["raw_preview_mode"] = kwargs["raw_preview_mode"]
             return DummySummary()
 
         monkeypatch.setattr(web_module, "score_files", fake_score_files)
 
         request = Request(
             f"{base_url}/api/score/start",
-            data=b"{}",
+            data=json.dumps({"preview_mode": "high-quality"}).encode("utf-8"),
             headers={"Content-Type": "application/json"},
             method="POST",
         )
@@ -234,6 +235,7 @@ class TestRouteHandlingIntegration:
         assert result_payload is not None
         assert result_payload["rows_loaded"] == 0
         assert captured["preview_dir"] == custom_preview_dir.resolve()
+        assert captured["raw_preview_mode"] == "high-quality"
 
         with database(db_path) as connection:
             assert get_preview_cache_root(connection, db_path=db_path) == custom_preview_dir.resolve()
@@ -291,6 +293,9 @@ class TestRouteHandlingIntegration:
 
         assert "supports_technical_only" not in payload
         assert payload["default_scoring_mode"] == payload["learned"]["default_model"]
+        assert payload["default_preview_mode"] == "auto"
+        assert payload["preview_modes"] == ["fast", "auto", "high-quality"]
+        assert payload["raw_preview_auto_min_long_edge"] == 1024
         assert "technical-only" not in payload["learned_models"]
         assert set(payload["learned_models"]).issubset({"topiq_nr", "clipiqa", "qalign"})
         assert "topiq_nr" in payload["learned_models"]
@@ -811,6 +816,7 @@ class TestRouteHandlingIntegration:
 
         started_event = threading.Event()
         release_event = threading.Event()
+        captured_preview_mode: dict[str, str] = {}
 
         @dataclass
         class FakeComparison:
@@ -824,6 +830,7 @@ class TestRouteHandlingIntegration:
             model_timings_seconds: dict[str, float] | None = None
 
         def fake_compare_models(*args, **kwargs):
+            captured_preview_mode["value"] = kwargs["raw_preview_mode"]
             progress_callback = kwargs.get("progress_callback")
             if progress_callback:
                 progress_callback(
@@ -874,7 +881,7 @@ class TestRouteHandlingIntegration:
         try:
             start_req = Request(
                 f"http://127.0.0.1:{port}/api/compare-models/start",
-                data=json.dumps({"models": ["topiq_nr", "arniqa"], "root": None}).encode("utf-8"),
+                data=json.dumps({"models": ["topiq_nr", "arniqa"], "root": None, "preview_mode": "fast"}).encode("utf-8"),
                 headers={"Content-Type": "application/json"},
                 method="POST",
             )
@@ -909,6 +916,7 @@ class TestRouteHandlingIntegration:
             result_payload = json.loads(result_response.read().decode("utf-8"))
             assert result_payload["model_names"] == ["topiq_nr", "arniqa"]
             assert result_payload["rows"][0]["arniqa_score"] == 74.0
+            assert captured_preview_mode["value"] == "fast"
         finally:
             release_event.set()
             server.shutdown()

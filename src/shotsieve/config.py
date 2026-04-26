@@ -5,6 +5,8 @@ from pathlib import Path
 
 
 DEFAULT_PREVIEW_DIRNAME = "previews"
+DEFAULT_RAW_PREVIEW_MODE = "auto"
+RAW_PREVIEW_MODES = ("fast", "auto", "high-quality")
 
 # ── Canonical extension sets (single source of truth) ──────────────────
 # All other modules should import from here instead of defining their own.
@@ -39,6 +41,7 @@ class AppConfig:
     db_path: Path
     preview_dir: Path
     supported_extensions: tuple[str, ...]
+    raw_preview_mode: str
 
 
 def resolve_db_path(raw_path: str) -> Path:
@@ -76,15 +79,24 @@ def parse_extensions(raw_extensions: str | None) -> tuple[str, ...]:
     return unique_extensions
 
 
+def normalize_raw_preview_mode(raw_mode: str | None) -> str:
+    normalized = (raw_mode or DEFAULT_RAW_PREVIEW_MODE).strip().casefold()
+    if normalized not in RAW_PREVIEW_MODES:
+        raise ValueError(f"raw_preview_mode must be one of: {', '.join(RAW_PREVIEW_MODES)}")
+    return normalized
+
+
 def build_config(
     raw_db_path: str,
     *,
     raw_preview_dir: str | None = None,
     raw_extensions: str | None = None,
+    raw_preview_mode: str | None = None,
 ) -> AppConfig:
     db_path = resolve_db_path(raw_db_path)
     return AppConfig(
         db_path=db_path,
         preview_dir=resolve_preview_dir(raw_preview_dir, db_path=db_path),
         supported_extensions=parse_extensions(raw_extensions),
+        raw_preview_mode=normalize_raw_preview_mode(raw_preview_mode),
     )

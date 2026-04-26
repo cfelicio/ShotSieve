@@ -120,6 +120,7 @@ const {
   clearCache,
   deleteSelectedFiles,
   navigateSelection,
+  openOriginalFile,
   openBrowser,
   browseDirectory,
   chooseBrowserPath,
@@ -689,6 +690,16 @@ function renderOptions() {
   deviceSelect.value = previousDevice || persisted.device || "auto";
 
   document.getElementById("extensions-input").value = persisted.extensions || options.default_extensions.join(",");
+  const previewModeSelect = document.getElementById("preview-mode-select");
+  if (previewModeSelect) {
+    const availablePreviewModes = Array.isArray(options.preview_modes) && options.preview_modes.length
+      ? options.preview_modes
+      : ["fast", "auto", "high-quality"];
+    const preferredPreviewMode = persisted.previewMode || options.default_preview_mode || "auto";
+    previewModeSelect.value = availablePreviewModes.includes(preferredPreviewMode)
+      ? preferredPreviewMode
+      : (options.default_preview_mode || "auto");
+  }
   document.getElementById("recursive-toggle").checked = persisted.recursive ?? true;
   if (!currentLibraryRoot() && persisted.libraryRoot) {
     document.getElementById("library-root-input").value = persisted.libraryRoot;
@@ -844,6 +855,8 @@ function renderDetail() {
     formatNumber,
     scoreCard,
     statusPill,
+    openOriginalFile,
+    handleError,
   });
 }
 

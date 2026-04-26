@@ -7,7 +7,7 @@ from PIL import Image
 import pytest
 
 from shotsieve.db import connect, initialize_database, root_path_filter
-from shotsieve.preview import preview_output_paths, stable_preview_name
+from shotsieve.preview import PreviewResult, preview_output_paths, stable_preview_name
 from shotsieve.scanner import canonical_path_key, scan_root
 from shotsieve.schema import SCHEMA_SQL
 
@@ -63,6 +63,53 @@ def test_scan_populates_cache_and_preview(tmp_path: Path) -> None:
     assert row["preview_status"] == "ready"
     assert row["scan_status"] == "new"
     assert Path(row["preview_path"]).exists()
+
+
+def test_scan_root_passes_raw_preview_mode_to_preview_generation(monkeypatch, tmp_path: Path) -> None:
+    import shotsieve.scanner as scanner_module
+
+    db_path = tmp_path / "data" / "shotsieve.db"
+    preview_dir = tmp_path / "previews"
+    photo_dir = tmp_path / "photos"
+    photo_dir.mkdir()
+    raw_path = photo_dir / "sample.nef"
+    raw_path.write_bytes(b"fake-raw")
+
+    initialize_database(db_path)
+
+    captured: dict[str, object] = {}
+
+    def fake_generate_preview(path: Path, generated_preview_dir: Path, *, raw_preview_mode: str = "auto"):
+        captured["path"] = path
+        captured["preview_dir"] = generated_preview_dir
+        captured["raw_preview_mode"] = raw_preview_mode
+        return PreviewResult(
+            path=str((generated_preview_dir / "sample.jpg").resolve()),
+            status="ready",
+            width=120,
+            height=80,
+            capture_time=None,
+            error_text=None,
+        )
+
+    monkeypatch.setattr(scanner_module, "generate_preview", fake_generate_preview)
+
+    with connect(db_path) as connection:
+        summary = scan_root(
+            connection,
+            root=photo_dir,
+            recursive=True,
+            extensions=(".nef",),
+            preview_dir=preview_dir,
+            raw_preview_mode="high-quality",
+        )
+
+    assert summary.files_seen == 1
+    assert captured == {
+        "path": raw_path,
+        "preview_dir": preview_dir,
+        "raw_preview_mode": "high-quality",
+    }
 
 
 def test_scan_marks_unchanged_on_repeat_scan(tmp_path: Path) -> None:

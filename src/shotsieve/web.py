@@ -3,8 +3,10 @@ from __future__ import annotations
 import logging
 import mimetypes
 import os
+import shutil
 import socket
 import sqlite3
+import subprocess
 import sys
 import threading
 import webbrowser
@@ -14,7 +16,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import cast
 
-from shotsieve.config import DEFAULT_SUPPORTED_EXTENSIONS, build_config
+from shotsieve.config import DEFAULT_RAW_PREVIEW_MODE, DEFAULT_SUPPORTED_EXTENSIONS, RAW_PREVIEW_MODES, build_config
 from shotsieve.db import database, get_preview_cache_root, initialize_database
 from shotsieve.export import export_files
 from shotsieve.job_registry import JobRegistry
@@ -24,7 +26,7 @@ from shotsieve.learned_iqa import (
     available_learned_backends,
     runtime_curated_learned_models,
 )
-from shotsieve.preview import preview_capabilities, preview_name_candidates, stable_preview_name
+from shotsieve.preview import MIN_RAW_THUMBNAIL_LONG_EDGE, preview_capabilities, preview_name_candidates, stable_preview_name
 from shotsieve.review import (
     clear_cache_scope,
     count_review_files,
@@ -356,6 +358,7 @@ def build_handler(db_path: Path):
             count_score_rows=lambda *args, **kwargs: count_score_rows(*args, **kwargs),
             clear_cache_scope=lambda *args, **kwargs: clear_cache_scope(*args, **kwargs),
             prune_missing_cache_entries=lambda *args, **kwargs: prune_missing_cache_entries(*args, **kwargs),
+            reveal_in_file_manager=lambda path: reveal_in_file_manager(path),
             delete_files=lambda *args, **kwargs: delete_files(*args, **kwargs),
             export_files=lambda *args, **kwargs: export_files(*args, **kwargs),
             default_batch_size=lambda: DEFAULT_BATCH_SIZE,
@@ -499,6 +502,9 @@ def build_options_payload(db_path: Path, *, resource_profile: str | None = None)
         "database": str(db_path.resolve()),
         "preview_dir": str(preview_dir),
         "default_extensions": list(DEFAULT_SUPPORTED_EXTENSIONS),
+        "default_preview_mode": DEFAULT_RAW_PREVIEW_MODE,
+        "preview_modes": list(RAW_PREVIEW_MODES),
+        "raw_preview_auto_min_long_edge": MIN_RAW_THUMBNAIL_LONG_EDGE,
         "learned": learned,
         "learned_models": list(runtime_curated_learned_models()),
         "default_scoring_mode": learned["default_model"],
@@ -542,3 +548,35 @@ def list_directory(path: Path) -> dict[str, object]:
         "parent": str(parent) if parent is not None else None,
         "items": [{"name": child.name, "path": str(child)} for child in children],
     }
+
+
+def reveal_in_file_manager(path: Path) -> str:
+    resolved = path.expanduser().resolve()
+    if not resolved.exists():
+        raise ValueError(f"File does not exist: {resolved}")
+
+    if sys.platform.startswith("win"):
+        explorer_executable = shutil.which("explorer.exe") or shutil.which("explorer")
+        if explorer_executable is None:
+            windows_dir = Path(os.environ.get("WINDIR") or os.environ.get("SystemRoot") or r"C:\Windows")
+            candidate = windows_dir / "explorer.exe"
+            if candidate.exists():
+                explorer_executable = str(candidate)
+        if explorer_executable:
+            subprocess.Popen([explorer_executable, f"/select,{resolved}"])
+            return "windows-explorer"
+        if hasattr(os, "startfile"):
+            os.startfile(str(resolved.parent))
+            return "windows-startfile"
+        raise OSError("Windows Explorer is unavailable")
+
+    if sys.platform == "darwin":
+        subprocess.Popen(["open", "-R", str(resolved)])
+        return "finder"
+
+    opener = shutil.which("xdg-open")
+    if opener:
+        subprocess.Popen([opener, str(resolved.parent)])
+        return "xdg-open"
+
+    raise OSError("No supported file manager opener is available")

@@ -6,7 +6,7 @@ from pathlib import Path
 import time
 from typing import Callable, Protocol, runtime_checkable
 
-from shotsieve.config import ALL_PREVIEWABLE_EXTENSIONS, PIL_ANALYSIS_EXTENSIONS, PREVIEW_PRIORITY_EXTENSIONS
+from shotsieve.config import ALL_PREVIEWABLE_EXTENSIONS, DEFAULT_RAW_PREVIEW_MODE, PIL_ANALYSIS_EXTENSIONS, PREVIEW_PRIORITY_EXTENSIONS
 from shotsieve.db import root_path_filter, set_preview_cache_root
 from shotsieve.learned_iqa import DEFAULT_BATCH_SIZE, DEFAULT_MODEL_NAME, LearnedIqaBackend, LearnedScoreResult, build_learned_backend, normalize_model_name, release_learned_backend, recommended_batch_size, recommended_cpu_workers, detect_hardware_capabilities, resolve_learned_model_version
 from shotsieve.preview import PreviewResult, generate_previews_parallel
@@ -168,6 +168,7 @@ def _prepare_analysis_candidates(
     *,
     preview_dir: Path | None,
     preview_workers: int | None,
+    raw_preview_mode: str,
     resource_profile: str | None,
     preview_progress_callback: Callable[[int, int], None] | None,
     preview_start_callback: Callable[[int], None] | None = None,
@@ -221,6 +222,7 @@ def _prepare_analysis_candidates(
         preview_dir,
         max_workers=effective_workers,
         progress_callback=preview_progress_callback,
+        raw_preview_mode=raw_preview_mode,
     )
 
     for row, preview_result in zip(pc_rows, preview_results, strict=True):
@@ -260,6 +262,7 @@ def score_files(
     learned_batch_size: int = DEFAULT_BATCH_SIZE,
     preview_dir: Path | None = None,
     preview_workers: int | None = None,
+    raw_preview_mode: str = DEFAULT_RAW_PREVIEW_MODE,
     learned_backend_factory: Callable[[str], LearnedIqaBackend] | None = None,
     learned_model_version_resolver: Callable[[str], str | None] | None = None,
     progress_callback: Callable[[AnalysisProgress], None] | None = None,
@@ -365,6 +368,7 @@ def score_files(
         rows_for_scoring,
         preview_dir=preview_dir,
         preview_workers=preview_workers,
+        raw_preview_mode=raw_preview_mode,
         resource_profile=resource_profile,
         preview_progress_callback=_score_preview_progress,
         preview_start_callback=_score_preview_start,
@@ -539,6 +543,7 @@ def compare_learned_models(
     release_backends: bool = True,
     preview_dir: Path | None = None,
     preview_workers: int | None = None,
+    raw_preview_mode: str = DEFAULT_RAW_PREVIEW_MODE,
     resource_profile: str | None = None,
 ) -> ModelComparisonSummary:
     started_at = time.perf_counter()
@@ -592,6 +597,7 @@ def compare_learned_models(
         rows,
         preview_dir=preview_dir,
         preview_workers=preview_workers,
+        raw_preview_mode=raw_preview_mode,
         resource_profile=resource_profile,
         preview_progress_callback=_compare_preview_progress,
         preview_start_callback=_compare_preview_start,

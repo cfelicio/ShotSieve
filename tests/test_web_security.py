@@ -44,6 +44,7 @@ class TestLocalSecurityGuards:
             "roots": [str(photo_dir)],
             "recursive": False,
             "files_total_hint": 12,
+            "preview_mode": "fast",
         })
         compare_request = parse_compare_request({
             "models": [" topiq_nr ", "clipiqa"],
@@ -53,6 +54,7 @@ class TestLocalSecurityGuards:
         assert scan_request["roots"] == [photo_dir.resolve()]
         assert scan_request["recursive"] is False
         assert scan_request["files_total_hint"] == 12
+        assert scan_request["preview_mode"] == "fast"
         assert compare_request["models"] == ["topiq_nr", "clipiqa"]
         assert compare_request["offset"] == 2
         assert compare_request["batch_size"] == 8

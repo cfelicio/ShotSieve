@@ -9,6 +9,8 @@ from json import JSONDecodeError
 from pathlib import Path
 from typing import Any, TypedDict
 
+from shotsieve.config import normalize_raw_preview_mode
+
 
 class ScanRequest(TypedDict):
     roots: list[Path]
@@ -19,6 +21,7 @@ class ScanRequest(TypedDict):
     recursive: bool
     rescan_all: bool
     generate_previews: bool
+    preview_mode: str
     files_total_hint: int
     resource_profile: str | None
 
@@ -427,6 +430,7 @@ def parse_scan_request(payload: dict[str, object]) -> ScanRequest:
         "recursive": coerce_bool(payload.get("recursive"), default=True),
         "rescan_all": coerce_bool(payload.get("rescan_all"), default=False),
         "generate_previews": coerce_bool(payload.get("generate_previews"), default=True),
+        "preview_mode": normalize_raw_preview_mode(optional_string(payload.get("preview_mode"))),
         "files_total_hint": optional_int(payload.get("files_total_hint"), minimum=0) or 0,
         "resource_profile": optional_string(payload.get("resource_profile")),
     }

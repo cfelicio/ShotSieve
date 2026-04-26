@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any, Callable, TypedDict, cast
 from urllib.parse import parse_qs, urlparse
 
+from shotsieve.config import normalize_raw_preview_mode
 from shotsieve.job_registry import JobRegistry
 from shotsieve.scoring import AnalysisProgress
 from shotsieve.web_media import MediaDependencies, resolve_media_request, serve_media_response
@@ -106,6 +107,7 @@ class WebRouteDependencies:
     count_score_rows: Callable[..., int]
     clear_cache_scope: Callable[..., dict[str, int]]
     prune_missing_cache_entries: Callable[..., int]
+    reveal_in_file_manager: Callable[[Path], str]
     delete_files: Callable[..., object]
     export_files: Callable[..., Any]
     default_batch_size: Callable[[], int]
@@ -734,6 +736,31 @@ def _handle_cache_post_routes(handler: Any, context: WebRouteContext, parsed: An
 
 def _handle_file_action_post_routes(handler: Any, context: WebRouteContext, parsed: Any) -> bool:
     deps = cast(WebRouteDependencies, context.dependencies)
+    if parsed.path == "/api/files/open":
+        payload = deps.read_json_body(handler, max_body_size=context.max_request_body_size)
+        file_id = deps.required_int(payload.get("file_id"), name="file_id", minimum=1)
+        media_result = resolve_media_request(
+            db_path=context.db_path,
+            file_id=file_id,
+            variant="source",
+            dependencies=MediaDependencies(
+                database=deps.database,
+                build_config=deps.build_config,
+                is_within_any_root=deps.is_within_any_root,
+                media_path_for_file=deps.media_path_for_file,
+                stable_preview_name=deps.stable_preview_name,
+                preview_name_candidates=deps.preview_name_candidates,
+                guess_media_type=deps.guess_media_type,
+            ),
+        )
+        if media_result.error_status is not None:
+            raise ValueError(media_result.error_message or "File not found")
+        if media_result.path is None:
+            raise ValueError("File not found")
+        method = deps.reveal_in_file_manager(media_result.path)
+        send_json(handler, {"opened": True, "path": str(media_result.path), "method": method})
+        return True
+
     if parsed.path == "/api/files/delete":
         payload = deps.read_json_body(handler, max_body_size=context.max_request_body_size)
         selection = _parse_selection_payload(deps, payload)
@@ -879,6 +906,7 @@ def start_scan_job(handler: Any, context: WebRouteContext, payload: dict[str, ob
                 str(context.db_path),
                 raw_preview_dir=scan_request["preview_dir"],
                 raw_extensions=scan_request["extensions"],
+                raw_preview_mode=scan_request["preview_mode"],
             )
             scan_registry.update_progress(job_id, {
                 "phase": "scanning",
@@ -930,6 +958,7 @@ def start_scan_job(handler: Any, context: WebRouteContext, payload: dict[str, ob
                             preview_dir=config.preview_dir,
                             rescan_all=scan_request["rescan_all"],
                             generate_previews=scan_request["generate_previews"],
+                            raw_preview_mode=config.raw_preview_mode,
                             resource_profile=scan_request["resource_profile"],
                             progress_callback=publish_progress,
                             files_total_hint=root_total_hint,
@@ -982,6 +1011,7 @@ def start_score_job(handler: Any, context: WebRouteContext, payload: dict[str, o
     score_registry = _require_registry(context.score_registry, label="Score")
     learned_device = deps.optional_string(payload.get("device"))
     resource_profile = deps.optional_string(payload.get("resource_profile"))
+    raw_preview_mode = normalize_raw_preview_mode(deps.optional_string(payload.get("preview_mode")))
     deps.require_learned_runtime(resource_profile=resource_profile, preferred_device=learned_device)
 
     if not try_acquire_operation_lock(handler, context):
@@ -1012,6 +1042,7 @@ def start_score_job(handler: Any, context: WebRouteContext, payload: dict[str, o
                     learned_device=learned_device,
                     learned_batch_size=deps.optional_int(payload.get("batch_size"), minimum=1) or deps.default_batch_size(),
                     preview_dir=preview_dir,
+                    raw_preview_mode=raw_preview_mode,
                     progress_callback=publish_progress,
                     resource_profile=resource_profile,
                 )
@@ -1037,6 +1068,7 @@ def start_compare_job(handler: Any, context: WebRouteContext, payload: dict[str,
     deps = cast(WebRouteDependencies, context.dependencies)
     compare_registry = _require_registry(context.compare_registry, label="Compare")
     compare_request = deps.parse_compare_request(payload, default_batch_size=deps.default_batch_size())
+    raw_preview_mode = normalize_raw_preview_mode(deps.optional_string(payload.get("preview_mode")))
     deps.require_learned_runtime(
         resource_profile=compare_request.get("resource_profile"),
         preferred_device=compare_request.get("device"),
@@ -1071,6 +1103,7 @@ def start_compare_job(handler: Any, context: WebRouteContext, payload: dict[str,
                     compare_chunk_size=compare_request["compare_chunk_size"],
                     progress_callback=publish_progress,
                     preview_dir=preview_dir,
+                    raw_preview_mode=raw_preview_mode,
                     resource_profile=compare_request.get("resource_profile"),
                 )
 
