@@ -66,3 +66,14 @@ def test_analyze_library_resets_review_pagination_before_loading_results(fronten
     assert "state.page = 0;" in analyze_block
     assert "await loadQueue();" in analyze_block
     assert 'setTab("review");' in analyze_block
+
+
+def test_load_queue_keeps_query_available_after_page_clamp_retry(frontend_server: str) -> None:
+    app_body = urlopen(f"{frontend_server}/app.js").read().decode("utf-8")
+
+    load_queue_index = app_body.index("async function loadQueue()")
+    load_queue_block = app_body[load_queue_index : load_queue_index + 1800]
+
+    assert "let query = null;" in load_queue_block
+    assert "query = currentQuery();" in load_queue_block
+    assert "reviewSelectionSnapshotFromQuery(query, data.total || 0)" in load_queue_block

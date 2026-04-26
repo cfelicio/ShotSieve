@@ -880,9 +880,10 @@ async function loadQueue() {
   const signal = queueAbortController.signal;
 
   try {
+    let query = null;
     let data = null;
     while (true) {
-      const query = currentQuery();
+      query = currentQuery();
       data = await fetchJson(`/api/files?${query.toString()}`, { signal });
 
       if (signal.aborted) return;
