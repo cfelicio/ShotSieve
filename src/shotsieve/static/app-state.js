@@ -107,7 +107,6 @@
         database: currentDatabaseMarker(),
         libraryRoot: documentRef.getElementById("library-root-input")?.value || "",
         extensions: documentRef.getElementById("extensions-input")?.value || "",
-        previewMode: documentRef.getElementById("preview-mode-select")?.value || "auto",
         recursive: documentRef.getElementById("recursive-toggle")?.checked ?? true,
         model: documentRef.getElementById("model-select")?.value || "",
         device: documentRef.getElementById("device-select")?.value || "auto",

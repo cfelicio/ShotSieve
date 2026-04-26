@@ -599,12 +599,34 @@ function applyTheme(theme) {
 
 function syncReviewRoot(root) {
   if (!root) {
-    return;
+    return "";
   }
   const rootFilter = document.getElementById("root-filter");
-  if ([...rootFilter.options].some((option) => option.value === root)) {
-    rootFilter.value = root;
+  if (!rootFilter) {
+    return "";
   }
+
+  const normalizedRoot = String(root)
+    .replace(/[\\/]+/g, "/")
+    .replace(/\/$/, "")
+    .replace(/^(?:\.\/|~\/)+/, "")
+    .toLowerCase();
+  const options = [...rootFilter.options].map((option) => option.value).filter(Boolean);
+  const exactMatch = options.find((option) => option === root);
+  const suffixMatches = exactMatch
+    ? [exactMatch]
+    : options.filter((option) => {
+      const normalizedOption = String(option)
+        .replace(/[\\/]+/g, "/")
+        .replace(/\/$/, "")
+        .toLowerCase();
+      return normalizedOption === normalizedRoot || normalizedOption.endsWith(`/${normalizedRoot}`);
+    });
+  const resolvedRoot = exactMatch || (suffixMatches.length === 1 ? suffixMatches[0] : "");
+  if (resolvedRoot) {
+    rootFilter.value = resolvedRoot;
+  }
+  return resolvedRoot;
 }
 
 function currentQuery() {
@@ -658,6 +680,11 @@ function populateRootFilters() {
     .join("");
   if (previous && roots.includes(previous)) {
     rootFilter.value = previous;
+    return;
+  }
+  if (previous) {
+    rootFilter.add(new Option(previous, previous, false, true));
+    rootFilter.value = previous;
   }
 }
 
@@ -690,16 +717,6 @@ function renderOptions() {
   deviceSelect.value = previousDevice || persisted.device || "auto";
 
   document.getElementById("extensions-input").value = persisted.extensions || options.default_extensions.join(",");
-  const previewModeSelect = document.getElementById("preview-mode-select");
-  if (previewModeSelect) {
-    const availablePreviewModes = Array.isArray(options.preview_modes) && options.preview_modes.length
-      ? options.preview_modes
-      : ["fast", "auto", "high-quality"];
-    const preferredPreviewMode = persisted.previewMode || options.default_preview_mode || "auto";
-    previewModeSelect.value = availablePreviewModes.includes(preferredPreviewMode)
-      ? preferredPreviewMode
-      : (options.default_preview_mode || "auto");
-  }
   document.getElementById("recursive-toggle").checked = persisted.recursive ?? true;
   if (!currentLibraryRoot() && persisted.libraryRoot) {
     document.getElementById("library-root-input").value = persisted.libraryRoot;

@@ -43,7 +43,7 @@ def test_reset_everything_clears_persisted_ui_state(frontend_server: str) -> Non
     assert "onSuccess: resetPersistedUiStateAfterFullReset" in events_body
     assert 'localStorage.removeItem("shotsieve_resource_profile");' in events_body
     assert 'profileSelect.value = "normal";' in events_body
-    assert 'previewModeSelect.value = state.options?.default_preview_mode || "auto";' in events_body
+    assert 'previewModeSelect.value = state.options?.default_preview_mode || "auto";' not in events_body
 
 
 def test_ui_state_is_scoped_to_database_marker(frontend_server: str) -> None:
@@ -66,6 +66,28 @@ def test_analyze_library_resets_review_pagination_before_loading_results(fronten
     assert "state.page = 0;" in analyze_block
     assert "await loadQueue();" in analyze_block
     assert 'setTab("review");' in analyze_block
+
+
+def test_analyze_library_resets_review_filters_to_analyzed_root(frontend_server: str) -> None:
+    workflows_body = urlopen(f"{frontend_server}/app-workflows.js").read().decode("utf-8")
+
+    helper_index = workflows_body.index("function resetReviewFiltersForAnalyze(root)")
+    helper_block = workflows_body[helper_index : helper_index + 1400]
+
+    assert 'document.getElementById("query-filter").value = "";' in helper_block
+    assert 'document.getElementById("sort-filter").value = "learned_asc";' in helper_block
+    assert 'document.getElementById("marked-filter").value = "all";' in helper_block
+    assert 'document.getElementById("issues-filter").value = "all";' in helper_block
+    assert 'document.getElementById("min-score").value = "";' in helper_block
+    assert 'document.getElementById("max-score").value = "";' in helper_block
+    assert 'rootFilter.add(new Option(root, root, true, true));' in helper_block
+    assert 'rootFilter.value = root;' in helper_block
+
+    analyze_index = workflows_body.index("async function analyzeLibrary()")
+    analyze_block = workflows_body[analyze_index : analyze_index + 1100]
+    assert "const reviewRoot = syncReviewRoot(root) || root;" in analyze_block
+    assert "resetReviewFiltersForAnalyze(reviewRoot);" in analyze_block
+    assert analyze_block.index("resetReviewFiltersForAnalyze(reviewRoot);") < analyze_block.index("await loadQueue();")
 
 
 def test_load_queue_keeps_query_available_after_page_clamp_retry(frontend_server: str) -> None:

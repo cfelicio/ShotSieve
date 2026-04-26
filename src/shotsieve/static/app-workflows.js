@@ -614,8 +614,27 @@
       });
     }
 
-    function currentPreviewMode() {
-      return document.getElementById("preview-mode-select")?.value || "auto";
+    function resetReviewFiltersForAnalyze(root) {
+      document.getElementById("query-filter").value = "";
+      document.getElementById("sort-filter").value = "learned_asc";
+      document.getElementById("marked-filter").value = "all";
+      document.getElementById("issues-filter").value = "all";
+      document.getElementById("min-score").value = "";
+      document.getElementById("max-score").value = "";
+
+      const rootFilter = document.getElementById("root-filter");
+      if (rootFilter) {
+        if (root && ![...rootFilter.options].some((option) => option.value === root)) {
+          rootFilter.add(new Option(root, root, true, true));
+        }
+        rootFilter.value = root;
+        if (rootFilter.value !== root) {
+          rootFilter.value = "";
+        }
+      }
+
+      state.loadedReviewSelection = null;
+      state.page = 0;
     }
 
     async function runModelComparison() {
@@ -718,7 +737,6 @@
         models,
         device: runtimeTarget || null,
         batch_size: requestedBatchSize,
-        preview_mode: currentPreviewMode(),
         resource_profile: currentResourceProfile(),
       }, { signal: state.abortController?.signal });
       const compareJobId = String(compareJobStart?.job_id || "");
@@ -1101,7 +1119,6 @@
       const scanJobStart = await postJson("/api/scan/start", {
         roots: [root],
         extensions: document.getElementById("extensions-input").value.trim() || null,
-        preview_mode: currentPreviewMode(),
         recursive: document.getElementById("recursive-toggle").checked,
         rescan_all: false,
         generate_previews: generatePreviews,
@@ -1181,7 +1198,6 @@
         learned_backend_name: learnedBackend,
         device: runtimeTarget || null,
         batch_size: requestedBatchSize,
-        preview_mode: currentPreviewMode(),
         force: false,
         resource_profile: currentResourceProfile(),
       }, { signal: state.abortController?.signal });
@@ -1240,11 +1256,13 @@
       await runScore(root, {
         pipeline: { stepIndex: 2, totalSteps: 3 },
       });
-      syncReviewRoot(root);
+      const reviewRoot = syncReviewRoot(root) || root;
+      resetReviewFiltersForAnalyze(reviewRoot);
       clearActiveSelection();
       state.activeId = null;
       state.detail = null;
       state.page = 0;
+      saveUiState();
       await loadQueue();
       setTab("review");
       showToast("Analysis completed. Switched to Review tab.");

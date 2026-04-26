@@ -101,11 +101,6 @@
         extensionsInput.value = defaults;
       }
 
-      const previewModeSelect = document.getElementById("preview-mode-select");
-      if (previewModeSelect) {
-        previewModeSelect.value = state.options?.default_preview_mode || "auto";
-      }
-
       const recursiveToggle = document.getElementById("recursive-toggle");
       if (recursiveToggle) {
         recursiveToggle.checked = true;
@@ -269,7 +264,6 @@
       [
         "library-root-input",
         "extensions-input",
-        "preview-mode-select",
         "recursive-toggle",
         "model-select",
         "device-select",
