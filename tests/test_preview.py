@@ -4,6 +4,8 @@ from pathlib import Path
 import sys
 from types import SimpleNamespace
 
+import pytest
+
 from shotsieve import preview as preview_module
 
 
@@ -476,8 +478,19 @@ def test_generate_raw_preview_high_quality_mode_skips_embedded_thumbnail(
     assert calls == {"extract_thumb": 0, "postprocess": 1}
 
 
-def test_generate_preview_preserves_16bit_grayscale_tiff_midtones(tmp_path: Path) -> None:
-    source_path = tmp_path / "scan16.tif"
+@pytest.mark.parametrize(
+    ("filename", "image_format"),
+    [
+        ("scan16.png", "PNG"),
+        ("scan16.tif", "TIFF"),
+    ],
+)
+def test_generate_preview_preserves_16bit_grayscale_midtones(
+    tmp_path: Path,
+    filename: str,
+    image_format: str,
+) -> None:
+    source_path = tmp_path / filename
     preview_dir = tmp_path / "previews"
 
     width = 256
@@ -485,7 +498,7 @@ def test_generate_preview_preserves_16bit_grayscale_tiff_midtones(tmp_path: Path
     gradient_values = [round((index / (width - 1)) * 65535) for index in range(width)]
     grayscale = preview_module.Image.new("I;16", (width, height))
     grayscale.putdata(gradient_values * height)
-    grayscale.save(source_path, format="TIFF")
+    grayscale.save(source_path, format=image_format)
 
     result = preview_module.generate_preview(source_path, preview_dir)
 
