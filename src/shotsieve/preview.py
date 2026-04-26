@@ -234,7 +234,10 @@ def generate_raw_preview(
                     return result
 
                 # Slow fallback: full Bayer demosaicing for RAW files without thumbnails.
-                rgb = raw_image.postprocess(use_camera_wb=True, no_auto_bright=False)
+                # Keep rawpy's auto-brightening disabled so monochrome / high-key RAWs
+                # preserve their captured tonality instead of getting blown out in previews
+                # and downstream learned-IQA scoring.
+                rgb = raw_image.postprocess(use_camera_wb=True, no_auto_bright=True)
     except (OSError, ValueError, RuntimeError) as exc:
         issue_text = _format_nonfatal_issue(source_path, stderr_buffer.getvalue())
         return PreviewResult(

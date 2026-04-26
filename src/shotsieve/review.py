@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Iterable, Sequence
 from concurrent.futures import ThreadPoolExecutor
+from typing import Callable
 
 from shotsieve.config import BROWSER_SAFE_EXTENSIONS, PREVIEW_PRIORITY_EXTENSIONS, RAW_CAMERA_EXTENSIONS
 from shotsieve.db import escape_like, infer_preview_cache_roots, normalize_resolved_path, preview_cache_root_is_claimed, root_path_filter
@@ -611,15 +612,29 @@ def clear_cache_scope(
     *,
     scope: str,
     preview_cache_root: Path | None = None,
+    progress_callback: Callable[[int, int, str], None] | None = None,
+    cancel_check: Callable[[], None] | None = None,
 ) -> dict[str, int]:
+    def emit_progress(processed: int, total: int, phase: str = "clearing_cache") -> None:
+        if progress_callback is not None:
+            progress_callback(processed, total, phase)
+
     if scope == "scores":
+        emit_progress(0, 1)
+        if cancel_check is not None:
+            cancel_check()
         removed = connection.execute("SELECT COUNT(*) AS count FROM scores").fetchone()["count"]
         connection.execute("DELETE FROM scores")
+        emit_progress(1, 1)
         return {"files": 0, "scores": removed, "review": 0, "scan_runs": 0}
 
     if scope == "review":
+        emit_progress(0, 1)
+        if cancel_check is not None:
+            cancel_check()
         removed = connection.execute("SELECT COUNT(*) AS count FROM review_state").fetchone()["count"]
         connection.execute("DELETE FROM review_state")
+        emit_progress(1, 1)
         return {"files": 0, "scores": 0, "review": removed, "scan_runs": 0}
 
     if scope == "all":
@@ -631,8 +646,13 @@ def clear_cache_scope(
         preview_rows = connection.execute(
             "SELECT path, preview_path FROM files WHERE preview_path IS NOT NULL"
         ).fetchall()
+        total_steps = max(1, len(preview_rows) + 1)
 
-        for row in preview_rows:
+        emit_progress(0, total_steps)
+
+        for index, row in enumerate(preview_rows, start=1):
+            if cancel_check is not None:
+                cancel_check()
             delete_managed_preview_file(
                 row["preview_path"],
                 source_path=row["path"],
@@ -640,6 +660,7 @@ def clear_cache_scope(
                 allow_path_parent_fallback=allow_preview_path_fallback,
                 suppress_errors=True,
             )
+            emit_progress(index, total_steps)
 
         cleanup_roots = []
         if preview_cache_root is not None:
@@ -647,13 +668,18 @@ def clear_cache_scope(
         cleanup_roots.extend(infer_preview_cache_roots(connection))
 
         for cleanup_root in dict.fromkeys(cleanup_roots):
+            if cancel_check is not None:
+                cancel_check()
             if preview_cache_root_is_claimed(cleanup_root):
                 clear_preview_cache_dir(cleanup_root, suppress_errors=True)
 
+        if cancel_check is not None:
+            cancel_check()
         connection.execute("DELETE FROM review_state")
         connection.execute("DELETE FROM scores")
         connection.execute("DELETE FROM files")
         connection.execute("DELETE FROM scan_runs")
+        emit_progress(total_steps, total_steps)
         return {"files": file_count, "scores": score_count, "review": review_count, "scan_runs": scan_run_count}
 
     raise ValueError("scope must be one of: scores, review, all")
@@ -665,6 +691,8 @@ def delete_files(
     file_ids: Iterable[int],
     delete_from_disk: bool,
     preview_cache_root: Path | None = None,
+    progress_callback: Callable[[int, int], None] | None = None,
+    cancel_check: Callable[[], None] | None = None,
 ) -> dict[str, object]:
     normalized_ids = normalize_file_ids(file_ids)
     allow_preview_path_fallback = _allow_legacy_preview_path_fallback(connection, preview_cache_root)
@@ -679,8 +707,14 @@ def delete_files(
 
     deleted_ids: list[int] = []
     failed: list[dict[str, object]] = []
+    total_files = len(rows)
 
-    for row in rows:
+    if progress_callback is not None:
+        progress_callback(0, total_files)
+
+    for index, row in enumerate(rows, start=1):
+        if cancel_check is not None:
+            cancel_check()
         try:
             if delete_from_disk:
                 resolved_source_path = _resolve_source_path_within_roots(
@@ -701,6 +735,9 @@ def delete_files(
             deleted_ids.append(row["id"])
         except (OSError, ValueError) as exc:
             failed.append({"id": row["id"], "path": row["path"], "error": str(exc)})
+        finally:
+            if progress_callback is not None:
+                progress_callback(index, total_files)
 
     return {
         "deleted_ids": deleted_ids,

@@ -578,6 +578,33 @@ def test_review_position_counts_globally_across_pages(large_chromium_page) -> No
     expect(chromium_page.locator("#review-position")).to_have_text("62 of 65")
 
 
+def test_deleting_last_review_page_clamps_back_to_previous_page(large_chromium_page) -> None:
+        chromium_page, expect = large_chromium_page
+        _open_review_tab(chromium_page)
+
+        chromium_page.locator("#page-next").click()
+        expect(chromium_page.locator("#page-info")).to_contain_text("61–65 of 65")
+
+        chromium_page.evaluate("() => { window.confirm = () => true; }")
+        chromium_page.locator("#select-all-btn").click()
+        expect(chromium_page.locator("#selection-label")).to_have_text("5 selected")
+
+        chromium_page.locator("#batch-delete-disk").click()
+
+        chromium_page.wait_for_function(
+                """
+                () => {
+                    const pageInfo = document.getElementById('page-info')?.textContent || '';
+                    const reviewPosition = document.getElementById('review-position')?.textContent || '';
+                    return pageInfo.includes('1–60 of 60') && reviewPosition === '1 of 60';
+                }
+                """
+        )
+
+        expect(chromium_page.locator("#page-info")).to_contain_text("1–60 of 60")
+        expect(chromium_page.locator("#review-position")).to_have_text("1 of 60")
+
+
 def test_lightbox_modal_traps_and_restores_focus(chromium_page) -> None:
     chromium_page, _ = chromium_page
     _open_review_tab(chromium_page)

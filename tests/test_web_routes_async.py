@@ -169,6 +169,169 @@ class TestRouteHandlingAsync:
             release_event.set()
             server.shutdown()
 
+    def test_delete_async_status_and_result_routes(self, tmp_path: Path, monkeypatch):
+        from http.server import ThreadingHTTPServer
+        from shotsieve import web as web_module
+
+        started_event = threading.Event()
+        release_event = threading.Event()
+
+        def fake_delete_files(_connection, **kwargs):
+            progress_callback = kwargs.get("progress_callback")
+            cancel_check = kwargs.get("cancel_check")
+            file_ids = list(kwargs.get("file_ids") or [])
+            total = len(file_ids)
+            if progress_callback is not None:
+                progress_callback(0, total)
+                progress_callback(1, total)
+            started_event.set()
+            release_event.wait(timeout=2)
+            if callable(cancel_check):
+                cancel_check()
+            if progress_callback is not None:
+                progress_callback(total, total)
+            return {
+                "deleted_ids": file_ids,
+                "deleted_count": total,
+                "failed": [],
+                "failed_count": 0,
+                "delete_from_disk": kwargs.get("delete_from_disk", False),
+            }
+
+        monkeypatch.setattr(web_module, "delete_files", fake_delete_files)
+
+        db_path = tmp_path / "data" / "shotsieve.db"
+        photo_dir = tmp_path / "photos"
+        photo_dir.mkdir()
+        create_image(photo_dir / "sample-0.jpg")
+        create_image(photo_dir / "sample-1.jpg")
+        initialize_database(db_path)
+
+        with database(db_path) as connection:
+            from shotsieve.scanner import scan_root
+
+            scan_root(
+                connection,
+                root=photo_dir,
+                recursive=True,
+                extensions=(".jpg",),
+                preview_dir=tmp_path / "previews",
+            )
+            file_ids = [row["id"] for row in connection.execute("SELECT id FROM files ORDER BY id ASC").fetchall()]
+
+        port = find_free_port()
+        server = ThreadingHTTPServer(("127.0.0.1", port), build_handler(db_path))
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            start_req = Request(
+                f"http://127.0.0.1:{port}/api/files/delete/start",
+                data=json.dumps({"file_ids": file_ids, "delete_from_disk": True, "count": len(file_ids)}).encode("utf-8"),
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            start_response = urlopen(start_req)
+            start_payload = json.loads(start_response.read().decode("utf-8"))
+            job_id = start_payload["job_id"]
+
+            assert started_event.wait(timeout=2)
+
+            status_response = urlopen(f"http://127.0.0.1:{port}/api/operations/status?job_id={job_id}")
+            status_payload = json.loads(status_response.read().decode("utf-8"))
+            assert status_payload["status"] in {"running", "completed"}
+            assert status_payload["progress"]["phase"] == "deleting_files"
+            assert status_payload["progress"]["files_processed"] >= 1
+            assert status_payload["progress"]["files_total"] == 2
+
+            release_event.set()
+
+            completed_payload = None
+            deadline = time.time() + 2
+            while time.time() < deadline:
+                status_response = urlopen(f"http://127.0.0.1:{port}/api/operations/status?job_id={job_id}")
+                polled = json.loads(status_response.read().decode("utf-8"))
+                if polled["status"] == "completed":
+                    completed_payload = polled
+                    break
+                time.sleep(0.05)
+
+            assert completed_payload is not None
+            assert completed_payload["summary"]["deleted_count"] == 2
+
+            result_response = urlopen(f"http://127.0.0.1:{port}/api/operations/result?job_id={job_id}")
+            result_payload = json.loads(result_response.read().decode("utf-8"))
+            assert result_payload["deleted_count"] == 2
+            assert result_payload["deleted_ids"] == file_ids
+        finally:
+            release_event.set()
+            server.shutdown()
+
+    def test_cache_clear_async_status_and_result_routes(self, tmp_path: Path, monkeypatch):
+        from http.server import ThreadingHTTPServer
+        from shotsieve import web as web_module
+
+        started_event = threading.Event()
+        release_event = threading.Event()
+
+        def fake_clear_cache_scope(_connection, **kwargs):
+            progress_callback = kwargs.get("progress_callback")
+            if progress_callback is not None:
+                progress_callback(0, 1, "clearing_cache")
+            started_event.set()
+            release_event.wait(timeout=2)
+            if progress_callback is not None:
+                progress_callback(1, 1, "clearing_cache")
+            return {"files": 3, "scores": 4, "review": 2, "scan_runs": 1}
+
+        monkeypatch.setattr(web_module, "clear_cache_scope", fake_clear_cache_scope)
+
+        db_path = tmp_path / "data" / "shotsieve.db"
+        initialize_database(db_path)
+
+        port = find_free_port()
+        server = ThreadingHTTPServer(("127.0.0.1", port), build_handler(db_path))
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            start_req = Request(
+                f"http://127.0.0.1:{port}/api/cache/clear/start",
+                data=json.dumps({"scope": "all"}).encode("utf-8"),
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            start_response = urlopen(start_req)
+            start_payload = json.loads(start_response.read().decode("utf-8"))
+            job_id = start_payload["job_id"]
+
+            assert started_event.wait(timeout=2)
+
+            status_response = urlopen(f"http://127.0.0.1:{port}/api/operations/status?job_id={job_id}")
+            status_payload = json.loads(status_response.read().decode("utf-8"))
+            assert status_payload["status"] in {"running", "completed"}
+            assert status_payload["progress"]["phase"] == "clearing_cache"
+
+            release_event.set()
+
+            completed_payload = None
+            deadline = time.time() + 2
+            while time.time() < deadline:
+                status_response = urlopen(f"http://127.0.0.1:{port}/api/operations/status?job_id={job_id}")
+                polled = json.loads(status_response.read().decode("utf-8"))
+                if polled["status"] == "completed":
+                    completed_payload = polled
+                    break
+                time.sleep(0.05)
+
+            assert completed_payload is not None
+            assert completed_payload["summary"]["files"] == 3
+
+            result_response = urlopen(f"http://127.0.0.1:{port}/api/operations/result?job_id={job_id}")
+            result_payload = json.loads(result_response.read().decode("utf-8"))
+            assert result_payload == {"files": 3, "scores": 4, "review": 2, "scan_runs": 1}
+        finally:
+            release_event.set()
+            server.shutdown()
+
     def test_scan_async_cancel_route_stops_running_job(self, tmp_path: Path, monkeypatch):
         from dataclasses import dataclass
         from http.server import ThreadingHTTPServer

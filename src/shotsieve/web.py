@@ -254,6 +254,7 @@ def build_handler(db_path: Path):
     scan_registry = JobRegistry(max_jobs=10)
     score_registry = JobRegistry(max_jobs=10)
     compare_registry = JobRegistry(max_jobs=10)
+    operation_registry = JobRegistry(max_jobs=10)
 
     def route_scan_root(*args, **kwargs):
         return scan_root(*args, **kwargs)
@@ -304,6 +305,7 @@ def build_handler(db_path: Path):
         max_request_body_size=10 * 1024 * 1024,
         static_dir=STATIC_DIR,
         media_mime_fallbacks=_MEDIA_MIME_FALLBACKS,
+        operation_registry=operation_registry,
         dependencies=WebRouteDependencies(
             coerce_bool=lambda value, *, default: _coerce_bool(value, default=default),
             first_value=lambda params, key, default=None: _first(params, key, default),

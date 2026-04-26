@@ -55,3 +55,14 @@ def test_ui_state_is_scoped_to_database_marker(frontend_server: str) -> None:
     assert "if (!savedDatabase || savedDatabase !== expectedDatabase)" in state_body
     assert "database: currentDatabaseMarker()," in state_body
     assert "document.body.dataset.databasePath = options.database || \"\";" in app_body
+
+
+def test_analyze_library_resets_review_pagination_before_loading_results(frontend_server: str) -> None:
+    workflows_body = urlopen(f"{frontend_server}/app-workflows.js").read().decode("utf-8")
+
+    analyze_index = workflows_body.index("async function analyzeLibrary()")
+    analyze_block = workflows_body[analyze_index : analyze_index + 900]
+
+    assert "state.page = 0;" in analyze_block
+    assert "await loadQueue();" in analyze_block
+    assert 'setTab("review");' in analyze_block

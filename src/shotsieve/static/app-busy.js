@@ -149,6 +149,9 @@
         state.compareJobId = null;
         state.scoreJobId = null;
         state.scanJobId = null;
+        state.operationJobId = null;
+        state.operationStatusPath = null;
+        state.operationCancelPath = null;
       }
       renderBusyState();
     }
@@ -229,6 +232,7 @@
         cancelServerJob(state.scanJobId, "/api/scan/cancel", "/api/scan/status"),
         cancelServerJob(state.scoreJobId, "/api/score/cancel", "/api/score/status"),
         cancelServerJob(state.compareJobId, "/api/compare-models/cancel", "/api/compare-models/status"),
+        cancelServerJob(state.operationJobId, state.operationCancelPath, state.operationStatusPath),
       ]);
     }
 

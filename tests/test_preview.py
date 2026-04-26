@@ -342,7 +342,7 @@ def test_generate_raw_preview_falls_back_to_demosaic_when_embedded_thumbnail_is_
 
     assert result.status == "ready"
     assert result.path is not None
-    assert postprocess_calls == [{"use_camera_wb": True, "no_auto_bright": False}]
+    assert postprocess_calls == [{"use_camera_wb": True, "no_auto_bright": True}]
     generated_preview = preview_module.Image.open(result.path)
     assert max(generated_preview.size) == preview_module.MAX_PREVIEW_SIZE[0]
 

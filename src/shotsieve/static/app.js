@@ -880,8 +880,23 @@ async function loadQueue() {
   const signal = queueAbortController.signal;
 
   try {
-    const query = currentQuery();
-    const data = await fetchJson(`/api/files?${query.toString()}`, { signal });
+    let data = null;
+    while (true) {
+      const query = currentQuery();
+      data = await fetchJson(`/api/files?${query.toString()}`, { signal });
+
+      if (signal.aborted) return;
+
+      const totalFiles = Number(data.total || 0);
+      const maxPage = totalFiles > 0
+        ? Math.max(0, Math.ceil(totalFiles / state.pageSize) - 1)
+        : 0;
+      if (state.page > maxPage) {
+        state.page = maxPage;
+        continue;
+      }
+      break;
+    }
 
     if (signal.aborted) return;
     

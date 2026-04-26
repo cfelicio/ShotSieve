@@ -189,7 +189,12 @@ class TestStaticAssetHeaders:
         assert ("h3", "File Discovery") in parser.headings
         assert ("h3", "Quality Scoring") in parser.headings
         assert 'id="preview-mode-select"' in body
-        assert "1024 px on the long edge" in body
+        assert "1024 px wide" in body
+        assert ">Fast - Use embedded RAW previews when available<" in body
+        assert ">Auto - Prefer embedded previews when they are at least 1024 px wide<" in body
+        assert ">High Quality - Always render RAW files for previews<" in body
+        assert "always use embedded RAW previews when available" not in body
+        assert "use embedded previews only when they are at least 1024 px on the long edge" not in body
 
     def test_static_html_review_tab_has_stable_workspace_and_subsection_headings(self, test_server):
         base_url, _, _ = test_server
@@ -741,6 +746,16 @@ class TestStaticAssetHeaders:
         assert "/api/scan/cancel" in body
         assert "/api/score/cancel" in body
         assert "/api/compare-models/cancel" in body
+
+    def test_static_js_uses_async_job_polling_for_delete_export_and_cache_actions(self, test_server):
+        base_url, _, _ = test_server
+        body = self._combined_js(base_url)
+        assert "/api/files/delete/start" in body
+        assert "/api/files/export/start" in body
+        assert "/api/cache/clear/start" in body
+        assert "/api/operations/status" in body
+        assert "/api/operations/result" in body
+        assert "/api/operations/cancel" in body
 
     def test_static_js_uses_review_state_route_for_marked_batch_actions(self, test_server):
         base_url, _, _ = test_server

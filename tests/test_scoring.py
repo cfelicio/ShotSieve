@@ -74,10 +74,11 @@ def test_prepare_analysis_candidates_prefers_generated_preview_and_returns_persi
     preview_dir.mkdir(parents=True, exist_ok=True)
     create_image(ready_preview)
 
-    def fake_generate_previews_parallel(source_paths, generated_preview_dir: Path, *, max_workers=None, progress_callback=None):
+    def fake_generate_previews_parallel(source_paths, generated_preview_dir: Path, *, max_workers=None, progress_callback=None, raw_preview_mode="auto"):
         assert source_paths == [tiff_path]
         assert generated_preview_dir == preview_dir
         assert max_workers == 7
+        assert raw_preview_mode == "auto"
         return [
             preview_module.PreviewResult(
                 path=str(ready_preview),
@@ -102,6 +103,7 @@ def test_prepare_analysis_candidates_prefers_generated_preview_and_returns_persi
         ],
         preview_dir=preview_dir,
         preview_workers=7,
+        raw_preview_mode="auto",
         resource_profile="normal",
         preview_progress_callback=None,
     )
@@ -127,9 +129,10 @@ def test_prepare_analysis_candidates_returns_fallback_paths_and_unresolved_failu
     raw_path = photo_dir / "sample.cr2"
     raw_path.write_bytes(b"fake-raw")
 
-    def fake_generate_previews_parallel(source_paths, generated_preview_dir: Path, *, max_workers=None, progress_callback=None):
+    def fake_generate_previews_parallel(source_paths, generated_preview_dir: Path, *, max_workers=None, progress_callback=None, raw_preview_mode="auto"):
         assert source_paths == [tiff_path, raw_path]
         assert generated_preview_dir == preview_dir
+        assert raw_preview_mode == "auto"
         return [
             preview_module.PreviewResult(
                 path=None,
@@ -168,6 +171,7 @@ def test_prepare_analysis_candidates_returns_fallback_paths_and_unresolved_failu
         ],
         preview_dir=preview_dir,
         preview_workers=3,
+        raw_preview_mode="auto",
         resource_profile=None,
         preview_progress_callback=None,
     )
@@ -762,9 +766,10 @@ def test_score_removes_stale_score_row_when_preview_refresh_fails_without_fallba
     raw_path = photo_dir / "sample.cr2"
     raw_path.write_bytes(b"fake-raw")
 
-    def fake_generate_previews_parallel(source_paths, generated_preview_dir: Path, *, max_workers=None, progress_callback=None):
+    def fake_generate_previews_parallel(source_paths, generated_preview_dir: Path, *, max_workers=None, progress_callback=None, raw_preview_mode="auto"):
         assert source_paths == [raw_path]
         assert generated_preview_dir == preview_dir
+        assert raw_preview_mode == "auto"
         return [
             preview_module.PreviewResult(
                 path=None,
@@ -1265,9 +1270,10 @@ def test_score_can_generate_missing_preview_on_demand_for_preview_only_formats(t
         def score_paths(self, image_paths, *, batch_size: int = 4, resource_profile: str | None = None):
             return [LearnedScoreResult(raw_score=0.82, normalized_score=82.0, confidence=91.0) for _ in image_paths]
 
-    def fake_generate_preview(source_path: Path, generated_preview_dir: Path):
+    def fake_generate_preview(source_path: Path, generated_preview_dir: Path, *, raw_preview_mode: str = "auto"):
         assert source_path == raw_path
         assert generated_preview_dir == preview_dir
+        assert raw_preview_mode == "auto"
         return preview_module.PreviewResult(
             path=str(ready_preview),
             status="ready",
@@ -1334,11 +1340,12 @@ def test_score_generates_missing_tiff_preview_after_fast_scan(tmp_path: Path, mo
         def score_paths(self, image_paths, *, batch_size: int = 4, resource_profile: str | None = None):
             return [LearnedScoreResult(raw_score=0.83, normalized_score=83.0, confidence=92.0) for _ in image_paths]
 
-    def fake_generate_previews_parallel(source_paths, generated_preview_dir: Path, *, max_workers=None, progress_callback=None):
+    def fake_generate_previews_parallel(source_paths, generated_preview_dir: Path, *, max_workers=None, progress_callback=None, raw_preview_mode="auto"):
         assert source_paths == [tiff_path]
         assert generated_preview_dir == preview_dir
         if progress_callback is not None:
             progress_callback(1, 1)
+        assert raw_preview_mode == "auto"
         return [
             preview_module.PreviewResult(
                 path=str(ready_preview),
@@ -1467,10 +1474,11 @@ def test_score_files_emits_preview_phase_zero_progress_before_parallel_work(tmp_
         def score_paths(self, image_paths, *, batch_size: int = 4, resource_profile: str | None = None):
             return [LearnedScoreResult(raw_score=0.83, normalized_score=83.0, confidence=92.0) for _ in image_paths]
 
-    def fake_generate_previews_parallel(source_paths, generated_preview_dir: Path, *, max_workers=None, progress_callback=None):
+    def fake_generate_previews_parallel(source_paths, generated_preview_dir: Path, *, max_workers=None, progress_callback=None, raw_preview_mode="auto"):
         assert source_paths == [tiff_path]
         assert generated_preview_dir == preview_dir
         assert progress_callback is not None
+        assert raw_preview_mode == "auto"
         return [
             preview_module.PreviewResult(
                 path=str(ready_preview),
@@ -1535,10 +1543,11 @@ def test_compare_learned_models_emits_preview_phase_zero_progress_before_paralle
         def score_paths(self, image_paths, *, batch_size: int = 4, resource_profile: str | None = None):
             return [LearnedScoreResult(raw_score=0.83, normalized_score=83.0, confidence=92.0) for _ in image_paths]
 
-    def fake_generate_previews_parallel(source_paths, generated_preview_dir: Path, *, max_workers=None, progress_callback=None):
+    def fake_generate_previews_parallel(source_paths, generated_preview_dir: Path, *, max_workers=None, progress_callback=None, raw_preview_mode="auto"):
         assert source_paths == [tiff_path]
         assert generated_preview_dir == preview_dir
         assert progress_callback is not None
+        assert raw_preview_mode == "auto"
         return [
             preview_module.PreviewResult(
                 path=str(ready_preview),

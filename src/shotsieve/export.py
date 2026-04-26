@@ -4,6 +4,7 @@ from __future__ import annotations
 import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Callable
 
 from shotsieve.db import infer_preview_cache_roots, normalize_path_case
 from shotsieve.preview import delete_managed_preview_file
@@ -24,6 +25,8 @@ def export_files(
     destination: str,
     mode: str = "copy",
     preview_cache_root: Path | None = None,
+    progress_callback: Callable[[int, int], None] | None = None,
+    cancel_check: Callable[[], None] | None = None,
 ) -> ExportSummary:
     """Copy or move files to a destination directory.
 
@@ -78,11 +81,20 @@ def export_files(
     )
 
     summary = ExportSummary()
+    total_files = len(rows)
 
-    for row in rows:
+    if progress_callback is not None:
+        progress_callback(0, total_files)
+
+    for index, row in enumerate(rows, start=1):
+        if cancel_check is not None:
+            cancel_check()
+
         source = Path(row["path"])
         if not source.exists():
             summary.failed.append({"id": row["id"], "path": str(source), "error": "Source file not found"})
+            if progress_callback is not None:
+                progress_callback(index, total_files)
             continue
 
         target = _resolve_target(dest_path, source.name)
@@ -93,12 +105,16 @@ def export_files(
                 summary.copied += 1
             except OSError as exc:
                 summary.failed.append({"id": row["id"], "path": str(source), "error": str(exc)})
+            if progress_callback is not None:
+                progress_callback(index, total_files)
             continue
 
         try:
             shutil.move(str(source), str(target))
         except OSError as exc:
             summary.failed.append({"id": row["id"], "path": str(source), "error": str(exc)})
+            if progress_callback is not None:
+                progress_callback(index, total_files)
             continue
 
         try:
@@ -128,6 +144,9 @@ def export_files(
             )
         except OSError as exc:
             summary.failed.append({"id": row["id"], "path": str(source), "error": str(exc)})
+
+        if progress_callback is not None:
+            progress_callback(index, total_files)
 
     return summary
 

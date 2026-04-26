@@ -269,6 +269,8 @@
     }
 
     return {
+      createResultFetcher,
+      createStatusFetcher,
       fetchCompareJobResult,
       fetchCompareJobStatus,
       fetchScanJobResult,

@@ -66,6 +66,8 @@
     } = ui;
 
     const {
+      createResultFetcher,
+      createStatusFetcher,
       fetchCompareJobResult,
       fetchCompareJobStatus,
       fetchScanJobResult,
@@ -74,6 +76,7 @@
       fetchScoreJobStatus,
       pipelineOverallPercent,
       pollCompareJob,
+      pollJob,
       pollScanJob,
       pollScoreJob,
     } = pollingModule.createJobPollers({
@@ -93,6 +96,78 @@
         scoreProgressPercent,
       },
     });
+
+    const fetchOperationJobStatus = createStatusFetcher("/api/operations/status");
+    const fetchOperationJobResult = createResultFetcher("/api/operations/result");
+
+    function operationPhaseLabel(phase, fallbackLabel) {
+      const normalized = String(phase || "").toLowerCase();
+      const labels = {
+        deleting_files: "Deleting files",
+        exporting_files: "Exporting files",
+        moving_files: "Moving files",
+        clearing_cache: "Clearing cache",
+      };
+      return labels[normalized] || fallbackLabel;
+    }
+
+    function operationProgressMessage(progress, elapsedSeconds, fallbackLabel) {
+      const label = operationPhaseLabel(progress?.phase, fallbackLabel);
+      const processed = Number(progress?.files_processed || 0);
+      const total = Number(progress?.files_total || 0);
+      const countText = total > 0 ? ` (${processed}/${total})` : "";
+      const elapsedText = elapsedSeconds >= 1 ? ` · ${formatDuration(elapsedSeconds)}` : "";
+      return `${label}${countText}${elapsedText}`;
+    }
+
+    async function pollOperationJob(jobId, { fallbackLabel, failureMessage }) {
+      return pollJob({
+        jobId,
+        fetchStatus: fetchOperationJobStatus,
+        fetchResult: fetchOperationJobResult,
+        progressMessage: (progress, elapsedSeconds) => operationProgressMessage(progress, elapsedSeconds, fallbackLabel),
+        progressTotal: null,
+        failureMessage,
+        onProgress: ({ progress }) => {
+          const total = Number(progress?.files_total || 0);
+          const processed = Number(progress?.files_processed || 0);
+          const percent = total > 0
+            ? Math.max(0, Math.min(100, (processed / total) * 100))
+            : null;
+          return {
+            overallPercent: percent,
+            phaseState: {
+              percent,
+              phaseIndex: 1,
+              phaseCount: 1,
+              phaseLabel: operationPhaseLabel(progress?.phase, fallbackLabel),
+            },
+          };
+        },
+      });
+    }
+
+    async function runTrackedOperation({ startPath, payload, fallbackLabel, failureMessage }) {
+      const startPayload = await postJson(startPath, payload, { signal: state.abortController?.signal });
+      const jobId = String(startPayload?.job_id || "");
+      if (!jobId) {
+        throw new Error(`${fallbackLabel} failed to start.`);
+      }
+
+      state.operationJobId = jobId;
+      state.operationStatusPath = "/api/operations/status";
+      state.operationCancelPath = "/api/operations/cancel";
+
+      try {
+        return await pollOperationJob(jobId, { fallbackLabel, failureMessage });
+      } finally {
+        if (!state.abortController?.signal?.aborted) {
+          state.operationJobId = null;
+          state.operationStatusPath = null;
+          state.operationCancelPath = null;
+        }
+      }
+    }
 
     function compareRowSortChoices(modelNames) {
       const choices = [
@@ -909,17 +984,25 @@
             if (!confirm(msg)) return;
           }
 
+          const phaseLabel = request.mode === "move" ? "Moving files" : "Exporting files";
           setBusyMessage(request.busyMessage(selectionRequest.count));
-          const result = await postJson("/api/files/export", {
-            ...selectionRequest,
-            destination,
-            mode: request.mode,
+          setBusyPhaseProgress({ percent: 0, phaseIndex: 1, phaseCount: 1, phaseLabel });
+          const result = await runTrackedOperation({
+            startPath: "/api/files/export/start",
+            payload: {
+              ...selectionRequest,
+              destination,
+              mode: request.mode,
+              count: selectionRequest.count,
+            },
+            fallbackLabel: phaseLabel,
+            failureMessage: `${phaseLabel} failed.`,
           });
           const summary = summarizeExportResult(result);
           showToast(`${request.successPrefix}: ${summary}.`);
           addLogEntry(request.logTitle, `${request.mode} to ${destination}: ${summary}`);
           clearActiveSelection();
-          await loadQueue();
+          await refreshWorkspace();
         }).catch(handleError);
       });
     }
@@ -1158,13 +1241,23 @@
         pipeline: { stepIndex: 2, totalSteps: 3 },
       });
       syncReviewRoot(root);
+      clearActiveSelection();
+      state.activeId = null;
+      state.detail = null;
+      state.page = 0;
       await loadQueue();
       setTab("review");
       showToast("Analysis completed. Switched to Review tab.");
     }
 
     async function clearCache(scope, message) {
-      const result = await postJson("/api/cache/clear", { scope });
+      setBusyPhaseProgress({ percent: 0, phaseIndex: 1, phaseCount: 1, phaseLabel: "Clearing cache" });
+      const result = await runTrackedOperation({
+        startPath: "/api/cache/clear/start",
+        payload: { scope },
+        fallbackLabel: "Clearing cache",
+        failureMessage: "Cache action failed.",
+      });
       addLogEntry("Cache action", `${message}: files ${result.files}, scores ${result.scores}, review ${result.review}.`);
       showToast(message);
       if (scope === "all") {
@@ -1183,7 +1276,13 @@
       if (!window.confirm(`Delete ${selectionRequest.count} file(s) from disk? This cannot be undone.`)) {
         return;
       }
-      const result = await postJson("/api/files/delete", { ...selectionRequest, delete_from_disk: true });
+      setBusyPhaseProgress({ percent: 0, phaseIndex: 1, phaseCount: 1, phaseLabel: "Deleting files" });
+      const result = await runTrackedOperation({
+        startPath: "/api/files/delete/start",
+        payload: { ...selectionRequest, delete_from_disk: true, count: selectionRequest.count },
+        fallbackLabel: "Deleting files",
+        failureMessage: "Delete failed.",
+      });
       addLogEntry("Disk delete", `Deleted ${result.deleted_count}, failed ${result.failed_count}.`);
       clearActiveSelection();
       showToast(`Deleted ${result.deleted_count} files from disk.`);
