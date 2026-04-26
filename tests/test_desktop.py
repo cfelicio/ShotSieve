@@ -637,3 +637,125 @@ def test_maybe_prepare_learned_iqa_runtime_invalidates_hardware_cache_after_succ
     desktop_module.maybe_prepare_learned_iqa_runtime(data_dir)
 
     assert invalidations == ["learned"]
+
+
+def test_maybe_prepare_learned_iqa_runtime_reuses_torch_install_consent_without_prompt(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    data_dir = tmp_path / "data"
+    data_dir.mkdir(parents=True)
+
+    monkeypatch.delenv("SHOTSIEVE_BOOTSTRAP_AUTO_INSTALL_LEARNED_IQA", raising=False)
+    monkeypatch.setattr(desktop_module, "runtime_target_id_from_executable_name", lambda system_name=None: "windows-nvidia")
+    monkeypatch.setattr(desktop_module, "_runtime_has_learned_iqa", lambda: False)
+    monkeypatch.setattr(desktop_module, "_is_interactive_console", lambda: True)
+
+    confirm_prompts: list[str] = []
+
+    def fake_confirm(prompt: str, *, input_func=input) -> bool:
+        confirm_prompts.append(prompt)
+        return False
+
+    monkeypatch.setattr(desktop_module, "_confirm", fake_confirm)
+
+    install_calls: list[tuple[str, Path, bool]] = []
+
+    def fake_install_learned_iqa_sidecar(
+        *, runtime: str, site_packages: Path, output_func=print, force_reinstall: bool = False
+    ) -> bool:
+        install_calls.append((runtime, site_packages, force_reinstall))
+        (site_packages / "pyiqa").mkdir(parents=True, exist_ok=True)
+        (site_packages / "pyiqa" / "__init__.py").write_text("", encoding="utf-8")
+        return True
+
+    monkeypatch.setattr(desktop_module, "install_learned_iqa_sidecar", fake_install_learned_iqa_sidecar)
+
+    messages: list[str] = []
+    desktop_module.maybe_prepare_learned_iqa_runtime(
+        data_dir,
+        assume_install_consent=True,
+        output_func=messages.append,
+    )
+
+    assert confirm_prompts == []
+    assert len(install_calls) == 1
+    assert install_calls[0][0] == "cuda"
+    assert install_calls[0][2] is False
+    assert any("PyTorch runtime was installed for this session" in message for message in messages)
+
+
+def test_main_passes_torch_install_consent_into_learned_iqa_preparation(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    local_app_data = tmp_path / "AppData" / "Local"
+    monkeypatch.setenv("LOCALAPPDATA", str(local_app_data))
+
+    learned_flags: list[bool] = []
+
+    monkeypatch.setattr(desktop_module, "maybe_prepare_cuda_torch_runtime", lambda data_dir: True)
+
+    def fake_prepare_learned(data_dir: Path, *, assume_install_consent: bool = False) -> None:
+        learned_flags.append(assume_install_consent)
+
+    monkeypatch.setattr(desktop_module, "maybe_prepare_learned_iqa_runtime", fake_prepare_learned, raising=False)
+    monkeypatch.setattr(
+        desktop_module,
+        "serve_review_ui",
+        lambda *, db_path, host, port, open_browser: None,
+    )
+    monkeypatch.setattr(sys, "argv", ["shotsieve-desktop", "--no-browser"])
+
+    desktop_module.main()
+
+    assert learned_flags == [True]
+
+
+def test_call_prepare_learned_iqa_runtime_passes_consent_through_kwargs_wrapper(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    data_dir = tmp_path / "data"
+    data_dir.mkdir(parents=True)
+
+    forwarded_flags: list[bool] = []
+
+    def fake_prepare_learned(data_dir: Path, **kwargs) -> None:
+        forwarded_flags.append(bool(kwargs.get("assume_install_consent")))
+
+    monkeypatch.setattr(desktop_module, "maybe_prepare_learned_iqa_runtime", fake_prepare_learned, raising=False)
+
+    desktop_module._call_prepare_learned_iqa_runtime(data_dir, assume_install_consent=True)
+
+    assert forwarded_flags == [True]
+
+
+def test_main_supports_legacy_learned_runtime_stub_when_torch_install_returns_true(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    local_app_data = tmp_path / "AppData" / "Local"
+    monkeypatch.setenv("LOCALAPPDATA", str(local_app_data))
+
+    called: dict[str, bool] = {
+        "learned": False,
+        "served": False,
+    }
+
+    monkeypatch.setattr(desktop_module, "maybe_prepare_cuda_torch_runtime", lambda data_dir: True)
+
+    def fake_prepare_learned(data_dir: Path) -> None:
+        called["learned"] = True
+
+    def fake_serve_review_ui(*, db_path: Path, host: str, port: int, open_browser: bool) -> None:
+        called["served"] = True
+
+    monkeypatch.setattr(desktop_module, "maybe_prepare_learned_iqa_runtime", fake_prepare_learned, raising=False)
+    monkeypatch.setattr(desktop_module, "serve_review_ui", fake_serve_review_ui)
+    monkeypatch.setattr(sys, "argv", ["shotsieve-desktop", "--no-browser"])
+
+    desktop_module.main()
+
+    assert called["learned"] is True
+    assert called["served"] is True

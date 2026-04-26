@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import importlib
 import importlib.util
+import inspect
 import os
 import platform
 import sys
@@ -184,6 +185,24 @@ def _compose_pythonpath(*, existing: str | None, prepend_path: Path) -> str:
     return runtime_support.compose_pythonpath(existing=existing, prepend_path=prepend_path)
 
 
+def _call_prepare_learned_iqa_runtime(data_dir: Path, *, assume_install_consent: bool) -> None:
+    prepare_fn = maybe_prepare_learned_iqa_runtime
+    try:
+        parameters = inspect.signature(prepare_fn).parameters
+    except (TypeError, ValueError):
+        parameters = {}
+
+    supports_assume_install_consent = "assume_install_consent" in parameters or any(
+        parameter.kind is inspect.Parameter.VAR_KEYWORD for parameter in parameters.values()
+    )
+
+    if supports_assume_install_consent:
+        prepare_fn(data_dir, assume_install_consent=assume_install_consent)
+        return
+
+    prepare_fn(data_dir)
+
+
 def _prepend_runtime_pythonpath(path: Path) -> None:
     path_text = str(path)
     os.environ["PYTHONPATH"] = _compose_pythonpath(existing=os.environ.get("PYTHONPATH"), prepend_path=path)
@@ -224,7 +243,14 @@ def _fallback_runtime_target_id(*, system_name: str | None = None) -> str:
     return "windows-cpu"
 
 
-def maybe_prepare_learned_iqa_runtime(data_dir: Path, *, target_id: str | None = None, input_func=input, output_func=print) -> None:
+def maybe_prepare_learned_iqa_runtime(
+    data_dir: Path,
+    *,
+    target_id: str | None = None,
+    assume_install_consent: bool = False,
+    input_func=input,
+    output_func=print,
+) -> None:
     if _runtime_has_learned_iqa():
         return
 
@@ -240,7 +266,12 @@ def maybe_prepare_learned_iqa_runtime(data_dir: Path, *, target_id: str | None =
 
     auto_install = _parse_env_bool(os.environ.get(LEARNED_IQA_AUTO_INSTALL_ENV))
     if auto_install is None:
-        if not _is_interactive_console():
+        if assume_install_consent:
+            output_func(
+                "PyTorch runtime was installed for this session. Continuing with learned IQA runtime installation..."
+            )
+            auto_install = True
+        elif not _is_interactive_console():
             if sidecar_has_pyiqa:
                 output_func(
                     "Learned IQA sidecar exists but is unavailable in this session; attempting repair installation..."
@@ -289,13 +320,13 @@ def maybe_prepare_learned_iqa_runtime(data_dir: Path, *, target_id: str | None =
             output_func(f"Learned IQA pip log: {site_packages / 'pip-install.log'}")
 
 
-def maybe_prepare_cuda_torch_runtime(data_dir: Path, *, target_id: str | None = None, input_func=input, output_func=print) -> None:
+def maybe_prepare_cuda_torch_runtime(data_dir: Path, *, target_id: str | None = None, input_func=input, output_func=print) -> bool:
     resolved_target_id = _resolve_cuda_runtime_target_id(target_id or runtime_target_id_from_executable_name())
     if resolved_target_id is None:
-        return
+        return False
 
     if runtime_bundle_has_usable_cuda_torch():
-        return
+        return False
 
     runtime_root = (data_dir / "runtime").resolve()
     site_packages = sidecar_site_packages_dir(runtime_root, resolved_target_id)
@@ -303,7 +334,7 @@ def maybe_prepare_cuda_torch_runtime(data_dir: Path, *, target_id: str | None = 
     if sidecar_has_torch:
         _prepend_runtime_pythonpath(site_packages)
         if _sidecar_torch_has_usable_cuda(site_packages):
-            return
+            return False
 
     auto_install = _parse_env_bool(os.environ.get(TORCH_AUTO_INSTALL_ENV))
     if auto_install is None:
@@ -329,7 +360,7 @@ def maybe_prepare_cuda_torch_runtime(data_dir: Path, *, target_id: str | None = 
             output_func("Runtime PyTorch is already installed but CUDA is unavailable in this session. Skipping reinstall.")
         else:
             output_func("Continuing without runtime PyTorch installation.")
-        return
+        return False
 
     output_func("Installing PyTorch runtime dependencies. This may take a few minutes...")
     installed = install_torch_sidecar(
@@ -346,6 +377,10 @@ def maybe_prepare_cuda_torch_runtime(data_dir: Path, *, target_id: str | None = 
                 "PyTorch runtime is installed, but CUDA remains unavailable. "
                 "The app will continue without GPU-accelerated learned models."
             )
+            return False
+        return True
+
+    return False
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -366,8 +401,8 @@ def main() -> None:
 
     data_dir = Path(args.data_dir).expanduser().resolve() if args.data_dir else default_data_dir()
     data_dir.mkdir(parents=True, exist_ok=True)
-    maybe_prepare_cuda_torch_runtime(data_dir)
-    maybe_prepare_learned_iqa_runtime(data_dir)
+    installed_torch_runtime = maybe_prepare_cuda_torch_runtime(data_dir)
+    _call_prepare_learned_iqa_runtime(data_dir, assume_install_consent=installed_torch_runtime)
     db_path = data_dir / "shotsieve.db"
 
     serve_review_ui(
