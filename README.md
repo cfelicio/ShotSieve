@@ -2,6 +2,9 @@
 
 ShotSieve is a local-first photo culling app for people who want AI help without handing their library to a cloud service. You point it at a folder, let it analyze the images on your machine, then make the final keep/reject decisions yourself in the desktop review workflow.
 
+<img width="1844" height="1251" alt="image" src="https://github.com/user-attachments/assets/31cb0d90-6ec9-4e2e-88f9-9ecfbaecdca6" />
+
+
 ## What ShotSieve does
 
 - Scores images with learned image-quality models on supported runtimes
