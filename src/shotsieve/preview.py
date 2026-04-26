@@ -36,6 +36,7 @@ if register_heif_opener is not None:
 
 MAX_PREVIEW_SIZE = (1024, 1024)
 MIN_RAW_THUMBNAIL_LONG_EDGE = max(MAX_PREVIEW_SIZE)
+_HIGH_BIT_GRAYSCALE_MODES = {"I;16", "I;16L", "I;16B", "I;16N"}
 CAPTURE_TIME_EXIF_TAGS = (36867, 36868, 306)
 _STDERR_CAPTURE_LOCK = threading.Lock()
 
@@ -166,9 +167,7 @@ def generate_preview(
                 image = ImageOps.exif_transpose(image)
                 capture_time = extract_capture_time(image)
                 width, height = image.size
-
-                if image.mode != "RGB":
-                    image = image.convert("RGB")
+                image = _prepare_standard_preview_image(image)
 
                 image.thumbnail(MAX_PREVIEW_SIZE, Image.Resampling.LANCZOS)
                 image.save(preview_path, format="JPEG", quality=85, optimize=False)
@@ -195,6 +194,16 @@ def generate_preview(
         capture_time=capture_time,
         error_text=issue_text,
     )
+
+
+def _prepare_standard_preview_image(image: Image.Image) -> Image.Image:
+    if image.mode in _HIGH_BIT_GRAYSCALE_MODES:
+        image = image.point(lambda value: value / 257).convert("L")
+
+    if image.mode != "RGB":
+        image = image.convert("RGB")
+
+    return image
 
 
 def generate_raw_preview(

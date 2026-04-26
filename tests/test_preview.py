@@ -474,3 +474,27 @@ def test_generate_raw_preview_high_quality_mode_skips_embedded_thumbnail(
     assert result.status == "ready"
     assert result.path is not None
     assert calls == {"extract_thumb": 0, "postprocess": 1}
+
+
+def test_generate_preview_preserves_16bit_grayscale_tiff_midtones(tmp_path: Path) -> None:
+    source_path = tmp_path / "scan16.tif"
+    preview_dir = tmp_path / "previews"
+
+    width = 256
+    height = 8
+    gradient_values = [round((index / (width - 1)) * 65535) for index in range(width)]
+    grayscale = preview_module.Image.new("I;16", (width, height))
+    grayscale.putdata(gradient_values * height)
+    grayscale.save(source_path, format="TIFF")
+
+    result = preview_module.generate_preview(source_path, preview_dir)
+
+    assert result.status == "ready"
+    assert result.path is not None
+
+    with preview_module.Image.open(result.path) as generated_preview:
+        midpoint = generated_preview.getpixel((width // 2, height // 2))
+
+    assert isinstance(midpoint, tuple)
+    assert midpoint[0] == midpoint[1] == midpoint[2]
+    assert 80 <= midpoint[0] <= 180

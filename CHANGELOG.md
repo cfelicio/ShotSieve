@@ -7,6 +7,7 @@ All notable changes to this project will be documented in this file.
 ### Fixed
 
 - Disabled RAW auto-brightening in the full demosaic fallback so monochrome and high-key RAW previews no longer render overexposed and drag learned-IQA scores down.
+- Fixed 16-bit grayscale TIFF preview generation so scanned black-and-white images are rescaled to 8-bit tones before JPEG preview export instead of clipping nearly everything to white.
 - Reset the review browser back to page 1 after a fresh Analyze run so returning to Review always starts from the beginning of the new result set.
 - Clamped review pagination after delete and move operations so counts, page position, and current selection stay in sync when the result set shrinks.
 - Switched delete, export/move, and cache-clear actions to async operation jobs with progress reporting and cancellation support in the busy overlay.
