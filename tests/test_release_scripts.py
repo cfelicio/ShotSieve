@@ -1041,6 +1041,84 @@ def test_portable_bundle_builder_preserves_target_build_root_and_venv(tmp_path: 
     assert target_build_root.resolve() not in removed_paths
 
 
+def test_portable_bundle_builder_falls_back_when_existing_staged_bundle_is_locked(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module_name = "build_portable_bundle_script_locked_staging"
+    spec = importlib.util.spec_from_file_location(module_name, BUNDLE_SCRIPT_PATH)
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    project_root = tmp_path / "project"
+    project_root.mkdir()
+    (project_root / "shotsieve.spec").write_text("# stub spec", encoding="utf-8")
+
+    target = SimpleNamespace(
+        id="windows-nvidia",
+        platform="windows",
+        specPath="shotsieve.spec",
+        variantFolderName="ShotSieve-windows-nvidia",
+        archiveName="ShotSieve-windows-nvidia-x64.zip",
+        executableName="ShotSieve-NVIDIA.exe",
+        to_json=lambda: {"id": "windows-nvidia"},
+    )
+
+    dist_root = tmp_path / "dist"
+    build_root = tmp_path / "build"
+    locked_staged_bundle = dist_root / target.variantFolderName
+    locked_payload = locked_staged_bundle / "data" / "runtime" / "site-packages" / "windows-nvidia" / "torch" / "lib"
+    locked_payload.mkdir(parents=True, exist_ok=True)
+    (locked_payload / "c10.dll").write_text("locked", encoding="utf-8")
+
+    real_rmtree = module.shutil.rmtree
+
+    def fake_rmtree(path: str | Path) -> None:
+        resolved = Path(path).resolve()
+        if resolved == locked_staged_bundle.resolve():
+            raise PermissionError("locked c10.dll")
+        if Path(path).exists():
+            real_rmtree(path)
+
+    def fake_pyinstaller_run(cmd: list[str], check: bool, cwd: Path) -> subprocess.CompletedProcess[str]:
+        dist_idx = cmd.index("--distpath") + 1
+        generated_dist = Path(cmd[dist_idx])
+        bundle_dir = generated_dist / "ShotSieve"
+        bundle_dir.mkdir(parents=True, exist_ok=True)
+        (bundle_dir / "ShotSieve.exe").write_text("launcher", encoding="utf-8")
+        (bundle_dir / "_internal").mkdir(parents=True, exist_ok=True)
+        (bundle_dir / "_internal" / "dummy.txt").write_text("payload", encoding="utf-8")
+        return subprocess.CompletedProcess(args=cmd, returncode=0)
+
+    monkeypatch.setattr(module.shutil, "rmtree", fake_rmtree)
+    monkeypatch.setattr(module.subprocess, "run", fake_pyinstaller_run)
+
+    plan = module.build_bundle(
+        target,
+        project_root=project_root,
+        dist_root=dist_root,
+        build_root=build_root,
+    )
+
+    rebuilt_bundle = Path(plan["distPath"])
+    archive_path = Path(plan["archivePath"])
+
+    assert rebuilt_bundle.exists()
+    assert rebuilt_bundle != locked_staged_bundle
+    assert rebuilt_bundle.name.startswith("ShotSieve-windows-nvidia-rebuilt")
+    assert (rebuilt_bundle / "ShotSieve-NVIDIA.exe").exists()
+    assert locked_staged_bundle.exists()
+    assert archive_path.exists()
+
+    with zipfile.ZipFile(archive_path, "r") as archive:
+        names = archive.namelist()
+
+    assert "ShotSieve-NVIDIA.exe" in names
+    assert "_internal/dummy.txt" in names
+
+
 def test_portable_bundle_zip_is_flat_without_variant_folder_prefix(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     module_name = "build_portable_bundle_script_flat_zip"
     spec = importlib.util.spec_from_file_location(module_name, BUNDLE_SCRIPT_PATH)

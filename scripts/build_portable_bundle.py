@@ -67,6 +67,37 @@ def default_launcher_name(target: ReleaseTarget) -> str:
     return "ShotSieve.exe" if target.platform == "windows" else "ShotSieve"
 
 
+def _next_available_staging_path(preferred_path: Path) -> Path:
+    candidate = preferred_path.with_name(f"{preferred_path.name}-rebuilt")
+    index = 2
+
+    while candidate.exists():
+        candidate = preferred_path.with_name(f"{preferred_path.name}-rebuilt-{index}")
+        index += 1
+
+    return candidate
+
+
+def _prepare_staged_bundle_path(preferred_path: Path) -> Path:
+    if not preferred_path.exists():
+        return preferred_path
+
+    try:
+        shutil.rmtree(preferred_path)
+        return preferred_path
+    except PermissionError as exc:
+        fallback_path = _next_available_staging_path(preferred_path)
+        print(
+            (
+                f"Warning: could not remove existing staged bundle '{preferred_path}' because a file is in use; "
+                f"writing the fresh bundle to '{fallback_path}' instead. "
+                f"Close any running ShotSieve instance to replace the original folder in place. ({exc})"
+            ),
+            file=sys.stderr,
+        )
+        return fallback_path
+
+
 def build_bundle(target: ReleaseTarget, *, project_root: Path, dist_root: Path, build_root: Path) -> BundlePlan:
     plan = target_plan(target, project_root=project_root, dist_root=dist_root, build_root=build_root)
     pyinstaller_dist_root = Path(plan["pyinstallerDistRoot"])
@@ -102,8 +133,8 @@ def build_bundle(target: ReleaseTarget, *, project_root: Path, dist_root: Path, 
     )
 
     source_bundle = pyinstaller_dist_root / "ShotSieve"
-    if staged_bundle.exists():
-        shutil.rmtree(staged_bundle)
+    staged_bundle = _prepare_staged_bundle_path(staged_bundle)
+    plan["distPath"] = str(staged_bundle)
     shutil.copytree(source_bundle, staged_bundle)
 
     launcher = staged_bundle / default_launcher_name(target)
