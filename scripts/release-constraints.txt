@@ -1,4 +1,5 @@
 # Shared constraints for reproducible local + CI release bundle builds
+pip<26
 setuptools<81
 pyinstaller>=6.19,<7
 packaging>=24,<26

@@ -827,6 +827,15 @@ def test_windows_build_dependencies_pin_setuptools_with_pkg_resources() -> None:
     assert any(entry.startswith("setuptools<81") for entry in windows_build_dependencies)
 
 
+def test_windows_build_dependencies_pin_pip_below_26_for_embedded_runtime_installs() -> None:
+    pyproject_text = (PROJECT_ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    pyproject = tomllib.loads(pyproject_text)
+
+    windows_build_dependencies = pyproject["project"]["optional-dependencies"]["windows-build"]
+
+    assert any(entry.startswith("pip<26") for entry in windows_build_dependencies)
+
+
 def test_tier1_release_matrix_covers_all_runtime_pack_targets() -> None:
     assert MATRIX_SCRIPT_PATH.exists()
 
@@ -909,6 +918,7 @@ def test_release_constraints_file_exists_with_required_pins() -> None:
     assert RELEASE_CONSTRAINTS_PATH.exists()
 
     constraints_text = RELEASE_CONSTRAINTS_PATH.read_text(encoding="utf-8")
+    assert "pip<26" in constraints_text
     assert "setuptools<81" in constraints_text
     assert "pyinstaller>=6.19,<7" in constraints_text
 
