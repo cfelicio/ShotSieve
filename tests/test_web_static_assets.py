@@ -189,7 +189,8 @@ class TestStaticAssetHeaders:
         assert ("h3", "File Discovery") in parser.headings
         assert ("h3", "Quality Scoring") in parser.headings
         assert 'id="preview-mode-select"' not in body
-        assert "RAW previews use Auto quality by default." in body
+        assert "RAW Preview Quality" not in body
+        assert "RAW previews use Auto quality by default." not in body
 
     def test_static_html_review_tab_has_stable_workspace_and_subsection_headings(self, test_server):
         base_url, _, _ = test_server
@@ -828,11 +829,12 @@ class TestStaticAssetHeaders:
         assert "Auto Mode Priority" in body
         assert "Auto mode picks the first available runtime" in body
 
-    def test_static_js_settings_clarify_xpu_is_source_only_not_packaged(self, test_server):
+    def test_static_js_settings_omit_xpu_packaging_note(self, test_server):
         base_url, _, _ = test_server
         body = self._combined_js(base_url)
-        assert "Intel XPU remains source-install only today" in body
-        assert "not one of the packaged runtime downloads" in body
+        assert "Intel XPU" not in body
+        assert "Intel XPU remains source-install only today" not in body
+        assert "not one of the packaged runtime downloads" not in body
 
     def test_static_html_includes_runtime_model_warning_placeholder(self, test_server):
         base_url, _, _ = test_server

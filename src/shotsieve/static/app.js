@@ -768,7 +768,6 @@ function renderOptions() {
   const cpuLabel = hw.cpu_count ? `${hw.cpu_count} cores` : "Unknown";
   const ramLabel = hw.ram_mb ? `${(hw.ram_mb / 1024).toFixed(1)} GB` : "Unknown";
   const vramLabel = hw.vram_mb ? `${(hw.vram_mb / 1024).toFixed(1)} GB` : "Not detected";
-  const xpuPackagingNote = "Intel XPU remains source-install only today and is not one of the packaged runtime downloads.";
 
   // Hardware cards (detected hardware)
   const hwCards = [
@@ -791,7 +790,6 @@ function renderOptions() {
     ["Active Runtime", activeRuntimeLabel],
     ["Available Accelerators", summarizeAccelerators(statusMap)],
     ["Auto Mode Priority", summarizeAutoPriority(options)],
-    ["Intel XPU", xpuPackagingNote],
     ["Photo Support", formatPhotoSupport(heifOk, rawOk)],
   ];
   document.getElementById("runtime-cards").innerHTML = runtimeCards.map(([label, value]) => `
