@@ -36,6 +36,7 @@ ENV/
 blog.md
 .github/agents/
 .github/workflows/
+.github/skills/
 !.github/workflows/
 !.github/workflows/release.yml
 
