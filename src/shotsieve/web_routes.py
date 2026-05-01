@@ -509,7 +509,12 @@ def _parse_selection_payload(deps: WebRouteDependencies, payload: dict[str, obje
         )
         selection["min_score"] = _optional_payload_float(deps, raw_selection.get("min_score"), name="selection.min_score")
         selection["max_score"] = _optional_payload_float(deps, raw_selection.get("max_score"), name="selection.max_score")
-    selection["exclude_file_ids"] = deps.required_int_list(payload.get("exclude_file_ids"), name="exclude_file_ids") if payload.get("exclude_file_ids") is not None else []
+
+    raw_exclude_ids = payload.get("exclude_file_ids")
+    if raw_exclude_ids is None or raw_exclude_ids == []:
+        selection["exclude_file_ids"] = []
+    else:
+        selection["exclude_file_ids"] = deps.required_int_list(raw_exclude_ids, name="exclude_file_ids")
     return selection
 
 

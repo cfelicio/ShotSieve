@@ -562,6 +562,76 @@ class TestRouteHandling:
         assert captured["updated_batches"] == [[101], [103]]
         assert captured["payload"] == {"updated": 2}
 
+    def test_review_batch_route_allows_empty_exclude_ids_list(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+        from shotsieve import web_request as request_module
+        from shotsieve import web_routes as route_module
+
+        captured: dict[str, object] = {}
+        connection = object()
+
+        class _DatabaseContext:
+            def __enter__(self):
+                return connection
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+        def fake_send_json(_handler, payload: object) -> None:
+            captured["payload"] = payload
+
+        batches = [[101, 102], [103], []]
+
+        def fake_list_review_browser_file_ids(_connection, **kwargs):
+            return batches.pop(0)
+
+        def fake_update_review_state_batch(_connection, **kwargs):
+            _captured_list(captured, "updated_batches").append(list(kwargs["file_ids"]))
+            return len(kwargs["file_ids"])
+
+        monkeypatch.setattr(route_module, "send_json", fake_send_json)
+
+        deps = SimpleNamespace(
+            read_json_body=lambda _handler, *, max_body_size: {
+                "selection": {
+                    "scope": "review-browser",
+                    "marked": "all",
+                },
+                "selection_revision": "rev-1",
+                "exclude_file_ids": [],
+                "decision_state": "export",
+                "delete_marked": False,
+                "export_marked": True,
+            },
+            required_int_list=lambda value, *, name: request_module.required_int_list(value, name=name),
+            required_choice=lambda value, *, name, choices: value if value in choices else (_ for _ in ()).throw(ValueError(name)),
+            optional_string=lambda value: value if isinstance(value, str) else None,
+            optional_bool=lambda value, *, name: value if isinstance(value, bool) else None,
+            float_or_none=lambda value: None if value is None else float(value),
+            database=lambda _path: _DatabaseContext(),
+            review_selection_revision=lambda _connection, **kwargs: "rev-1",
+            list_review_browser_file_ids=fake_list_review_browser_file_ids,
+            update_review_state_batch=fake_update_review_state_batch,
+            utc_now=lambda: "2026-04-22T00:00:00+00:00",
+        )
+        context = route_module.WebRouteContext(
+            db_path=tmp_path / "shotsieve.db",
+            operation_lock=threading.Lock(),
+            scan_registry=None,
+            score_registry=None,
+            compare_registry=None,
+            max_request_body_size=1024,
+            static_dir=tmp_path,
+            media_mime_fallbacks={},
+            dependencies=deps,
+        )
+        handler = SimpleNamespace(path="/api/review/batch", headers={"Content-Length": "20"})
+
+        handled = route_module._handle_review_post_routes(handler, context, urlparse(handler.path))
+
+        assert handled is True
+        assert captured["updated_batches"] == [[101, 102], [103]]
+        assert captured["payload"] == {"updated": 3}
+
     def test_review_batch_route_materializes_selection_before_mutation(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         from shotsieve import web_routes as route_module
 

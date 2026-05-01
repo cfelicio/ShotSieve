@@ -838,12 +838,17 @@
       if (state.bulkSelection) {
         const excludedIds = [...(state.bulkSelection.excludedIds || new Set())];
         const effectiveSelectionCount = Math.max(0, Number(state.bulkSelection.count || 0) - excludedIds.length);
-        return {
+        const request = {
           selection: state.bulkSelection.selection,
           selection_revision: state.bulkSelection.selectionRevision,
-          exclude_file_ids: excludedIds,
           count: effectiveSelectionCount,
         };
+
+        if (excludedIds.length) {
+          request.exclude_file_ids = excludedIds;
+        }
+
+        return request;
       }
       const fileIds = [...state.selectedIds];
       return {
