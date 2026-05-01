@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.2.3] - 2026-05-01
+
+### Added
+
+- Fixed exclude_file_ids must not be empty error on review pane.
+
 ## [0.2.2] - 2026-04-26
 
 ### Fixed
