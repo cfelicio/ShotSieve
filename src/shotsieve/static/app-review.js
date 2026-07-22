@@ -338,6 +338,62 @@
     };
 
     document.getElementById("detail-scoreline").textContent = `AI score ${formatNumberFn(aiScore)}`;
+
+    const metadataStrip = document.getElementById("detail-metadata-strip");
+    if (metadataStrip) {
+      metadataStrip.innerHTML = "";
+      const chips = [];
+      if (detail.format) {
+        chips.push(`<span class="metadata-chip">${escapeHtml(detail.format)}</span>`);
+      }
+      if (detail.width && detail.height) {
+        const mp = ((detail.width * detail.height) / 1000000).toFixed(1);
+        chips.push(`<span class="metadata-chip">${detail.width} × ${detail.height} (${mp} MP)</span>`);
+        
+        // Inline Aspect Ratio helper
+        const ratio = detail.width / detail.height;
+        const candidates = [
+          { name: "3:2", val: 3/2 },
+          { name: "2:3", val: 2/3 },
+          { name: "4:3", val: 4/3 },
+          { name: "3:4", val: 3/4 },
+          { name: "16:9", val: 16/9 },
+          { name: "9:16", val: 9/16 },
+          { name: "1:1", val: 1 },
+          { name: "16:10", val: 16/10 },
+          { name: "10:16", val: 10/16 },
+          { name: "5:4", val: 5/4 },
+          { name: "4:5", val: 4/5 },
+        ];
+        let ar = ratio.toFixed(2);
+        for (const cand of candidates) {
+          if (Math.abs(ratio - cand.val) < 0.015) {
+            ar = cand.name;
+            break;
+          }
+        }
+        chips.push(`<span class="metadata-chip">Aspect ${ar}</span>`);
+      }
+      if (detail.size_bytes) {
+        const bytes = detail.size_bytes;
+        let sizeStr = `${bytes} B`;
+        if (bytes >= 1000) {
+          const kb = bytes / 1000;
+          if (kb < 1000) sizeStr = `${kb.toFixed(1)} KB`;
+          else {
+            const mb = kb / 1000;
+            if (mb < 1000) sizeStr = `${mb.toFixed(1)} MB`;
+            else {
+              const gb = mb / 1000;
+              sizeStr = `${gb.toFixed(2)} GB`;
+            }
+          }
+        }
+        chips.push(`<span class="metadata-chip">${sizeStr}</span>`);
+      }
+      metadataStrip.innerHTML = chips.join("");
+    }
+
     if (issuesNote) {
       if (issueText) {
         issuesNote.textContent = issueText;

@@ -24,6 +24,7 @@ class ScanRequest(TypedDict):
     preview_mode: str
     files_total_hint: int
     resource_profile: str | None
+    ignore_rules: list[str]
 
 
 class CompareRequest(TypedDict):
@@ -277,6 +278,14 @@ def required_int_list(value: object, *, name: str) -> list[int]:
     return parsed
 
 
+def required_string_list(value: object, *, name: str) -> list[str]:
+    if value is None:
+        return []
+    if not isinstance(value, list):
+        raise ValueError(f"{name} must be a list of strings")
+    return [str(item).strip() for item in value if str(item).strip()]
+
+
 def required_choice(value: object, *, name: str, choices: tuple[str, ...]) -> str:
     if not isinstance(value, str) or not value.strip():
         raise ValueError(f"{name} is required")
@@ -433,6 +442,7 @@ def parse_scan_request(payload: dict[str, object]) -> ScanRequest:
         "preview_mode": normalize_raw_preview_mode(optional_string(payload.get("preview_mode"))),
         "files_total_hint": optional_int(payload.get("files_total_hint"), minimum=0) or 0,
         "resource_profile": optional_string(payload.get("resource_profile")),
+        "ignore_rules": required_string_list(payload.get("ignore_rules"), name="ignore_rules"),
     }
 
 

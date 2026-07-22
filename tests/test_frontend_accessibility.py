@@ -445,6 +445,67 @@ def large_chromium_page(frontend_large_server: str):
             browser.close()
 
 
+@pytest.fixture()
+def scoped_chromium_page(tmp_path: Path):
+    playwright = pytest.importorskip("playwright.sync_api")
+    expect = playwright.expect
+    db_path = tmp_path / "data" / "shotsieve.db"
+    preview_dir = tmp_path / "previews"
+    root_a = tmp_path / "library-a"
+    root_b = tmp_path / "library-b"
+    root_a.mkdir(parents=True)
+    root_b.mkdir(parents=True)
+    for index in range(61):
+        _create_image(root_a / f"a-{index:03d}.jpg", color=(80, 120, 160))
+    _create_image(root_b / "b-001.jpg", color=(120, 80, 160))
+
+    class FakeLearnedBackend:
+        name = "topiq_nr"
+        model_version = "fake:scope-test"
+
+        def score_paths(self, image_paths, *, batch_size: int = 4, resource_profile: str | None = None):
+            return [
+                LearnedScoreResult(raw_score=0.82, normalized_score=82.0, confidence=91.0)
+                for _ in image_paths
+            ]
+
+    initialize_database(db_path)
+    from shotsieve.db import database
+    from shotsieve.web import build_review_server
+
+    with database(db_path) as connection:
+        scan_root(connection, root=root_a, recursive=True, extensions=(".jpg",), preview_dir=preview_dir)
+        scan_root(connection, root=root_b, recursive=True, extensions=(".jpg",), preview_dir=preview_dir)
+        score_files(
+            connection,
+            learned_backend_name="topiq_nr",
+            learned_backend_factory=lambda _model_name: FakeLearnedBackend(),
+        )
+
+    server = build_review_server(db_path, host="127.0.0.1", port=0)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        with playwright.sync_playwright() as runner:
+            try:
+                browser = runner.chromium.launch(headless=True)
+            except Exception as exc:  # pragma: no cover - environment-dependent skip path
+                pytest.skip(f"Playwright browser unavailable: {exc}")
+
+            try:
+                page = browser.new_page()
+                page.goto(f"http://127.0.0.1:{server.server_port}")
+                page.wait_for_selector("#tab-workspace-button")
+                _wait_for_shell_ready(page)
+                yield page, expect, str(root_a.resolve()), str(root_b.resolve())
+            finally:
+                browser.close()
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
 def test_keyboard_tab_activation_keeps_focus_on_active_tab(chromium_page) -> None:
     chromium_page, _ = chromium_page
     assert chromium_page.locator("#compare-overlay").count() == 0
@@ -576,6 +637,53 @@ def test_review_position_counts_globally_across_pages(large_chromium_page) -> No
 
     chromium_page.locator("#next-item").click()
     expect(chromium_page.locator("#review-position")).to_have_text("62 of 65")
+
+
+def test_active_library_scope_separates_totals_and_resets_review_state(scoped_chromium_page) -> None:
+        chromium_page, expect, root_a, root_b = scoped_chromium_page
+
+        def choose_library(root: str) -> None:
+                chromium_page.evaluate(
+                        """
+                        (root) => {
+                            const input = document.getElementById("library-root-input");
+                            input.value = root;
+                            input.dispatchEvent(new Event("change", { bubbles: true }));
+                        }
+                        """,
+                        root,
+                )
+                chromium_page.wait_for_function(
+                        """
+                        (root) => document.getElementById("root-filter")?.value === root
+                            && document.getElementById("review-scope-context")?.textContent?.includes(root)
+                        """,
+                    arg=root,
+                )
+
+        choose_library(root_a)
+        _open_review_tab(chromium_page)
+        expect(chromium_page.locator("#summary-strip")).to_contain_text("This library")
+        expect(chromium_page.locator("#summary-strip")).to_contain_text("61 scored")
+        expect(chromium_page.locator("#summary-strip")).to_contain_text("All cached libraries")
+        expect(chromium_page.locator("#summary-strip")).to_contain_text("62 scored")
+        expect(chromium_page.locator("#page-info")).to_contain_text("1–60 of 61")
+
+        chromium_page.locator("#select-all-matching-btn").click()
+        expect(chromium_page.locator("#selection-label")).to_have_text("61 selected")
+        chromium_page.locator("#page-next").click()
+        expect(chromium_page.locator("#page-info")).to_contain_text("61–61 of 61")
+
+        choose_library(root_b)
+        expect(chromium_page.locator("#review-scope-context")).to_have_text(f"Reviewing this library: {root_b}")
+        expect(chromium_page.locator("#selection-label")).to_have_text("0 selected")
+        expect(chromium_page.locator("#page-info")).to_contain_text("1–1 of 1")
+        expect(chromium_page.locator("#queue-list")).to_contain_text("b-001.jpg")
+
+        chromium_page.locator("#root-filter").select_option("")
+        expect(chromium_page.locator("#review-scope-context")).to_have_text("All libraries — global catalog view")
+        expect(chromium_page.locator("#review-scope-context")).to_have_attribute("data-scope", "global")
+        expect(chromium_page.locator("#page-info")).to_contain_text("1–60 of 62")
 
 
 def test_deleting_last_review_page_clamps_back_to_previous_page(large_chromium_page) -> None:

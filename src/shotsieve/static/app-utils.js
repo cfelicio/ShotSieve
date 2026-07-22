@@ -296,7 +296,10 @@
       return null;
     }
 
-    const filesProcessed = Math.max(0, Math.min(filesTotal, Number(progress.files_processed || 0)));
+    const filesProcessed = Math.max(0, Number(progress.files_processed || 0));
+    if (filesProcessed > filesTotal) {
+      return null;
+    }
     return (filesProcessed / filesTotal) * 100;
   }
 
@@ -306,14 +309,13 @@
       return `Scanning… Discovering files · ${elapsedText} elapsed`;
     }
 
-    const filesTotal = filesTotalEstimate && filesTotalEstimate > 0
-      ? filesTotalEstimate
-      : Math.max(0, Number(progress.files_total || 0));
+    const reportedTotal = Math.max(0, Number(progress.files_total || 0));
+    const filesTotal = reportedTotal > 0 ? reportedTotal : Number(filesTotalEstimate || 0);
     const filesProcessed = Math.max(0, Number(progress.files_processed || 0));
     const phase = String(progress.phase || "scanning").toLowerCase();
 
     if (filesTotal > 0) {
-      const percent = Math.min(99, scanProgressPercent({ files_total: filesTotal, files_processed: filesProcessed }) ?? 0);
+      const percent = Math.min(99, scanProgressPercent(progress, filesTotalEstimate) ?? 0);
       if (phase === "failed") {
         return `Scanning failed at ${filesProcessed}/${filesTotal} (${Math.round(percent)}%) · ${elapsedText} elapsed`;
       }

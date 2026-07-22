@@ -38,6 +38,7 @@
       queue: [],
       detail: null,
       loadedReviewSelection: null,
+      reviewScopeInitialized: false,
       selectedIds: new Set(),
       bulkSelection: null,
       activeId: null,
@@ -103,6 +104,7 @@
     }
 
     function buildUiStatePayload(overrides = {}) {
+      const formatFilters = [...documentRef.querySelectorAll("input[name='format-filter']:checked")].map((i) => i.value);
       return {
         database: currentDatabaseMarker(),
         libraryRoot: documentRef.getElementById("library-root-input")?.value || "",
@@ -114,6 +116,13 @@
         minScore: documentRef.getElementById("min-score")?.value || "",
         maxScore: documentRef.getElementById("max-score")?.value || "",
         issues: documentRef.getElementById("issues-filter")?.value || "all",
+        ignoreRules: documentRef.getElementById("ignore-rules-input")?.value || "",
+        formats: formatFilters,
+        minMp: documentRef.getElementById("filter-min-mp")?.value || "",
+        maxMp: documentRef.getElementById("filter-max-mp")?.value || "",
+        minSize: documentRef.getElementById("filter-min-size")?.value || "",
+        maxSize: documentRef.getElementById("filter-max-size")?.value || "",
+        metadataStatus: documentRef.getElementById("filter-metadata-status")?.value || "all",
         ...overrides,
       };
     }

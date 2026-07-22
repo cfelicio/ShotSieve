@@ -20,6 +20,7 @@ wheels/
 *.egg-info/
 .installed.cfg
 *.egg
+JFamily/
 
 # Virtual Environments
 .venv/
@@ -75,6 +76,11 @@ shotsieve_pid.txt
 *.db-journal
 *.db-wal
 data/
+
+# Local planning and performance measurement artifacts
+/plan.md
+/performance-reports/
+/.performance-data/
 
 # OS generated files
 .DS_Store

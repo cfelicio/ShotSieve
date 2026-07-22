@@ -34,6 +34,7 @@ from shotsieve.review import (
     get_review_file_detail,
     list_review_browser_file_ids,
     list_review_files,
+    list_analysis_diagnostics,
     list_review_state_file_ids,
     media_path_for_file,
     prune_missing_cache_entries,
@@ -255,6 +256,7 @@ def build_handler(db_path: Path):
     score_registry = JobRegistry(max_jobs=10)
     compare_registry = JobRegistry(max_jobs=10)
     operation_registry = JobRegistry(max_jobs=10)
+    preflight_registry = JobRegistry(max_jobs=5)
 
     def route_scan_root(*args, **kwargs):
         return scan_root(*args, **kwargs)
@@ -306,6 +308,7 @@ def build_handler(db_path: Path):
         static_dir=STATIC_DIR,
         media_mime_fallbacks=_MEDIA_MIME_FALLBACKS,
         operation_registry=operation_registry,
+        preflight_registry=preflight_registry,
         dependencies=WebRouteDependencies(
             coerce_bool=lambda value, *, default: _coerce_bool(value, default=default),
             first_value=lambda params, key, default=None: _first(params, key, default),
@@ -322,7 +325,9 @@ def build_handler(db_path: Path):
             required_choice=lambda value, *, name, choices: _required_choice(value, name=name, choices=choices),
             required_int=lambda value, *, name, minimum=0: _required_int(value, name=name, minimum=minimum),
             required_int_list=lambda value, *, name: _required_int_list(value, name=name),
+            required_string_list=lambda value, *, name: _request_helpers.required_string_list(value, name=name),
             required_path=lambda value, *, name: _required_path(value, name=name),
+            required_path_list=lambda value, *, name: _request_helpers.required_path_list(value, name=name),
             read_json_body=lambda handler, *, max_body_size: route_read_json_body(handler, max_body_size=max_body_size),
             parse_scan_request=lambda payload: route_parse_scan_request(payload),
             parse_compare_request=lambda payload, *, default_batch_size: route_parse_compare_request(
@@ -336,12 +341,13 @@ def build_handler(db_path: Path):
             ),
             filesystem_roots=lambda: filesystem_roots(),
             list_directory=lambda path: list_directory(path),
-            review_overview=lambda connection: review_overview(connection),
+            review_overview=lambda *args, **kwargs: review_overview(*args, **kwargs),
             list_review_files=lambda *args, **kwargs: list_review_files(*args, **kwargs),
             count_review_files=lambda *args, **kwargs: count_review_files(*args, **kwargs),
             review_selection_revision=lambda *args, **kwargs: review_selection_revision(*args, **kwargs),
             list_review_browser_file_ids=lambda *args, **kwargs: list_review_browser_file_ids(*args, **kwargs),
             list_review_state_file_ids=lambda *args, **kwargs: list_review_state_file_ids(*args, **kwargs),
+            list_analysis_diagnostics=lambda *args, **kwargs: list_analysis_diagnostics(*args, **kwargs),
             get_review_file_detail=lambda *args, **kwargs: get_review_file_detail(*args, **kwargs),
             update_review_state=lambda *args, **kwargs: update_review_state(*args, **kwargs),
             update_review_state_batch=lambda *args, **kwargs: update_review_state_batch(*args, **kwargs),
@@ -519,36 +525,67 @@ def build_options_payload(db_path: Path, *, resource_profile: str | None = None)
 def filesystem_roots() -> list[dict[str, str]]:
     items: list[dict[str, str]] = []
     if os.name == "nt":
-        for letter in ascii_uppercase:
-            root = Path(f"{letter}:\\")
-            if root.exists():
-                items.append({"name": str(root), "path": str(root)})
+        try:
+            import ctypes
+            drives_mask = ctypes.windll.kernel32.GetLogicalDrives()
+            for i in range(26):
+                if drives_mask & (1 << i):
+                    letter = chr(65 + i)
+                    drive_str = f"{letter}:\\"
+                    items.append({"name": drive_str, "path": drive_str})
+        except Exception:
+            for letter in ascii_uppercase:
+                root = Path(f"{letter}:\\")
+                if root.exists():
+                    items.append({"name": str(root), "path": str(root)})
     else:
         items.append({"name": "/", "path": "/"})
 
-    home = Path.home().resolve()
-    home_value = str(home)
-    if all(item["path"] != home_value for item in items):
-        items.insert(0, {"name": f"Home ({home.name or home_value})", "path": home_value})
+    try:
+        home = Path.home()
+        home_value = str(home)
+        if all(item["path"] != home_value for item in items):
+            items.insert(0, {"name": f"Home ({home.name or home_value})", "path": home_value})
+    except Exception:
+        pass
     return items
 
 
 def list_directory(path: Path) -> dict[str, object]:
-    resolved = path.resolve()
-    if not resolved.exists() or not resolved.is_dir():
+    target_str = str(path.expanduser())
+    if not os.path.isdir(target_str):
+        try:
+            target_str = str(path.expanduser().resolve())
+        except Exception:
+            pass
+
+    if not os.path.isdir(target_str):
         raise ValueError("path must point to an existing directory")
 
+    items = []
     try:
-        children = [child for child in resolved.iterdir() if child.is_dir()]
+        with os.scandir(target_str) as entries:
+            for entry in entries:
+                try:
+                    if entry.is_dir(follow_symlinks=False):
+                        items.append({
+                            "name": entry.name,
+                            "path": entry.path,
+                        })
+                except OSError:
+                    continue
     except OSError as exc:
         raise ValueError(str(exc)) from exc
 
-    children.sort(key=lambda child: child.name.casefold())
-    parent = resolved.parent if resolved.parent != resolved else None
+    items.sort(key=lambda item: item["name"].casefold())
+    target_path = Path(target_str)
+    parent_path = target_path.parent
+    parent_str = str(parent_path) if parent_path != target_path else None
+
     return {
-        "path": str(resolved),
-        "parent": str(parent) if parent is not None else None,
-        "items": [{"name": child.name, "path": str(child)} for child in children],
+        "path": target_str,
+        "parent": parent_str,
+        "items": items,
     }
 
 

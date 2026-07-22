@@ -16,7 +16,10 @@ CREATE TABLE IF NOT EXISTS files (
     preview_status TEXT,
     last_scan_time TEXT,
     last_error TEXT,
-    scan_status TEXT NOT NULL DEFAULT 'new'
+    scan_status TEXT NOT NULL DEFAULT 'new',
+    analysis_status TEXT,
+    analysis_error TEXT,
+    last_analysis_time TEXT
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_files_path_key
@@ -108,6 +111,11 @@ ON scan_runs(started_time);
 """
 
 SCHEMA_MIGRATIONS = {
+    "files": {
+        "analysis_status": "ALTER TABLE files ADD COLUMN analysis_status TEXT",
+        "analysis_error": "ALTER TABLE files ADD COLUMN analysis_error TEXT",
+        "last_analysis_time": "ALTER TABLE files ADD COLUMN last_analysis_time TEXT",
+    },
     "scores": {
         "learned_confidence": "ALTER TABLE scores ADD COLUMN learned_confidence REAL",
         "source_modified_time": "ALTER TABLE scores ADD COLUMN source_modified_time REAL",

@@ -37,11 +37,13 @@
 .topbar-stats {
   display: flex;
   width: 100%;
+  min-width: 0;
   gap: var(--space-2);
   font-size: 12px;
   color: var(--ink-faint);
   margin-left: 0;
   justify-content: flex-start;
+  flex-wrap: wrap;
 }
 
 .summary-strip {
@@ -201,6 +203,25 @@
   display: flex;
   flex-direction: column;
   gap: 8px;
+}
+
+.review-scope-context {
+  margin: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--blue-line);
+  border-radius: var(--radius-frame);
+  background: var(--cobalt-wash);
+  color: var(--ink-caption);
+  font-size: 0.82rem;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.review-scope-context[data-scope="global"] {
+  border-color: var(--proof-red-line);
+  background: var(--proof-red-wash);
+  color: var(--proof-red);
+  font-weight: 600;
 }
 
 .sidebar-label {
@@ -368,6 +389,48 @@
   font-size: 0.84rem;
   color: var(--ink-faint);
   line-height: 1.45;
+}
+
+.analysis-diagnostics-list {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.analysis-diagnostic-item {
+  display: grid;
+  gap: 4px;
+  padding: var(--space-2);
+  border: 1px solid var(--edge-whisper);
+  border-radius: var(--radius-control);
+  background: var(--control-well);
+}
+
+.analysis-diagnostic-item[data-status="failed"] {
+  border-color: var(--proof-red-line);
+}
+
+.analysis-diagnostic-path {
+  font-family: "Cascadia Mono", "Consolas", monospace;
+  font-size: 0.82rem;
+  overflow-wrap: anywhere;
+}
+
+.analysis-diagnostic-status {
+  color: var(--cobalt-glow);
+  font-size: 0.78rem;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.analysis-diagnostic-item[data-status="failed"] .analysis-diagnostic-status {
+  color: var(--proof-red);
+}
+
+.analysis-diagnostic-error {
+  color: var(--ink-caption);
+  font-size: 0.84rem;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
 }
 
 .rejected-actions-bar {

@@ -2,6 +2,27 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+### Added
+
+- Added support for configuring multiple non-overlapping directory paths as sources in the active library workspace.
+- Added a custom directory ignore rules editor supporting exact folder names, relative globs, and wildcards.
+- Added an asynchronous, cancellable library preflight check executing lightweight asset counting, source size estimation, and directory/file access permission audits.
+- Added metadata-led filters for format groups (JPEG, PNG, TIFF, HEIF, RAW, Other), decimal Megapixel limits, file sizes (in MB), and metadata completeness (valid/unknown).
+- Added new Review sorting orders: Resolution (ascending/descending), File Size (ascending/descending), Format Name, Width, and Height.
+- Added a visual tag strip in the photo details toolbar displaying format, pixel dimensions, megapixels, computed aspect ratio, and formatted byte size.
+- Added opt-in performance diagnostics for catalog overview, Review, and score-row query timing, plus a 60,000-row SQLite baseline and query-plan test that remain disabled during normal test runs.
+- Added developer guidance for separating synthetic catalog-query measurements from local real-photo scan, preview, and learned-IQA measurements.
+
+### Changed
+
+- Optimised file scanning traversal by pruning ignored directory names directly from `os.walk` list before descending.
+
+- Made the selected Library folder the persisted default Review scope while retaining one shared catalog for preview and score reuse.
+- Displayed separate **This library** and **All cached libraries** totals for discovered, scored, rejected, and selected photos, with a clear global Review scope indicator.
+- Scoped rejected-file move and deletion shortcuts to the active library and named that library in destructive deletion confirmations.
+
 ## [0.2.3] - 2026-05-01
 
 ### Added

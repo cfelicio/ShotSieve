@@ -304,3 +304,21 @@ def root_path_filter(column_name: str, root_path: Path) -> tuple[str, list[objec
         backward_prefix,
         f"{backward_prefix}{TEXT_PREFIX_UPPER_BOUND}",
     ]
+
+
+def roots_path_filter(column_name: str, roots: Sequence[Path]) -> tuple[str, list[object]]:
+    """Build a SQL predicate that matches any of the given roots and their descendants."""
+    if not roots:
+        return "0", []
+    if len(roots) == 1:
+        return root_path_filter(column_name, roots[0])
+
+    clauses = []
+    params = []
+    for root in roots:
+        clause, root_params = root_path_filter(column_name, root)
+        clauses.append(clause)
+        params.extend(root_params)
+
+    return f"({' OR '.join(clauses)})", params
+

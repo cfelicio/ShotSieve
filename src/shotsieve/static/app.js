@@ -124,6 +124,8 @@ const {
   openBrowser,
   browseDirectory,
   chooseBrowserPath,
+  runPreflight,
+  renderLibraryRoots,
   handleError,
 } = workflowsModule.createWorkflows({
   state,
@@ -294,6 +296,12 @@ const installEvents = eventsModule.createEvents({
   selectNone,
   selectAllMatching,
   invalidateLoadedReviewSelection,
+  activateLibraryScope,
+  resetReviewToActiveLibrary,
+  setReviewScope,
+  runPreflight,
+  renderLibraryRoots,
+  loadAnalysisDiagnostics,
 });
 
 function scoreCard(label, value, hint = "") {
@@ -629,6 +637,45 @@ function syncReviewRoot(root) {
   return resolvedRoot;
 }
 
+function setReviewScope(root, { clearActiveSelection = true } = {}) {
+  const rootFilter = document.getElementById("root-filter");
+  if (!rootFilter) {
+    return;
+  }
+
+  const scopeRoot = String(root || "").trim();
+  if (scopeRoot && ![...rootFilter.options].some((option) => option.value === scopeRoot)) {
+    rootFilter.add(new Option(scopeRoot, scopeRoot, false, false));
+  }
+  rootFilter.value = scopeRoot;
+  if (rootFilter.value !== scopeRoot) {
+    rootFilter.value = "";
+  }
+
+  state.reviewScopeInitialized = true;
+  invalidateLoadedReviewSelection({ clearActiveSelection });
+  state.activeId = null;
+  state.detail = null;
+  state.page = 0;
+  renderReviewScope();
+}
+
+async function activateLibraryScope(root) {
+  const normalizedRoot = String(root || "").trim();
+  const libraryRootInput = document.getElementById("library-root-input");
+  if (libraryRootInput) {
+    libraryRootInput.value = normalizedRoot;
+  }
+  setReviewScope(normalizedRoot);
+  saveUiState();
+  await refreshOverview();
+  await loadQueue();
+}
+
+function resetReviewToActiveLibrary() {
+  setReviewScope(currentLibraryRoot());
+}
+
 function currentQuery() {
   const params = new URLSearchParams();
   const query = document.getElementById("query-filter").value.trim();
@@ -646,6 +693,28 @@ function currentQuery() {
   if (issues && issues !== "all") params.set("issues", issues);
   if (minScore) params.set("min_score", minScore);
   if (maxScore) params.set("max_score", maxScore);
+
+  // Phase 1B filters:
+  const formatFilters = [...document.querySelectorAll("input[name='format-filter']:checked")].map((i) => i.value);
+  if (formatFilters.length < 6) {
+    params.set("formats", formatFilters.length > 0 ? formatFilters.join(",") : "none");
+  }
+
+  const minMp = document.getElementById("filter-min-mp").value;
+  if (minMp) params.set("min_mp", minMp);
+
+  const maxMp = document.getElementById("filter-max-mp").value;
+  if (maxMp) params.set("max_mp", maxMp);
+
+  const minSize = document.getElementById("filter-min-size").value;
+  if (minSize) params.set("min_size", String(Math.round(parseFloat(minSize) * 1000000)));
+
+  const maxSize = document.getElementById("filter-max-size").value;
+  if (maxSize) params.set("max_size", String(Math.round(parseFloat(maxSize) * 1000000)));
+
+  const metadataStatus = document.getElementById("filter-metadata-status").value;
+  if (metadataStatus && metadataStatus !== "all") params.set("metadata", metadataStatus);
+
   params.set("limit", String(state.pageSize));
   params.set("offset", String(state.page * state.pageSize));
   return params;
@@ -658,24 +727,57 @@ function hasActiveReviewFilters() {
   const issues = document.getElementById("issues-filter")?.value || "all";
   const minScore = document.getElementById("min-score")?.value?.trim() || "";
   const maxScore = document.getElementById("max-score")?.value?.trim() || "";
-  return Boolean(query || root || minScore || maxScore || marked !== "all" || issues !== "all");
+
+  const formatFilters = [...document.querySelectorAll("input[name='format-filter']:checked")].map((i) => i.value);
+  const minMp = document.getElementById("filter-min-mp")?.value || "";
+  const maxMp = document.getElementById("filter-max-mp")?.value || "";
+  const minSize = document.getElementById("filter-min-size")?.value || "";
+  const maxSize = document.getElementById("filter-max-size")?.value || "";
+  const metadataStatus = document.getElementById("filter-metadata-status")?.value || "all";
+
+  return Boolean(
+    query || root || minScore || maxScore || marked !== "all" || issues !== "all"
+    || formatFilters.length < 6 || minMp || maxMp || minSize || maxSize || metadataStatus !== "all"
+  );
 }
 
 function renderSummary() {
-  const summary = state.overview?.summary || { total_files: 0, scored_files: 0, delete_marked: 0, export_marked: 0 };
-  document.getElementById("summary-strip").innerHTML = [
-    [`<span class="stat-value">${summary.scored_files}</span> scored`],
-    [`<span class="stat-value">${summary.delete_marked}</span> rejected`],
-    [`<span class="stat-value">${summary.export_marked}</span> selected`],
-    [`<span class="stat-value">${summary.total_files}</span> total`],
+  const emptyTotals = { total_files: 0, scored_files: 0, delete_marked: 0, export_marked: 0 };
+  const activeLibrary = state.overview?.active_library || state.overview?.summary || emptyTotals;
+  const catalog = state.overview?.catalog || state.overview?.summary || emptyTotals;
+  const totalsMarkup = (totals) => [
+    [`<span class="stat-value">${Number(totals.scored_files || 0).toLocaleString()}</span> scored`],
+    [`<span class="stat-value">${Number(totals.delete_marked || 0).toLocaleString()}</span> rejected`],
+    [`<span class="stat-value">${Number(totals.export_marked || 0).toLocaleString()}</span> selected`],
+    [`<span class="stat-value">${Number(totals.total_files || 0).toLocaleString()}</span> discovered`],
   ].map(([text]) => `<span class="stat-item">${text}</span>`).join("");
+
+  document.getElementById("summary-strip").innerHTML = [
+    `<span class="summary-scope summary-scope-active"><strong>This library</strong>${totalsMarkup(activeLibrary)}</span>`,
+    `<span class="summary-scope summary-scope-catalog"><strong>All cached libraries</strong>${totalsMarkup(catalog)}</span>`,
+  ].join("");
+}
+
+function renderReviewScope() {
+  const scopeContext = document.getElementById("review-scope-context");
+  const root = document.getElementById("root-filter")?.value || "";
+  if (!scopeContext) {
+    return;
+  }
+  if (root) {
+    scopeContext.textContent = `Reviewing this library: ${root}`;
+    scopeContext.dataset.scope = "library";
+    return;
+  }
+  scopeContext.textContent = "All libraries — global catalog view";
+  scopeContext.dataset.scope = "global";
 }
 
 function populateRootFilters() {
   const roots = state.overview?.roots || [];
   const rootFilter = document.getElementById("root-filter");
   const previous = rootFilter.value;
-  rootFilter.innerHTML = [`<option value="">All scanned roots</option>`]
+  rootFilter.innerHTML = [`<option value="">All libraries (global)</option>`]
     .concat(roots.map((root) => `<option value="${escapeHtml(root)}">${escapeHtml(root)}</option>`))
     .join("");
   if (previous && roots.includes(previous)) {
@@ -686,6 +788,10 @@ function populateRootFilters() {
     rootFilter.add(new Option(previous, previous, false, true));
     rootFilter.value = previous;
   }
+  if (!state.reviewScopeInitialized && currentLibraryRoot()) {
+    setReviewScope(currentLibraryRoot(), { clearActiveSelection: false });
+  }
+  renderReviewScope();
 }
 
 function renderOptions() {
@@ -718,6 +824,7 @@ function renderOptions() {
 
   document.getElementById("extensions-input").value = persisted.extensions || options.default_extensions.join(",");
   document.getElementById("recursive-toggle").checked = persisted.recursive ?? true;
+  document.getElementById("ignore-rules-input").value = persisted.ignoreRules || "";
   if (!currentLibraryRoot() && persisted.libraryRoot) {
     document.getElementById("library-root-input").value = persisted.libraryRoot;
   }
@@ -732,6 +839,17 @@ function renderOptions() {
     document.getElementById("min-score").value = "";
   }
   document.getElementById("issues-filter").value = persisted.issues || "all";
+
+  // Phase 1B filter population:
+  const savedFormats = persisted.formats || ["jpeg", "png", "tiff", "heif", "raw", "other"];
+  document.querySelectorAll("input[name='format-filter']").forEach((input) => {
+    input.checked = savedFormats.includes(input.value);
+  });
+  document.getElementById("filter-min-mp").value = persisted.minMp || "";
+  document.getElementById("filter-max-mp").value = persisted.maxMp || "";
+  document.getElementById("filter-min-size").value = persisted.minSize || "";
+  document.getElementById("filter-max-size").value = persisted.maxSize || "";
+  document.getElementById("filter-metadata-status").value = persisted.metadataStatus || "all";
 
   modelSelect.onchange = () => {
     const val = modelSelect.value;
@@ -824,6 +942,9 @@ function renderOptions() {
       <div class="system-info-value" title="${escapeHtml(value)}">${escapeHtml(value)}</div>
     </div>
   `).join("");
+
+  renderLibraryRoots();
+  runPreflight().catch(handleError);
 }
 
 function updateResourceProfileDetail(hw) {
@@ -876,9 +997,46 @@ function renderDetail() {
 }
 
 async function refreshOverview() {
-  state.overview = await fetchJson("/api/overview");
+  const root = currentLibraryRoot();
+  const query = root ? `?root=${encodeURIComponent(root)}` : "";
+  state.overview = await fetchJson(`/api/overview${query}`);
   renderSummary();
   populateRootFilters();
+}
+
+async function loadAnalysisDiagnostics() {
+  const root = currentLibraryRoot();
+  const query = new URLSearchParams({ limit: "100" });
+  if (root) {
+    query.set("root", root);
+  }
+  const payload = await fetchJson(`/api/analysis-diagnostics?${query.toString()}`);
+  const total = Number(payload.total || 0);
+  const items = Array.isArray(payload.items) ? payload.items : [];
+  const summary = document.getElementById("analysis-diagnostics-summary");
+  const list = document.getElementById("analysis-diagnostics-list");
+  if (!summary || !list) {
+    return;
+  }
+
+  if (!total) {
+    summary.textContent = "All discovered photos in the current library have a quality score.";
+    list.innerHTML = "";
+    return;
+  }
+
+  const scope = root ? "this library" : "all cached libraries";
+  summary.textContent = `${total.toLocaleString()} photo${total === 1 ? "" : "s"} in ${scope} ${total === 1 ? "needs" : "need"} attention.`;
+  list.innerHTML = items.map((item) => {
+    const status = String(item.status || "pending");
+    return `
+      <article class="analysis-diagnostic-item" data-status="${escapeHtml(status)}">
+        <span class="analysis-diagnostic-status">${escapeHtml(status)}</span>
+        <strong class="analysis-diagnostic-path">${escapeHtml(String(item.path || "Unknown file"))}</strong>
+        <span class="analysis-diagnostic-error">${escapeHtml(String(item.error || "No diagnostic detail is available."))}</span>
+      </article>
+    `;
+  }).join("");
 }
 
 async function loadOptions() {
@@ -963,24 +1121,28 @@ function renderPagination() {
   const hasResults = state.totalFiles > 0;
   const start = hasResults ? state.page * state.pageSize + 1 : 0;
   const end = hasResults ? Math.min(start + state.queue.length - 1, state.totalFiles) : 0;
-  const summary = state.overview?.summary || {};
-  const totalScoredInLibrary = Number(summary.scored_files || 0);
+  const activeLibrary = state.overview?.active_library || state.overview?.summary || {};
+  const catalog = state.overview?.catalog || state.overview?.summary || {};
+  const reviewRoot = document.getElementById("root-filter")?.value || "";
+  const scopeSummary = reviewRoot ? activeLibrary : catalog;
+  const scopeLabel = reviewRoot ? "this library" : "All cached libraries";
+  const totalScoredInScope = Number(scopeSummary.scored_files || 0);
   const filtered = hasActiveReviewFilters();
   let label;
   if (hasResults) {
     if (filtered) {
       label = `Showing ${start}–${end} of ${state.totalFiles.toLocaleString()} matching photos`;
-      if (totalScoredInLibrary > 0) {
-        label += ` (${totalScoredInLibrary.toLocaleString()} scored in library)`;
+      if (totalScoredInScope > 0) {
+        label += ` (${totalScoredInScope.toLocaleString()} scored in ${scopeLabel})`;
       }
-    } else if (totalScoredInLibrary > 0) {
-      label = `Showing ${start}–${end} of ${totalScoredInLibrary.toLocaleString()} scored photos`;
+    } else if (totalScoredInScope > 0) {
+      label = `Showing ${start}–${end} of ${totalScoredInScope.toLocaleString()} scored photos in ${scopeLabel}`;
     } else {
       label = `Showing ${start}–${end} of ${state.totalFiles.toLocaleString()} photos`;
     }
   } else {
     label = filtered
-      ? `No photos match current filters${totalScoredInLibrary > 0 ? ` (${totalScoredInLibrary.toLocaleString()} scored in library)` : ""}`
+      ? `No photos match current filters${totalScoredInScope > 0 ? ` (${totalScoredInScope.toLocaleString()} scored in ${scopeLabel})` : ""}`
       : "No scored photos yet";
   }
   document.getElementById("page-info").textContent = label;
@@ -994,11 +1156,11 @@ function renderPagination() {
   }
 
   // Show/hide rejected actions bar
-  const rejectedCount = summary.delete_marked || 0;
+  const rejectedCount = Number(activeLibrary.delete_marked || 0);
   const rejectedBar = document.getElementById("rejected-actions");
-  if (rejectedCount > 0) {
+  if (reviewRoot && rejectedCount > 0) {
     rejectedBar.classList.remove("hidden");
-    document.getElementById("rejected-label").textContent = `${rejectedCount} photo${rejectedCount !== 1 ? "s" : ""} rejected`;
+    document.getElementById("rejected-label").textContent = `${rejectedCount} photo${rejectedCount !== 1 ? "s" : ""} rejected in this library`;
   } else {
     rejectedBar.classList.add("hidden");
   }
@@ -1021,24 +1183,13 @@ async function selectFile(fileId) {
 }
 
 async function refreshWorkspace() {
-  let optionsError = null;
-
-  const [, optionsResult] = await Promise.allSettled([
-    refreshOverview(),
-    loadOptions(),
-  ]);
-
-  if (optionsResult.status === "rejected") {
-    optionsError = optionsResult.reason;
-  }
+  await loadOptions();
+  await refreshOverview();
+  await loadAnalysisDiagnostics();
 
   renderSummary();
   renderComparisonSummary();
   await loadQueue();
-
-  if (optionsError) {
-    throw optionsError;
-  }
 }
 
 async function boot() {

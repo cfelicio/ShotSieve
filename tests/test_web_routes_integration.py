@@ -7,7 +7,7 @@ import time
 from types import SimpleNamespace
 from http import HTTPStatus
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import quote, urlparse
 from urllib.request import Request, urlopen
 from urllib.error import HTTPError
 
@@ -90,6 +90,106 @@ class TestRouteHandlingIntegration:
         payload = json.loads(urlopen(f"{base_url}/api/overview").read().decode("utf-8"))
 
         assert payload == {"patched": True}
+
+    def test_analysis_diagnostics_route_returns_unscored_files_in_requested_root(self, test_server):
+        base_url, db_path, tmp_path = test_server
+        root_a = tmp_path / "library-a"
+        root_b = tmp_path / "library-b"
+        root_a.mkdir()
+        root_b.mkdir()
+        file_a = root_a / "attention.jpg"
+        file_b = root_b / "other-library.jpg"
+        create_image(file_a)
+        create_image(file_b)
+
+        with database(db_path) as connection:
+            scan_root(connection, root=root_a, recursive=True, extensions=(".jpg",), preview_dir=tmp_path / "previews")
+            scan_root(connection, root=root_b, recursive=True, extensions=(".jpg",), preview_dir=tmp_path / "previews")
+            connection.execute(
+                """
+                UPDATE files
+                SET analysis_status = 'failed', analysis_error = 'test model failure'
+                WHERE path = ?
+                """,
+                (str(file_a),),
+            )
+
+        root_query = quote(str(root_a.resolve()), safe="")
+        payload = json.loads(
+            urlopen(f"{base_url}/api/analysis-diagnostics?root={root_query}&limit=10").read().decode("utf-8")
+        )
+
+        assert payload["total"] == 1
+        assert payload["items"] == [{
+            "path": str(file_a),
+            "format": "jpg",
+            "status": "failed",
+            "error": "test model failure",
+            "last_analysis_time": None,
+        }]
+
+    def test_scoped_overview_review_and_rejected_delete_leave_other_library_untouched(self, test_server):
+        base_url, db_path, tmp_path = test_server
+        root_a = tmp_path / "library-a"
+        root_b = tmp_path / "library-b"
+        root_a.mkdir()
+        root_b.mkdir()
+        source_a = root_a / "a.jpg"
+        source_b = root_b / "b.jpg"
+        create_image(source_a)
+        create_image(source_b)
+
+        with database(db_path) as connection:
+            scan_root(connection, root=root_a, recursive=True, extensions=(".jpg",), preview_dir=tmp_path / "previews")
+            scan_root(connection, root=root_b, recursive=True, extensions=(".jpg",), preview_dir=tmp_path / "previews")
+            a_id = int(connection.execute("SELECT id FROM files WHERE path LIKE ?", ("%a.jpg",)).fetchone()["id"])
+            b_id = int(connection.execute("SELECT id FROM files WHERE path LIKE ?", ("%b.jpg",)).fetchone()["id"])
+            for file_id in (a_id, b_id):
+                connection.execute(
+                    """
+                    INSERT INTO review_state(file_id, decision_state, delete_marked, export_marked, updated_time)
+                    VALUES (?, 'delete', 1, 0, '2026-07-20T00:00:00+00:00')
+                    """,
+                    (file_id,),
+                )
+
+        root_b_text = str(root_b.resolve())
+        root_b_query = quote(root_b_text, safe="")
+        overview = json.loads(
+            urlopen(f"{base_url}/api/overview?root={root_b_query}").read().decode("utf-8")
+        )
+        reviewed = json.loads(
+            urlopen(f"{base_url}/api/review/file-ids?marked=delete&root={root_b_query}").read().decode("utf-8")
+        )
+
+        assert overview["active_library"] == {
+            "root": root_b_text,
+            "total_files": 1,
+            "scored_files": 0,
+            "delete_marked": 1,
+            "export_marked": 0,
+        }
+        assert overview["catalog"]["total_files"] == 2
+        assert reviewed["ids"] == [b_id]
+
+        delete_request = Request(
+            f"{base_url}/api/files/delete",
+            data=json.dumps({
+                "selection": {"scope": "review-state", "marked": "delete", "root": root_b_text},
+                "selection_revision": reviewed["selection_revision"],
+                "delete_from_disk": True,
+            }).encode("utf-8"),
+            headers={"Content-Type": "application/json", "Origin": base_url},
+            method="POST",
+        )
+        deleted = json.loads(urlopen(delete_request).read().decode("utf-8"))
+
+        assert deleted["deleted_ids"] == [b_id]
+        assert not source_b.exists()
+        assert source_a.exists()
+        with database(db_path) as connection:
+            remaining = [int(row["id"]) for row in connection.execute("SELECT id FROM files ORDER BY id").fetchall()]
+        assert remaining == [a_id]
 
     def test_options_preview_dir_defaults_to_data_previews_next_to_db(self, test_server):
         base_url, db_path, _ = test_server

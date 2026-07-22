@@ -3,13 +3,14 @@ from __future__ import annotations
 import json
 import sqlite3
 import socket
+import time
 from dataclasses import dataclass
 from http import HTTPStatus
 from pathlib import Path
 from typing import Any, Callable, TypedDict, cast
 from urllib.parse import parse_qs, urlparse
 
-from shotsieve.config import normalize_raw_preview_mode
+from shotsieve.config import normalize_raw_preview_mode, parse_extensions
 from shotsieve.job_registry import JobRegistry
 from shotsieve.scoring import AnalysisProgress
 from shotsieve.web_media import MediaDependencies, resolve_media_request, serve_media_response
@@ -75,7 +76,9 @@ class WebRouteDependencies:
     required_choice: Callable[..., str]
     required_int: Callable[..., int]
     required_int_list: Callable[..., list[int]]
+    required_string_list: Callable[..., list[str]]
     required_path: Callable[..., Path]
+    required_path_list: Callable[..., list[Path]]
     read_json_body: Callable[..., dict[str, object]]
     parse_scan_request: Callable[[dict[str, object]], ScanRequest]
     parse_compare_request: Callable[..., CompareRequest]
@@ -89,6 +92,7 @@ class WebRouteDependencies:
     review_selection_revision: Callable[..., str]
     list_review_browser_file_ids: Callable[..., list[int]]
     list_review_state_file_ids: Callable[..., list[int]]
+    list_analysis_diagnostics: Callable[..., dict[str, object]]
     get_review_file_detail: Callable[[Any, int], object | None]
     update_review_state: Callable[..., None]
     update_review_state_batch: Callable[..., int]
@@ -126,6 +130,7 @@ class WebRouteContext:
     media_mime_fallbacks: dict[str, str]
     dependencies: object
     operation_registry: JobRegistry | None = None
+    preflight_registry: JobRegistry | None = None
 
 
 def _require_registry(registry: JobRegistry | None, *, label: str) -> JobRegistry:
@@ -229,14 +234,29 @@ def _handle_static_get_routes(handler: Any, context: WebRouteContext, parsed: An
 def _handle_overview_get_routes(handler: Any, context: WebRouteContext, parsed: Any) -> bool:
     deps = cast(WebRouteDependencies, context.dependencies)
     if parsed.path == "/api/overview":
+        params = parse_qs(parsed.query)
+        root = deps.first_value(params, "root", None)
         with deps.database(context.db_path) as connection:
-            send_json(handler, deps.review_overview(connection))
+            if root:
+                send_json(handler, deps.review_overview(connection, root=root))
+            else:
+                send_json(handler, deps.review_overview(connection))
         return True
 
     if parsed.path == "/api/options":
         params = parse_qs(parsed.query)
         profile = deps.first_value(params, "resource_profile", None) or None
         send_json(handler, deps.build_options_payload(context.db_path, resource_profile=profile))
+        return True
+
+    if parsed.path == "/api/analysis-diagnostics":
+        params = parse_qs(parsed.query)
+        with deps.database(context.db_path) as connection:
+            send_json(handler, deps.list_analysis_diagnostics(
+                connection,
+                root=deps.first_value(params, "root", None),
+                limit=deps.int_or_default(deps.first_value(params, "limit", "100"), default=100, minimum=1, maximum=500),
+            ))
         return True
 
     return False
@@ -248,6 +268,7 @@ def _handle_job_get_routes(handler: Any, context: WebRouteContext, parsed: Any) 
         "/api/operations/status": (context.operation_registry, "Operation"),
         "/api/score/status": (context.score_registry, "Score"),
         "/api/scan/status": (context.scan_registry, "Scan"),
+        "/api/library/preflight/status": (context.preflight_registry, "Preflight"),
     }
     status_route = status_routes.get(parsed.path)
     if status_route is not None:
@@ -260,6 +281,7 @@ def _handle_job_get_routes(handler: Any, context: WebRouteContext, parsed: Any) 
         "/api/operations/result": (context.operation_registry, "Operation"),
         "/api/score/result": (context.score_registry, "Score"),
         "/api/scan/result": (context.scan_registry, "Scan"),
+        "/api/library/preflight/result": (context.preflight_registry, "Preflight"),
     }
     result_route = result_routes.get(parsed.path)
     if result_route is None:
@@ -289,6 +311,18 @@ def _handle_review_get_routes(handler: Any, context: WebRouteContext, parsed: An
     deps = cast(WebRouteDependencies, context.dependencies)
     if parsed.path == "/api/files":
         params = parse_qs(parsed.query)
+        formats_raw = deps.first_value(params, "formats", None)
+        formats = [f.strip() for f in formats_raw.split(",") if f.strip()] if formats_raw else None
+        min_mp = deps.float_or_none(deps.first_value(params, "min_mp", None))
+        max_mp = deps.float_or_none(deps.first_value(params, "max_mp", None))
+        min_width = deps.optional_int(deps.first_value(params, "min_width", None))
+        max_width = deps.optional_int(deps.first_value(params, "max_width", None))
+        min_height = deps.optional_int(deps.first_value(params, "min_height", None))
+        max_height = deps.optional_int(deps.first_value(params, "max_height", None))
+        min_size = deps.optional_int(deps.first_value(params, "min_size", None))
+        max_size = deps.optional_int(deps.first_value(params, "max_size", None))
+        metadata = deps.first_value(params, "metadata", "all")
+
         with deps.database(context.db_path) as connection:
             snapshot_active = _begin_consistent_snapshot(connection)
             try:
@@ -301,6 +335,16 @@ def _handle_review_get_routes(handler: Any, context: WebRouteContext, parsed: An
                     query=deps.first_value(params, "query", None),
                     min_score=deps.float_or_none(deps.first_value(params, "min_score", None)),
                     max_score=deps.float_or_none(deps.first_value(params, "max_score", None)),
+                    formats=formats,
+                    min_mp=min_mp,
+                    max_mp=max_mp,
+                    min_width=min_width,
+                    max_width=max_width,
+                    min_height=min_height,
+                    max_height=max_height,
+                    min_size=min_size,
+                    max_size=max_size,
+                    metadata=metadata,
                     limit=deps.int_or_default(deps.first_value(params, "limit", "60"), default=60, minimum=1, maximum=500),
                     offset=deps.int_or_default(deps.first_value(params, "offset", "0"), default=0, minimum=0),
                 )
@@ -312,6 +356,16 @@ def _handle_review_get_routes(handler: Any, context: WebRouteContext, parsed: An
                     query=deps.first_value(params, "query", None),
                     min_score=deps.float_or_none(deps.first_value(params, "min_score", None)),
                     max_score=deps.float_or_none(deps.first_value(params, "max_score", None)),
+                    formats=formats,
+                    min_mp=min_mp,
+                    max_mp=max_mp,
+                    min_width=min_width,
+                    max_width=max_width,
+                    min_height=min_height,
+                    max_height=max_height,
+                    min_size=min_size,
+                    max_size=max_size,
+                    metadata=metadata,
                 )
                 selection_revision = deps.review_selection_revision(
                     connection,
@@ -322,6 +376,16 @@ def _handle_review_get_routes(handler: Any, context: WebRouteContext, parsed: An
                     query=deps.first_value(params, "query", None),
                     min_score=deps.float_or_none(deps.first_value(params, "min_score", None)),
                     max_score=deps.float_or_none(deps.first_value(params, "max_score", None)),
+                    formats=formats,
+                    min_mp=min_mp,
+                    max_mp=max_mp,
+                    min_width=min_width,
+                    max_width=max_width,
+                    min_height=min_height,
+                    max_height=max_height,
+                    min_size=min_size,
+                    max_size=max_size,
+                    metadata=metadata,
                 )
             except Exception:
                 _finish_consistent_snapshot(connection, active=snapshot_active, success=False)
@@ -333,6 +397,18 @@ def _handle_review_get_routes(handler: Any, context: WebRouteContext, parsed: An
 
     if parsed.path == "/api/files/count":
         params = parse_qs(parsed.query)
+        formats_raw = deps.first_value(params, "formats", None)
+        formats = [f.strip() for f in formats_raw.split(",") if f.strip()] if formats_raw else None
+        min_mp = deps.float_or_none(deps.first_value(params, "min_mp", None))
+        max_mp = deps.float_or_none(deps.first_value(params, "max_mp", None))
+        min_width = deps.optional_int(deps.first_value(params, "min_width", None))
+        max_width = deps.optional_int(deps.first_value(params, "max_width", None))
+        min_height = deps.optional_int(deps.first_value(params, "min_height", None))
+        max_height = deps.optional_int(deps.first_value(params, "max_height", None))
+        min_size = deps.optional_int(deps.first_value(params, "min_size", None))
+        max_size = deps.optional_int(deps.first_value(params, "max_size", None))
+        metadata = deps.first_value(params, "metadata", "all")
+
         with deps.database(context.db_path) as connection:
             snapshot_active = _begin_consistent_snapshot(connection)
             try:
@@ -344,6 +420,16 @@ def _handle_review_get_routes(handler: Any, context: WebRouteContext, parsed: An
                     query=deps.first_value(params, "query", None),
                     min_score=deps.float_or_none(deps.first_value(params, "min_score", None)),
                     max_score=deps.float_or_none(deps.first_value(params, "max_score", None)),
+                    formats=formats,
+                    min_mp=min_mp,
+                    max_mp=max_mp,
+                    min_width=min_width,
+                    max_width=max_width,
+                    min_height=min_height,
+                    max_height=max_height,
+                    min_size=min_size,
+                    max_size=max_size,
+                    metadata=metadata,
                 )
                 selection_revision = deps.review_selection_revision(
                     connection,
@@ -354,6 +440,16 @@ def _handle_review_get_routes(handler: Any, context: WebRouteContext, parsed: An
                     query=deps.first_value(params, "query", None),
                     min_score=deps.float_or_none(deps.first_value(params, "min_score", None)),
                     max_score=deps.float_or_none(deps.first_value(params, "max_score", None)),
+                    formats=formats,
+                    min_mp=min_mp,
+                    max_mp=max_mp,
+                    min_width=min_width,
+                    max_width=max_width,
+                    min_height=min_height,
+                    max_height=max_height,
+                    min_size=min_size,
+                    max_size=max_size,
+                    metadata=metadata,
                 )
             except Exception:
                 _finish_consistent_snapshot(connection, active=snapshot_active, success=False)
@@ -457,6 +553,31 @@ def _optional_payload_float(deps: WebRouteDependencies, value: object, *, name: 
     raise ValueError(f"{name} must be numeric")
 
 
+def _optional_payload_int(deps: WebRouteDependencies, value: object, *, name: str) -> int | None:
+    if value is None or value == "":
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(value)
+    if isinstance(value, str):
+        try:
+            return int(value)
+        except ValueError:
+            return None
+    raise ValueError(f"{name} must be an integer")
+
+
+def _optional_payload_string_list(deps: WebRouteDependencies, value: object, *, name: str) -> list[str] | None:
+    if value is None or value == "":
+        return None
+    if isinstance(value, list):
+        return [str(item) for item in value]
+    if isinstance(value, str):
+        return [item.strip() for item in value.split(",") if item.strip()]
+    raise ValueError(f"{name} must be a list of strings")
+
+
 def _begin_consistent_snapshot(connection: Any) -> bool:
     execute = getattr(connection, "execute", None)
     if not callable(execute):
@@ -509,6 +630,20 @@ def _parse_selection_payload(deps: WebRouteDependencies, payload: dict[str, obje
         )
         selection["min_score"] = _optional_payload_float(deps, raw_selection.get("min_score"), name="selection.min_score")
         selection["max_score"] = _optional_payload_float(deps, raw_selection.get("max_score"), name="selection.max_score")
+        selection["formats"] = _optional_payload_string_list(deps, raw_selection.get("formats"), name="selection.formats")
+        selection["min_mp"] = _optional_payload_float(deps, raw_selection.get("min_mp"), name="selection.min_mp")
+        selection["max_mp"] = _optional_payload_float(deps, raw_selection.get("max_mp"), name="selection.max_mp")
+        selection["min_width"] = _optional_payload_int(deps, raw_selection.get("min_width"), name="selection.min_width")
+        selection["max_width"] = _optional_payload_int(deps, raw_selection.get("max_width"), name="selection.max_width")
+        selection["min_height"] = _optional_payload_int(deps, raw_selection.get("min_height"), name="selection.min_height")
+        selection["max_height"] = _optional_payload_int(deps, raw_selection.get("max_height"), name="selection.max_height")
+        selection["min_size"] = _optional_payload_int(deps, raw_selection.get("min_size"), name="selection.min_size")
+        selection["max_size"] = _optional_payload_int(deps, raw_selection.get("max_size"), name="selection.max_size")
+        selection["metadata"] = deps.required_choice(
+            raw_selection.get("metadata") or "all",
+            name="selection.metadata",
+            choices=("all", "valid", "unknown"),
+        )
 
     raw_exclude_ids = payload.get("exclude_file_ids")
     if raw_exclude_ids is None or raw_exclude_ids == []:
@@ -531,6 +666,16 @@ def _validate_selection_revision(connection: Any, deps: WebRouteDependencies, se
         query=selection.get("query"),
         min_score=selection.get("min_score"),
         max_score=selection.get("max_score"),
+        formats=selection.get("formats"),
+        min_mp=selection.get("min_mp"),
+        max_mp=selection.get("max_mp"),
+        min_width=selection.get("min_width"),
+        max_width=selection.get("max_width"),
+        min_height=selection.get("min_height"),
+        max_height=selection.get("max_height"),
+        min_size=selection.get("min_size"),
+        max_size=selection.get("max_size"),
+        metadata=selection.get("metadata", "all"),
     )
     if selection_revision != current_revision:
         raise ValueError("Selected results changed. Refresh the queue and select again.")
@@ -601,6 +746,16 @@ def _iter_selection_file_id_batches(connection: Any, deps: WebRouteDependencies,
                 query=selection.get("query"),
                 min_score=selection.get("min_score"),
                 max_score=selection.get("max_score"),
+                formats=selection.get("formats"),
+                min_mp=selection.get("min_mp"),
+                max_mp=selection.get("max_mp"),
+                min_width=selection.get("min_width"),
+                max_width=selection.get("max_width"),
+                min_height=selection.get("min_height"),
+                max_height=selection.get("max_height"),
+                min_size=selection.get("min_size"),
+                max_size=selection.get("max_size"),
+                metadata=selection.get("metadata", "all"),
                 limit=_SELECTION_BATCH_SIZE,
                 after_id=after_id,
             )
@@ -699,6 +854,11 @@ def _handle_analysis_post_routes(handler: Any, context: WebRouteContext, parsed:
         start_compare_job(handler, context, payload)
         return True
 
+    if parsed.path == "/api/library/preflight/start":
+        payload = deps.read_json_body(handler, max_body_size=context.max_request_body_size)
+        start_preflight_job(handler, context, payload)
+        return True
+
     if parsed.path in {"/api/score-estimate", "/api/compare-estimate"}:
         _send_rows_total_estimate(handler, context)
         return True
@@ -712,6 +872,7 @@ def _handle_job_cancel_post_routes(handler: Any, context: WebRouteContext, parse
         "/api/operations/cancel": context.operation_registry,
         "/api/score/cancel": context.score_registry,
         "/api/scan/cancel": context.scan_registry,
+        "/api/library/preflight/cancel": context.preflight_registry,
     }
     registry = cancel_routes.get(parsed.path)
     if registry is None:
@@ -1130,6 +1291,14 @@ def start_scan_job(handler: Any, context: WebRouteContext, payload: dict[str, ob
     deps = cast(WebRouteDependencies, context.dependencies)
     scan_registry = _require_registry(context.scan_registry, label="Scan")
     scan_request = deps.parse_scan_request(payload)
+    
+    from shotsieve.scanner import check_overlapping_roots
+    overlaps = check_overlapping_roots(scan_request["roots"])
+    if overlaps:
+        parent, child = overlaps[0]
+        handler.send_error(HTTPStatus.BAD_REQUEST, f"Overlapping folders detected: '{child}' is a subfolder of '{parent}'. Please remove the subfolder.")
+        return
+
     if not try_acquire_operation_lock(handler, context):
         return
 
@@ -1203,6 +1372,7 @@ def start_scan_job(handler: Any, context: WebRouteContext, payload: dict[str, ob
                             progress_callback=publish_progress,
                             files_total_hint=root_total_hint,
                             cancel_check=lambda: _raise_if_scan_cancelled(scan_registry, job_id),
+                            ignore_rules=scan_request["ignore_rules"],
                         )
                         aggregated["files_seen"] += summary.files_seen
                         aggregated["files_added"] += summary.files_added
@@ -1519,3 +1689,121 @@ def send_json_error(handler: Any, status: HTTPStatus, message: str) -> None:
         if _is_ignorable_client_disconnect(exc):
             return
         raise
+
+
+def start_preflight_job(handler: Any, context: WebRouteContext, payload: dict[str, object]) -> None:
+    deps = cast(WebRouteDependencies, context.dependencies)
+    preflight_registry = _require_registry(context.preflight_registry, label="Preflight")
+
+    try:
+        raw_roots = payload.get("roots")
+        roots = deps.required_path_list(raw_roots, name="roots")
+        ignore_rules = deps.required_string_list(payload.get("ignore_rules"), name="ignore_rules")
+        recursive = deps.coerce_bool(payload.get("recursive"), default=True)
+        extensions = parse_extensions(deps.optional_string(payload.get("extensions")))
+    except Exception as exc:
+        handler.send_error(HTTPStatus.BAD_REQUEST, str(exc))
+        return
+
+    # Deduplicate resolved roots
+    resolved_roots = []
+    seen = set()
+    for root in roots:
+        res = root.expanduser().resolve()
+        if res not in seen:
+            seen.add(res)
+            resolved_roots.append(root)
+
+    # Validate overlapping roots
+    from shotsieve.scanner import check_overlapping_roots
+    overlaps = check_overlapping_roots(resolved_roots)
+    if overlaps:
+        parent, child = overlaps[0]
+        handler.send_error(
+            HTTPStatus.BAD_REQUEST,
+            f"Overlapping folders detected: '{child}' is a subfolder of '{parent}'. Please remove the subfolder."
+        )
+        return
+
+    job_id = preflight_registry.create(initial_progress={
+        "phase": "preflight",
+        "files_processed": 0,
+        "files_total": 0,
+    })
+
+    def run_preflight_job() -> None:
+        try:
+            from shotsieve.scanner import preflight_root
+            # Get preview cache root to exclude it from preflight traversal
+            with deps.database(context.db_path) as connection:
+                preview_dir = deps.get_preview_cache_root(connection, db_path=context.db_path, persist=False)
+                existing_preview_roots = []
+                stored_preview_root = deps.get_preview_cache_root(connection, db_path=context.db_path, persist=False)
+                if stored_preview_root:
+                    existing_preview_roots.append(stored_preview_root)
+                from shotsieve.db import infer_preview_cache_roots
+                existing_preview_roots.extend(infer_preview_cache_roots(connection))
+                excluded_preview_dirs = list(dict.fromkeys(existing_preview_roots))
+
+            def cancel_check() -> None:
+                if preflight_registry.is_cancelled(job_id):
+                    raise InterruptedError("Preflight job was cancelled by user.")
+
+            def publish_progress(count: int) -> None:
+                preflight_registry.update_progress(job_id, {
+                    "phase": "preflight",
+                    "files_processed": count,
+                    "files_total": 0,
+                })
+
+            sources = []
+            combined_assets = 0
+            combined_bytes = 0
+            combined_ignored_dirs = 0
+            combined_ignored_files = 0
+            combined_unreadable_dirs = 0
+            combined_unreadable_files = 0
+            representative_error = None
+            start_time = time.monotonic()
+
+            for root in resolved_roots:
+                cancel_check()
+                res = preflight_root(
+                    root,
+                    recursive=recursive,
+                    extensions=extensions,
+                    excluded_dirs=excluded_preview_dirs,
+                    ignore_rules=ignore_rules,
+                    cancel_check=cancel_check,
+                    progress_callback=publish_progress,
+                )
+                sources.append(res)
+                combined_assets += res["candidate_assets"]
+                combined_bytes += res["source_bytes"]
+                combined_ignored_dirs += res["ignored_directories"]
+                combined_ignored_files += res["ignored_files_count"]
+                combined_unreadable_dirs += res["unreadable_directories"]
+                combined_unreadable_files += res["unreadable_files"]
+                if res.get("error_text"):
+                    representative_error = res["error_text"]
+
+            duration_ms = int((time.monotonic() - start_time) * 1000)
+            summary = {
+                "sources": sources,
+                "candidate_assets": combined_assets,
+                "source_bytes": combined_bytes,
+                "ignored_directories": combined_ignored_dirs,
+                "ignored_files_count": combined_ignored_files,
+                "unreadable_directories": combined_unreadable_dirs,
+                "unreadable_files": combined_unreadable_files,
+                "error_text": representative_error,
+                "exact": True,
+                "duration_ms": duration_ms
+            }
+            preflight_registry.complete(job_id, summary=summary)
+        except Exception as exc:
+            preflight_registry.fail(job_id, error=str(exc))
+
+    deps.thread_factory(target=run_preflight_job, daemon=True).start()
+    send_json(handler, {"job_id": job_id, "status": "running"})
+

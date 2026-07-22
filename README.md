@@ -119,10 +119,22 @@ Runtime compatibility note: `qalign` is **not** available on `cpu` or `directml`
 
 The review server binds to `127.0.0.1:8765` by default. The UI is organized around four tabs:
 
-1. `Library` for root selection, scan/score actions, and analysis options
-2. `Compare` for side-by-side learned-model benchmarking
-3. `Review` for queue navigation, filtering, marking, and export/delete flows
-4. `Settings` for runtime info, resource profile, and maintenance actions
+1. `Library` for managing multiple workspace source folders, setting directory ignore rules, running preflight validation audits, and launching scan/score actions.
+2. `Compare` for side-by-side learned-model benchmarking.
+3. `Review` for queue navigation, filtering (by score, format, megapixels, size, and completeness), sorting, marking, and export/delete flows.
+4. `Settings` for runtime info, resource profile, and maintenance actions.
+
+ShotSieve keeps one shared local catalog so previously generated previews and scores can be reused when you return to a folder. The selected `Library` folder(s) define the active scope for Review by default: its discovered, scored, rejected, and selected totals are shown separately from the explicitly labelled **All cached libraries** totals. Review also names the active scope above its filters.
+
+### Metadata-Led Culling & Filtering
+The Review interface supports advanced resolution and format culling tools to isolate target files:
+- **Format Groups**: Filter by JPEG, PNG, TIFF, HEIF, RAW, or other extensions.
+- **Resolution & Size**: Set Megapixel (MP) ranges, exact width/height constraints, or source file size (MB) ranges.
+- **Completeness**: Isolate files with missing/unreadable metadata to investigate scan issues.
+- **Sorting**: Sort by Resolution, File Size, Format Name, Width, or Height.
+- **Metadata Tag Strip**: The selected photo detail panel displays a chip strip showing the file's format, pixel dimensions, megapixels, aspect ratio, and formatted byte size.
+
+Choose **All libraries (global)** from the Review scope selector only when you intentionally want to browse the full catalog. The standard rejected-file action is always **Delete rejected in this library** and its confirmation names the active library paths; it does not delete rejected files from other cached libraries.
 
 Current keyboard shortcuts in review mode:
 
@@ -147,6 +159,8 @@ That guide covers:
 - Playwright setup
 - Windows runtime-pack build instructions
 
+For contributors investigating large-catalog responsiveness, [docs/performance-measurement.md](docs/performance-measurement.md) describes the opt-in catalog benchmark and safe local real-photo measurements.
+
 The browser-focused frontend checks are intentionally about **visual QA** and visual usability for the photo-review workflow, not broad accessibility conformance claims.
 
 ## Security and licensing
@@ -161,3 +175,4 @@ ShotSieve uses AI models and libraries that carry **non-commercial or stricter r
 - [README.md](README.md): user-facing overview, quick start, and package selection guide
 - [CHANGELOG.md](CHANGELOG.md): release history, starting with the initial `0.1.0` release
 - [docs/building.md](docs/building.md): source install, testing, linting, and release-build instructions
+- [docs/performance-measurement.md](docs/performance-measurement.md): opt-in catalog, scan, preview, and learned-IQA performance measurement guide

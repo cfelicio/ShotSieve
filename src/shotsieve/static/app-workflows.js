@@ -825,11 +825,14 @@
       return state.loadedReviewSelection?.selectionRevision || null;
     }
 
-    async function fetchReviewStateSelectionRevision(marked) {
+    async function fetchReviewStateSelectionRevision(marked, root = null) {
       const params = new URLSearchParams();
       params.set("marked", marked);
       params.set("limit", "1");
       params.set("offset", "0");
+      if (root) {
+        params.set("root", root);
+      }
       const data = await fetchJson(`/api/review/file-ids?${params.toString()}`);
       return data.selection_revision || null;
     }
@@ -1032,20 +1035,25 @@
 
     function installRejectedActionEvents() {
       document.getElementById("delete-all-rejected").addEventListener("click", () => {
-        const rejectedCount = state.overview?.summary?.delete_marked || 0;
+        const root = document.getElementById("root-filter")?.value || "";
+        const rejectedCount = Number(state.overview?.active_library?.delete_marked || state.overview?.summary?.delete_marked || 0);
+        if (!root) {
+          showToast("Choose a library before deleting rejected photos. The All libraries view is global.", "error");
+          return;
+        }
         if (!rejectedCount) {
           showToast("No rejected photos to delete.", "error");
           return;
         }
-        const msg = `Permanently delete ${rejectedCount} rejected photo${rejectedCount !== 1 ? "s" : ""} from disk?\n\nThis cannot be undone. The original files will be removed from your computer.`;
+        const msg = `Permanently delete ${rejectedCount} rejected photo${rejectedCount !== 1 ? "s" : ""} in this library from disk?\n\nLibrary: ${root}\n\nThis cannot be undone. The original files will be removed from your computer.`;
         if (!confirm(msg)) return;
-        withBusy(`Deleting ${rejectedCount} rejected files...`, async () => {
-          const selectionRevision = await fetchReviewStateSelectionRevision("delete");
+        withBusy(`Deleting ${rejectedCount} rejected files in this library...`, async () => {
+          const selectionRevision = await fetchReviewStateSelectionRevision("delete", root);
           if (!selectionRevision) {
             showToast("Review results are refreshing. Try again in a moment.", "error");
             return;
           }
-          const selection = { scope: "review-state", marked: "delete" };
+          const selection = { scope: "review-state", marked: "delete", root };
           if (!rejectedCount) {
             showToast("No rejected files found.", "error");
             return;
@@ -1055,15 +1063,20 @@
             selection_revision: selectionRevision,
             delete_from_disk: true,
           });
-          addLogEntry("Delete rejected", `Deleted ${result.deleted_count} files, ${result.failed_count} failed.`);
-          showToast(`Deleted ${result.deleted_count} rejected files from disk.`);
+          addLogEntry("Delete rejected in library", `Deleted ${result.deleted_count} files from ${root}, ${result.failed_count} failed.`);
+          showToast(`Deleted ${result.deleted_count} rejected files from this library.`);
           clearActiveSelection();
           await refreshWorkspace();
         }).catch(handleError);
       });
 
       document.getElementById("move-all-rejected").addEventListener("click", () => {
-        const rejectedCount = state.overview?.summary?.delete_marked || 0;
+        const root = document.getElementById("root-filter")?.value || "";
+        const rejectedCount = Number(state.overview?.active_library?.delete_marked || state.overview?.summary?.delete_marked || 0);
+        if (!root) {
+          showToast("Choose a library before moving rejected photos. The All libraries view is global.", "error");
+          return;
+        }
         if (!rejectedCount) {
           showToast("No rejected photos to move.", "error");
           return;
@@ -1071,17 +1084,17 @@
         openExportDialog("move", "No rejected photos to move.", {
           mode: "move",
           resolveRequest: async () => {
-            const selectionRevision = await fetchReviewStateSelectionRevision("delete");
+            const selectionRevision = await fetchReviewStateSelectionRevision("delete", root);
             if (!selectionRevision) {
               throw new Error("Review results are refreshing. Try again in a moment.");
             }
             return {
-              selection: { scope: "review-state", marked: "delete" },
+              selection: { scope: "review-state", marked: "delete", root },
               selection_revision: selectionRevision,
-              count: Number(state.overview?.summary?.delete_marked || 0),
+              count: rejectedCount,
             };
           },
-          busyMessage: (count) => `Moving ${count} rejected files...`,
+          busyMessage: (count) => `Moving ${count} rejected files in this library...`,
           successPrefix: "Move complete",
           logTitle: "Move rejected",
           emptyResultMessage: "No rejected files found.",
@@ -1122,8 +1135,12 @@
         : "Scanning metadata only for faster discovery...");
 
       const scanJobStart = await postJson("/api/scan/start", {
-        roots: [root],
+        roots: root.split("|").map(r => r.trim()).filter(Boolean),
         extensions: document.getElementById("extensions-input").value.trim() || null,
+        ignore_rules: (document.getElementById("ignore-rules-input")?.value || "")
+          .split("\n")
+          .map(rule => rule.trim())
+          .filter(Boolean),
         recursive: document.getElementById("recursive-toggle").checked,
         rescan_all: false,
         generate_previews: generatePreviews,
@@ -1273,6 +1290,188 @@
       showToast("Analysis completed. Switched to Review tab.");
     }
 
+
+
+    function renderLibraryRoots() {
+      const listContainer = document.getElementById("library-roots-list");
+      if (!listContainer) return;
+
+      const rootStr = currentLibraryRoot();
+      const roots = rootStr.split("|").map(r => r.trim()).filter(Boolean);
+
+      if (roots.length === 0) {
+        listContainer.innerHTML = `<p class="muted">No folders selected yet. Click "Add Folder" to add directories to your library.</p>`;
+        return;
+      }
+
+      listContainer.innerHTML = roots.map((rootPath) => `
+        <div class="library-root-item">
+          <span class="library-root-path">${escapeHtml(rootPath)}</span>
+          <button type="button" class="library-root-remove" data-path="${escapeHtml(rootPath)}" aria-label="Remove folder">✕</button>
+        </div>
+      `).join("");
+
+      listContainer.querySelectorAll(".library-root-remove").forEach((button) => {
+        button.addEventListener("click", () => {
+          const pathToRemove = button.dataset.path;
+          const updatedRoots = roots.filter(r => r !== pathToRemove);
+          const hiddenInput = document.getElementById("library-root-input");
+          if (hiddenInput) {
+            hiddenInput.value = updatedRoots.join("|");
+            hiddenInput.dispatchEvent(new Event("input", { bubbles: true }));
+            hiddenInput.dispatchEvent(new Event("change", { bubbles: true }));
+            renderLibraryRoots();
+            if (typeof runPreflight === "function") {
+              runPreflight().catch(handleError);
+            }
+          }
+        });
+      });
+    }
+
+    let activePreflightSeq = 0;
+
+    async function runPreflight() {
+      const currentSeq = ++activePreflightSeq;
+      const rootStr = currentLibraryRoot();
+      const roots = rootStr.split("|").map(r => r.trim()).filter(Boolean);
+      const card = document.getElementById("preflight-card");
+      const spinner = document.getElementById("preflight-spinner");
+      const metrics = document.getElementById("preflight-metrics");
+      const warnings = document.getElementById("preflight-warnings");
+
+      if (roots.length === 0) {
+        if (currentSeq === activePreflightSeq) {
+          if (card) {
+            card.classList.add("hidden");
+            card.classList.remove("preflight-updating");
+          }
+          if (spinner) {
+            spinner.textContent = "Updating…";
+            spinner.classList.add("hidden");
+          }
+        }
+        return null;
+      }
+
+      if (card) {
+        card.classList.remove("hidden");
+        card.classList.add("preflight-updating");
+      }
+      if (spinner) {
+        spinner.textContent = "Updating…";
+        spinner.classList.remove("hidden");
+      }
+
+      const ignoreRulesStr = document.getElementById("ignore-rules-input")?.value || "";
+      const ignoreRules = ignoreRulesStr.split("\n").map(line => line.trim()).filter(Boolean);
+      const recursive = document.getElementById("recursive-toggle")?.checked ?? true;
+      const extensionsStr = document.getElementById("extensions-input")?.value || "";
+
+      try {
+        const payload = {
+          roots,
+          ignore_rules: ignoreRules,
+          recursive,
+          extensions: extensionsStr || "jpg,raw,png",
+        };
+        const startRes = await postJson("/api/library/preflight/start", payload);
+        const jobId = startRes?.job_id;
+        if (!jobId) {
+          if (currentSeq === activePreflightSeq) {
+            if (card) card.classList.remove("preflight-updating");
+            if (spinner) {
+              spinner.textContent = "Updating…";
+              spinner.classList.add("hidden");
+            }
+          }
+          return null;
+        }
+
+        let result = null;
+        while (true) {
+          if (currentSeq !== activePreflightSeq) {
+            return null;
+          }
+          const statusRes = await fetchJson(`/api/library/preflight/status?job_id=${encodeURIComponent(jobId)}`);
+          if (currentSeq !== activePreflightSeq) {
+            return null;
+          }
+
+          if (spinner && statusRes?.progress?.files_processed > 0) {
+            const count = Number(statusRes.progress.files_processed);
+            spinner.textContent = `Updating… (${formatNumber(count)} files)`;
+          }
+
+          if (statusRes?.status === "completed") {
+            result = await fetchJson(`/api/library/preflight/result?job_id=${encodeURIComponent(jobId)}`);
+            break;
+          }
+          if (statusRes?.status === "failed") {
+            throw new Error(statusRes.error || "Preflight check failed.");
+          }
+          await new Promise(resolve => window.setTimeout(resolve, 250));
+        }
+
+        if (currentSeq !== activePreflightSeq) {
+          return null;
+        }
+
+        if (spinner) {
+          spinner.textContent = "Updating…";
+          spinner.classList.add("hidden");
+        }
+        if (card) card.classList.remove("preflight-updating");
+
+        if (result && card && metrics) {
+          card.classList.remove("hidden");
+          metrics.innerHTML = `
+            <div class="preflight-metric-row">
+              <span class="preflight-metric-label">Candidate Photos:</span>
+              <span class="preflight-metric-value">${formatNumber(result.candidate_assets || 0)}</span>
+            </div>
+            <div class="preflight-metric-row">
+              <span class="preflight-metric-label">Ignored Folders:</span>
+              <span class="preflight-metric-value">${formatNumber(result.ignored_directories || 0)}</span>
+            </div>
+          `;
+          if (warnings) {
+            const warningMessages = [];
+            if (result.error_text) warningMessages.push(escapeHtml(result.error_text));
+            if (result.unreadable_directories > 0) warningMessages.push(`${result.unreadable_directories} unreadable directories`);
+            if (result.unreadable_files > 0) warningMessages.push(`${result.unreadable_files} unreadable files`);
+            if (warningMessages.length > 0) {
+              warnings.classList.remove("hidden");
+              warnings.innerHTML = warningMessages.join("<br>");
+            } else {
+              warnings.classList.add("hidden");
+              warnings.innerHTML = "";
+            }
+          }
+        }
+        return result;
+      } catch (err) {
+        if (currentSeq !== activePreflightSeq) {
+          return null;
+        }
+        if (spinner) {
+          spinner.textContent = "Updating…";
+          spinner.classList.add("hidden");
+        }
+        if (card) {
+          card.classList.remove("preflight-updating");
+          card.classList.remove("hidden");
+        }
+        if (warnings) {
+          warnings.classList.remove("hidden");
+          warnings.textContent = err?.message || "Preflight check failed.";
+        }
+        return null;
+      }
+    }
+
+
+
     async function clearCache(scope, message) {
       setBusyPhaseProgress({ percent: 0, phaseIndex: 1, phaseCount: 1, phaseLabel: "Clearing cache" });
       const result = await runTrackedOperation({
@@ -1363,26 +1562,129 @@
       rootContainer.querySelectorAll(".browser-root").forEach((button) => {
         button.addEventListener("click", () => browseDirectory(button.dataset.path).catch(handleError));
       });
-      await browseDirectory(document.getElementById(targetId).value || roots.items[0]?.path || "/");
+
+      let startPath = "";
+      const targetEl = document.getElementById(targetId);
+      if (targetEl && targetEl.value) {
+        startPath = targetEl.value;
+      } else {
+        const currentLibraryVal = document.getElementById("library-root-input")?.value;
+        if (currentLibraryVal) {
+          const libraryRoots = currentLibraryVal.split("|").map(r => r.trim()).filter(Boolean);
+          if (libraryRoots.length > 0) {
+            startPath = libraryRoots[libraryRoots.length - 1];
+          }
+        }
+      }
+      if (!startPath) {
+        startPath = state.browserPath || roots.items[0]?.path || "/";
+      }
+
+      try {
+        await browseDirectory(startPath);
+      } catch (err) {
+        console.warn("Failed to navigate to browser start path, falling back to root:", err);
+        const fallback = roots.items[0]?.path || "/";
+        await browseDirectory(fallback).catch(handleError);
+      }
     }
 
-    async function browseDirectory(path) {
-      const payload = await fetchJson(`/api/fs/list?path=${encodeURIComponent(path)}`);
-      state.browserPath = payload.path;
-      document.getElementById("browser-path").value = payload.path;
-      const list = document.getElementById("browser-list");
-      list.innerHTML = payload.items.length
-        ? payload.items.map((item) => `
-            <button type="button" class="browser-item" data-path="${escapeHtml(item.path)}">
-              <strong>${escapeHtml(item.name)}</strong>
-              <span class="muted">${escapeHtml(item.path)}</span>
-            </button>
-          `).join("")
-        : `<p class="muted">No subdirectories available.</p>`;
+    function buildBreadcrumbItems(rawPath) {
+      const isUnc = rawPath.startsWith("\\\\") || rawPath.startsWith("//");
+      const normPath = rawPath.replace(/\\/g, "/");
 
-      list.querySelectorAll(".browser-item").forEach((button) => {
-        button.addEventListener("click", () => browseDirectory(button.dataset.path).catch(handleError));
-      });
+      if (isUnc) {
+        const parts = normPath.slice(2).split("/").filter(Boolean);
+        let accumulated = "\\\\";
+        return parts.map((part, index) => {
+          if (index === 0) {
+            accumulated += part;
+          } else {
+            accumulated += "\\" + part;
+          }
+          return `<button type="button" class="breadcrumb-item" data-path="${escapeHtml(accumulated)}">${escapeHtml(part)}</button>`;
+        });
+      }
+
+      const isWindowsDrive = /^[a-zA-Z]:/.test(normPath);
+      if (isWindowsDrive) {
+        const driveLetter = normPath.slice(0, 2);
+        const rest = normPath.slice(2).split("/").filter(Boolean);
+        let accumulated = driveLetter + "\\";
+        const crumbs = [
+          `<button type="button" class="breadcrumb-item" data-path="${escapeHtml(accumulated)}">${escapeHtml(driveLetter)}</button>`
+        ];
+        for (const part of rest) {
+          accumulated += (accumulated.endsWith("\\") ? "" : "\\") + part;
+          crumbs.push(`<button type="button" class="breadcrumb-item" data-path="${escapeHtml(accumulated)}">${escapeHtml(part)}</button>`);
+        }
+        return crumbs;
+      }
+
+      const parts = normPath.split("/").filter(Boolean);
+      let accumulated = "/";
+      const crumbs = [
+        `<button type="button" class="breadcrumb-item" data-path="/">${escapeHtml("/")}</button>`
+      ];
+      for (const part of parts) {
+        accumulated += (accumulated.endsWith("/") ? "" : "/") + part;
+        crumbs.push(`<button type="button" class="breadcrumb-item" data-path="${escapeHtml(accumulated)}">${escapeHtml(part)}</button>`);
+      }
+      return crumbs;
+    }
+
+    let activeBrowseSeq = 0;
+
+    async function browseDirectory(path) {
+      const currentSeq = ++activeBrowseSeq;
+      const list = document.getElementById("browser-list");
+      const pathInput = document.getElementById("browser-path");
+      if (pathInput) pathInput.value = path;
+
+      if (list) {
+        list.innerHTML = `<p class="muted">Loading directory contents...</p>`;
+      }
+
+      try {
+        const payload = await fetchJson(`/api/fs/list?path=${encodeURIComponent(path)}`);
+        if (currentSeq !== activeBrowseSeq) {
+          return;
+        }
+
+        state.browserPath = payload.path;
+        if (pathInput) pathInput.value = payload.path;
+
+        if (list) {
+          list.innerHTML = payload.items.length
+            ? payload.items.map((item) => `
+                <button type="button" class="browser-item" data-path="${escapeHtml(item.path)}">
+                  <strong>${escapeHtml(item.name)}</strong>
+                  <span class="muted">${escapeHtml(item.path)}</span>
+                </button>
+              `).join("")
+            : `<p class="muted">No subdirectories available.</p>`;
+
+          list.querySelectorAll(".browser-item").forEach((button) => {
+            button.addEventListener("click", () => browseDirectory(button.dataset.path).catch(handleError));
+          });
+        }
+
+        // Render breadcrumbs
+        const breadcrumbsContainer = document.getElementById("browser-breadcrumbs");
+        if (breadcrumbsContainer) {
+          breadcrumbsContainer.innerHTML = buildBreadcrumbItems(payload.path).join('<span class="breadcrumb-separator">/</span>');
+          breadcrumbsContainer.querySelectorAll(".breadcrumb-item").forEach((btn) => {
+            btn.addEventListener("click", () => browseDirectory(btn.dataset.path).catch(handleError));
+          });
+        }
+      } catch (err) {
+        if (currentSeq !== activeBrowseSeq) {
+          return;
+        }
+        if (list) {
+          list.innerHTML = `<p class="muted danger-text">Could not open folder: ${escapeHtml(err.message || "Access denied")}</p>`;
+        }
+      }
     }
 
     function chooseBrowserPath() {
@@ -1444,6 +1746,8 @@
       openBrowser,
       browseDirectory,
       chooseBrowserPath,
+      runPreflight,
+      renderLibraryRoots,
       handleError,
     };
   }

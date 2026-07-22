@@ -716,6 +716,9 @@ class TestStaticAssetHeaders:
         assert "async function runScan(rootOverride = null, { generatePreviews = true, pipeline = null } = {})" in body
         assert "Scanning metadata only for faster discovery" in body
         assert "runScan(null, { generatePreviews: false })" in body
+        scan_start = body.index('const scanJobStart = await postJson("/api/scan/start", {')
+        scan_payload = body[scan_start : scan_start + 800]
+        assert 'ignore_rules: (document.getElementById("ignore-rules-input")?.value || "")' in scan_payload
         assert 'preview_mode:' not in body
 
     def test_static_js_uses_backend_default_raw_preview_mode_without_selector(self, test_server):
@@ -840,6 +843,15 @@ class TestStaticAssetHeaders:
         base_url, _, _ = test_server
         body = urlopen(f"{base_url}/index.html").read().decode("utf-8")
         assert 'id="runtime-model-warning"' in body
+
+    def test_static_settings_expose_analysis_diagnostics(self, test_server):
+        base_url, _, _ = test_server
+        html_body = urlopen(f"{base_url}/index.html").read().decode("utf-8")
+        js_body = self._combined_js(base_url)
+
+        assert 'id="analysis-diagnostics-list"' in html_body
+        assert 'id="refresh-analysis-diagnostics"' in html_body
+        assert "/api/analysis-diagnostics" in js_body
 
     def test_static_js_surfaces_qalign_cpu_and_directml_unavailable_notice(self, test_server):
         base_url, _, _ = test_server

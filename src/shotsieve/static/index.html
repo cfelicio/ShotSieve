@@ -41,13 +41,37 @@
           </div>
 
           <div class="library-input-row">
-            <div class="field-with-action library-folder-label">
-              <label class="label-text" for="library-root-input">Photo Folder</label>
-              <div class="input-with-action">
-                <input id="library-root-input" type="text" placeholder="Select the folder containing your photos">
-                <button id="browse-library-root" type="button" class="ghost" aria-label="Browse for photo folder">Browse</button>
+            <!-- Hidden from sight but exposed to screen readers/accessibility tests -->
+            <label for="library-root-input" style="position: absolute; opacity: 0; width: 1px; height: 1px; overflow: hidden; clip: rect(1px, 1px, 1px, 1px); white-space: nowrap;">Photo Folder</label>
+            <input id="library-root-input" type="text" readonly style="position: absolute; opacity: 0; width: 1px; height: 1px; overflow: hidden; clip: rect(1px, 1px, 1px, 1px); white-space: nowrap;">
+            <input id="add-root-helper-input" type="hidden">
+            <input id="exclude-root-helper-input" type="hidden">
+
+            <div class="library-sources-container">
+              <label class="label-text">Library Folders</label>
+              <div id="library-roots-list" class="library-roots-list">
+                <!-- Dynamically populated -->
+              </div>
+              <div class="library-add-row">
+                <button id="browse-library-root" type="button" class="ghost" aria-label="Browse for photo folder">➕ Add Folder</button>
+                <button id="exclude-library-folder" type="button" class="ghost danger-ghost" aria-label="Browse for folder to exclude">➖ Exclude Folder</button>
               </div>
             </div>
+
+            <div class="library-ignore-container">
+              <label class="label-text" for="ignore-rules-input">Ignore Rules (One pattern per line)</label>
+              <textarea id="ignore-rules-input" placeholder="e.g.&#10;exports/**&#10;**/temp/**&#10;.cache"></textarea>
+              <span class="field-hint">Supports exact directory names and relative globs.</span>
+            </div>
+          </div>
+
+          <div id="preflight-card" class="preflight-card hidden">
+            <div class="preflight-header">
+              <h3 id="preflight-title">Preflight Summary</h3>
+              <span id="preflight-spinner" class="preflight-spinner hidden" aria-live="polite">Updating…</span>
+            </div>
+            <div id="preflight-metrics" class="preflight-metrics"></div>
+            <div id="preflight-warnings" class="preflight-warnings hidden"></div>
           </div>
 
           <div class="library-actions">
@@ -192,6 +216,7 @@
       <div class="review-layout">
         <section class="review-sidebar">
           <div class="sidebar-scroller">
+            <p id="review-scope-context" class="review-scope-context" data-scope="library" role="status" aria-live="polite"></p>
             <div class="sidebar-group" aria-label="Review filters">
               <div class="filter-grid compact-filters">
                 <label class="floating-label filter-span-full">
@@ -201,7 +226,7 @@
                 <label class="floating-label">
                   <span class="label-text">Library Root</span>
                   <select id="root-filter">
-                    <option value="">All scanned roots</option>
+                    <option value="">All libraries (global)</option>
                   </select>
                 </label>
                 <label class="floating-label">
@@ -210,6 +235,17 @@
                     <optgroup label="Score">
                       <option value="learned_asc">Lowest Score</option>
                       <option value="learned_desc">Highest Score</option>
+                    </optgroup>
+                    <optgroup label="Resolution & Size">
+                      <option value="resolution_asc">Resolution (Low to High)</option>
+                      <option value="resolution_desc">Resolution (High to Low)</option>
+                      <option value="size_asc">File Size (Small to Large)</option>
+                      <option value="size_desc">File Size (Large to Small)</option>
+                    </optgroup>
+                    <optgroup label="Dimensions & Format">
+                      <option value="format">Format Name</option>
+                      <option value="width">Width</option>
+                      <option value="height">Height</option>
                     </optgroup>
                     <optgroup label="Other">
                       <option value="date_asc">Oldest Date</option>
@@ -234,6 +270,60 @@
                     <option value="issues">Issues Only</option>
                   </select>
                 </label>
+
+                <div class="filter-span-full advanced-filters-toggle-row">
+                  <button id="toggle-advanced-filters" type="button" class="ghost text-button link-style">Show Metadata Filters</button>
+                </div>
+
+                <div id="advanced-filters-panel" class="filter-span-full advanced-filters-panel hidden">
+                  <div class="advanced-filters-grid">
+                    <div class="filter-group">
+                      <span class="label-text">Formats</span>
+                      <div class="format-checkboxes">
+                        <label class="checkbox-label"><input type="checkbox" name="format-filter" value="jpeg" checked> JPEG</label>
+                        <label class="checkbox-label"><input type="checkbox" name="format-filter" value="png" checked> PNG</label>
+                        <label class="checkbox-label"><input type="checkbox" name="format-filter" value="tiff" checked> TIFF</label>
+                        <label class="checkbox-label"><input type="checkbox" name="format-filter" value="heif" checked> HEIF</label>
+                        <label class="checkbox-label"><input type="checkbox" name="format-filter" value="raw" checked> RAW</label>
+                        <label class="checkbox-label"><input type="checkbox" name="format-filter" value="other" checked> Other</label>
+                      </div>
+                    </div>
+
+                    <div class="filter-inputs-row">
+                      <label class="floating-label">
+                        <span class="label-text">Min Megapixels (MP)</span>
+                        <input id="filter-min-mp" type="number" step="0.1" min="0" placeholder="e.g. 12">
+                      </label>
+                      <label class="floating-label">
+                        <span class="label-text">Max Megapixels (MP)</span>
+                        <input id="filter-max-mp" type="number" step="0.1" min="0" placeholder="e.g. 50">
+                      </label>
+                    </div>
+
+                    <div class="filter-inputs-row">
+                      <label class="floating-label">
+                        <span class="label-text">Min Size (MB)</span>
+                        <input id="filter-min-size" type="number" step="0.1" min="0" placeholder="e.g. 1">
+                      </label>
+                      <label class="floating-label">
+                        <span class="label-text">Max Size (MB)</span>
+                        <input id="filter-max-size" type="number" step="0.1" min="0" placeholder="e.g. 100">
+                      </label>
+                    </div>
+
+                    <div class="filter-inputs-row">
+                      <label class="floating-label filter-span-full">
+                        <span class="label-text">Metadata Completeness</span>
+                        <select id="filter-metadata-status">
+                          <option value="all">All Photos</option>
+                          <option value="valid">Valid Metadata Only</option>
+                          <option value="unknown">Unknown/Missing Metadata</option>
+                        </select>
+                      </label>
+                    </div>
+                  </div>
+                </div>
+
                 <div class="filter-inline-pair filter-span-full">
                   <label class="floating-label">
                     <span class="label-text">Min AI Score</span>
@@ -282,8 +372,8 @@
 
             <div id="rejected-actions" class="rejected-actions-bar hidden">
               <span class="rejected-label" id="rejected-label">0 photos rejected</span>
-              <button id="move-all-rejected" type="button" class="ghost" data-busy-lock="true">Move Rejected…</button>
-              <button id="delete-all-rejected" type="button" class="danger-ghost" data-busy-lock="true">Delete Rejected</button>
+              <button id="move-all-rejected" type="button" class="ghost" data-busy-lock="true">Move rejected in this library…</button>
+              <button id="delete-all-rejected" type="button" class="danger-ghost" data-busy-lock="true">Delete rejected in this library</button>
             </div>
 
             <div id="queue-list" class="queue-list"></div>
@@ -299,6 +389,7 @@
                 <p id="review-position" class="review-position"></p>
                 <p id="detail-path" class="detail-path"></p>
                 <p id="detail-scoreline" class="detail-scoreline"></p>
+                <div id="detail-metadata-strip" class="detail-metadata-strip"></div>
                 <p id="detail-issues-note" class="detail-issues-note hidden"></p>
               </div>
               <div class="inline-actions detail-toolbar-actions">
@@ -357,6 +448,20 @@
           </div>
 
           <div id="system-info" class="system-info-grid"></div>
+        </section>
+
+        <section class="panel settings-panel">
+          <div class="panel-topline">
+            <div>
+              <p class="eyebrow">Troubleshooting</p>
+              <h2>Analysis Diagnostics</h2>
+            </div>
+            <button id="refresh-analysis-diagnostics" type="button" class="ghost">Refresh</button>
+          </div>
+          <p id="analysis-diagnostics-summary" class="settings-help" role="status" aria-live="polite">
+            Checking for photos that need attention…
+          </p>
+          <div id="analysis-diagnostics-list" class="analysis-diagnostics-list"></div>
         </section>
 
         <section class="panel settings-panel">
@@ -421,8 +526,9 @@
         <label id="browser-path-label" for="browser-path">Current folder path</label>
         <div class="dialog-toolbar">
           <button id="browser-up" type="button" class="ghost">Up</button>
-          <input id="browser-path" type="text" readonly>
+          <input id="browser-path" type="text">
         </div>
+        <div id="browser-breadcrumbs" class="browser-breadcrumbs"></div>
       </div>
       <div id="browser-roots" class="shortcut-list"></div>
       <div id="browser-list" class="browser-list"></div>

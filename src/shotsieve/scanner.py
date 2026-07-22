@@ -1,6 +1,9 @@
 import concurrent.futures
 from datetime import UTC, datetime
+import fnmatch
+import os
 from pathlib import Path
+import time
 from typing import Callable, Iterable, Sequence
 
 from shotsieve.config import DEFAULT_RAW_PREVIEW_MODE
@@ -9,9 +12,80 @@ from shotsieve.models import ScanSummary
 from shotsieve.preview import generate_preview
 
 
-
 def canonical_path_key(path: Path) -> str:
     return normalize_resolved_path(path)
+
+
+class IgnoreMatcher:
+    def __init__(self, root: Path, rules: Sequence[str]) -> None:
+        self.root = root.expanduser().resolve()
+        self.rules: list[str] = []
+        self.absolute_rules: list[Path] = []
+        for r in rules:
+            r = r.strip()
+            if not r:
+                continue
+            try:
+                p = Path(r).expanduser()
+                if p.is_absolute():
+                    p_res = p.resolve()
+                    if p_res == self.root:
+                        continue
+                    self.absolute_rules.append(p_res)
+                    r = p_res.relative_to(self.root).as_posix()
+            except ValueError:
+                if p.is_absolute():
+                    continue
+            self.rules.append(r)
+
+    def should_ignore(self, path: Path) -> bool:
+        resolved = path.expanduser().resolve()
+        if resolved == self.root:
+            return False
+
+        if _is_excluded(resolved, set(self.absolute_rules)):
+            return True
+
+        try:
+            rel_path = resolved.relative_to(self.root)
+        except ValueError:
+            return False
+
+        rel_posix = rel_path.as_posix()
+        parts = rel_path.parts
+
+        for rule in self.rules:
+            r_posix = rule.replace("\\", "/").strip("/")
+            r_parts = r_posix.split("/")
+            r_parts_no_wild = [p for p in r_parts if p != "**"]
+
+            if len(r_parts_no_wild) == 1:
+                pattern = r_parts_no_wild[0]
+                if any(fnmatch.fnmatchcase(part, pattern) for part in parts):
+                    return True
+                continue
+
+            glob_pattern = r_posix.replace("**", "*")
+            if fnmatch.fnmatchcase(rel_posix, glob_pattern):
+                return True
+            if fnmatch.fnmatchcase(rel_posix, glob_pattern + "/*"):
+                return True
+            if rel_posix == r_posix or rel_posix.startswith(r_posix + "/"):
+                return True
+
+        return False
+
+
+def _is_excluded(path: Path, excluded: set[Path]) -> bool:
+    for exc in excluded:
+        if path == exc:
+            return True
+        try:
+            path.relative_to(exc)
+            return True
+        except ValueError:
+            pass
+    return False
 
 
 def discover_files(
@@ -20,24 +94,71 @@ def discover_files(
     recursive: bool = True,
     extensions: Sequence[str],
     excluded_dirs: Sequence[Path] = (),
+    ignore_rules: Sequence[str] = (),
 ) -> Iterable[Path]:
-    walker = root.rglob("*") if recursive else root.glob("*")
-    allowed_extensions = {extension.casefold() for extension in extensions}
-    excluded = [path.resolve() for path in excluded_dirs]
+    allowed_extensions = {ext.casefold() if ext.startswith('.') else f".{ext.casefold()}" for ext in extensions}
+    excluded = {path.expanduser().resolve() for path in excluded_dirs}
     claimed_preview_roots: set[Path] = set()
+    
+    root_resolved = root.expanduser().resolve()
+    ignore_matcher = IgnoreMatcher(root_resolved, ignore_rules)
 
-    for path in walker:
-        if not path.is_file():
-            continue
+    if not recursive:
+        try:
+            for entry in os.scandir(root_resolved):
+                if entry.is_file():
+                    path = Path(entry.path)
+                    resolved_path = path.resolve()
+                    if (
+                        path.suffix.casefold() in allowed_extensions
+                        and not _is_excluded(resolved_path, excluded)
+                        and not _is_within_claimed_preview_root(resolved_path, claimed_preview_roots)
+                        and not ignore_matcher.should_ignore(resolved_path)
+                    ):
+                        yield path
+        except OSError:
+            pass
+        return
 
-        resolved_path = path.resolve()
-        if any(is_within_dir(resolved_path, excluded_dir) for excluded_dir in excluded):
-            continue
-        if _is_within_claimed_preview_root(resolved_path, claimed_preview_roots):
-            continue
+    for dirpath, dirnames, filenames in os.walk(root_resolved, topdown=True):
+        current_dir = Path(dirpath)
+        
+        for dname in list(dirnames):
+            dpath = current_dir / dname
+            try:
+                resolved_dpath = dpath.resolve()
+                
+                if _is_excluded(resolved_dpath, excluded):
+                    dirnames.remove(dname)
+                    continue
+                    
+                if (resolved_dpath / ".shotsieve-preview-root").exists():
+                    dirnames.remove(dname)
+                    continue
+                    
+                if ignore_matcher.should_ignore(resolved_dpath):
+                    dirnames.remove(dname)
+                    continue
+            except OSError:
+                dirnames.remove(dname)
+                continue
 
-        if resolved_path.suffix.casefold() in allowed_extensions:
-            yield path
+        for fname in filenames:
+            fpath = current_dir / fname
+            if fpath.suffix.casefold() not in allowed_extensions:
+                continue
+            try:
+                resolved_fpath = fpath.resolve()
+                if _is_excluded(resolved_fpath, excluded):
+                    continue
+                if _is_within_claimed_preview_root(resolved_fpath, claimed_preview_roots):
+                    continue
+                if ignore_matcher.should_ignore(resolved_fpath):
+                    continue
+            except OSError:
+                continue
+            yield fpath
+
 
 
 def _run_cancel_check(cancel_check: Callable[[], None] | None) -> None:
@@ -73,6 +194,7 @@ def scan_root(
     progress_callback: Callable[[int, int, str], None] | None = None,
     files_total_hint: int | None = None,
     cancel_check: Callable[[], None] | None = None,
+    ignore_rules: Sequence[str] = (),
 ) -> ScanSummary:
     summary = ScanSummary()
     started_time = utc_now()
@@ -120,7 +242,9 @@ def scan_root(
             recursive=recursive,
             extensions=extensions,
             excluded_dirs=tuple(excluded_preview_dirs),
+            ignore_rules=ignore_rules,
         )
+
         
         # Scale workers with CPU cores and available RAM.
         # recommended_cpu_workers() caps workers based on RAM to prevent OOM
@@ -460,9 +584,12 @@ def _load_existing_rows(connection, paths: Sequence[Path]) -> dict[str, dict]:
             "preview_status": row["preview_status"],
             "preview_path": row["preview_path"],
             "last_error": row["last_error"],
+            "analysis_status": row["analysis_status"],
+            "analysis_error": row["analysis_error"],
+            "last_analysis_time": row["last_analysis_time"],
         }
         for row in connection.execute(
-            f"SELECT path_key, modified_time, size_bytes, width, height, capture_time, preview_status, preview_path, last_error FROM files WHERE path_key IN ({placeholders})",
+            f"SELECT path_key, modified_time, size_bytes, width, height, capture_time, preview_status, preview_path, last_error, analysis_status, analysis_error, last_analysis_time FROM files WHERE path_key IN ({placeholders})",
             path_keys,
         ).fetchall()
     }
@@ -549,6 +676,9 @@ def gather_file_metadata(
             "preview_status": "ready",
             "last_error": existing_metadata.get("last_error"),
             "scan_status": "unchanged",
+            "analysis_status": None,
+            "analysis_error": None,
+            "last_analysis_time": None,
             "preserve_metadata": True,
         }
 
@@ -566,6 +696,9 @@ def gather_file_metadata(
         "preview_status": "pending",
         "last_error": None,
         "scan_status": base_scan_status,
+        "analysis_status": "pending" if metadata_changed or existing_metadata is None else existing_metadata.get("analysis_status"),
+        "analysis_error": None if metadata_changed or existing_metadata is None else existing_metadata.get("analysis_error"),
+        "last_analysis_time": None if metadata_changed or existing_metadata is None else existing_metadata.get("last_analysis_time"),
         "preserve_metadata": False,
     }
 
@@ -610,12 +743,14 @@ def commit_batch(connection, batch: list[dict], summary: ScanSummary, *, existin
         INSERT INTO files(
             path, path_key, size_bytes, modified_time, format, 
             width, height, capture_time, preview_path, preview_status,
-            last_scan_time, last_error, scan_status
+            last_scan_time, last_error, scan_status,
+            analysis_status, analysis_error, last_analysis_time
         )
         VALUES(
             :path, :path_key, :size_bytes, :modified_time, :format, 
             :width, :height, :capture_time, :preview_path, :preview_status,
-            :last_scan_time, :last_error, :scan_status
+            :last_scan_time, :last_error, :scan_status,
+            :analysis_status, :analysis_error, :last_analysis_time
         )
         ON CONFLICT(path_key) DO UPDATE SET
             path = excluded.path,
@@ -647,7 +782,19 @@ def commit_batch(connection, batch: list[dict], summary: ScanSummary, *, existin
                 WHEN :preserve_metadata THEN COALESCE(excluded.last_error, last_error)
                     ELSE excluded.last_error
                 END,
-            scan_status = excluded.scan_status
+                scan_status = excluded.scan_status,
+                analysis_status = CASE
+                    WHEN :preserve_metadata THEN analysis_status
+                        ELSE excluded.analysis_status
+                    END,
+                analysis_error = CASE
+                    WHEN :preserve_metadata THEN analysis_error
+                        ELSE excluded.analysis_error
+                    END,
+                last_analysis_time = CASE
+                    WHEN :preserve_metadata THEN last_analysis_time
+                        ELSE excluded.last_analysis_time
+                    END
         """,
         batch,
     )
@@ -713,3 +860,168 @@ def _is_within_claimed_preview_root(path: Path, claimed_preview_roots: set[Path]
             claimed_preview_roots.add(parent)
             return True
     return False
+
+
+def preflight_root(
+    root: Path,
+    *,
+    recursive: bool = True,
+    extensions: Sequence[str],
+    excluded_dirs: Sequence[Path] = (),
+    ignore_rules: Sequence[str] = (),
+    cancel_check: Callable[[], None] | None = None,
+    progress_callback: Callable[[int], None] | None = None,
+) -> dict:
+    start_time = time.monotonic()
+
+    allowed_extensions = {ext.casefold() if ext.startswith('.') else f".{ext.casefold()}" for ext in extensions}
+    excluded = {path.expanduser().resolve() for path in excluded_dirs}
+
+    root_resolved = root.expanduser().resolve()
+    ignore_matcher = IgnoreMatcher(root_resolved, ignore_rules)
+
+    candidate_assets = 0
+    source_bytes = 0
+    ignored_directories = 0
+    ignored_files_count = 0
+    unreadable_directories = 0
+    unreadable_files = 0
+    representative_error = None
+
+    if not root_resolved.exists() or not root_resolved.is_dir():
+        return {
+            "root": str(root_resolved),
+            "candidate_assets": 0,
+            "source_bytes": 0,
+            "ignored_directories": 0,
+            "ignored_files_count": 0,
+            "unreadable_directories": 1,
+            "unreadable_files": 0,
+            "error_text": "Directory does not exist",
+            "exact": True,
+            "duration_ms": 0,
+        }
+
+    if not recursive:
+        try:
+            for entry in os.scandir(root_resolved):
+                if cancel_check:
+                    cancel_check()
+                try:
+                    if entry.is_file():
+                        path = Path(entry.path)
+                        if path.suffix.casefold() in allowed_extensions:
+                            resolved_path = path.resolve()
+                            if _is_excluded(resolved_path, excluded):
+                                continue
+                            if ignore_matcher.should_ignore(resolved_path):
+                                ignored_files_count += 1
+                                continue
+                            candidate_assets += 1
+                            try:
+                                source_bytes += entry.stat().st_size
+                            except OSError as exc:
+                                unreadable_files += 1
+                                representative_error = str(exc)
+                except OSError as exc:
+                    unreadable_files += 1
+                    representative_error = str(exc)
+        except OSError as exc:
+            unreadable_directories += 1
+            representative_error = str(exc)
+
+        return {
+            "root": str(root_resolved),
+            "candidate_assets": candidate_assets,
+            "source_bytes": source_bytes,
+            "ignored_directories": 0,
+            "ignored_files_count": ignored_files_count,
+            "unreadable_directories": unreadable_directories,
+            "unreadable_files": unreadable_files,
+            "error_text": representative_error,
+            "exact": True,
+            "duration_ms": int((time.monotonic() - start_time) * 1000),
+        }
+
+    def handle_walk_error(exc: OSError) -> None:
+        nonlocal unreadable_directories, representative_error
+        unreadable_directories += 1
+        representative_error = str(exc)
+
+    for dirpath, dirnames, filenames in os.walk(root_resolved, topdown=True, onerror=handle_walk_error):
+        if cancel_check:
+            cancel_check()
+
+        current_dir = Path(dirpath)
+
+        for dname in list(dirnames):
+            dpath = current_dir / dname
+            try:
+                resolved_dpath = dpath.resolve()
+
+                if _is_excluded(resolved_dpath, excluded):
+                    dirnames.remove(dname)
+                    continue
+
+                if (resolved_dpath / ".shotsieve-preview-root").exists():
+                    dirnames.remove(dname)
+                    continue
+
+                if ignore_matcher.should_ignore(resolved_dpath):
+                    ignored_directories += 1
+                    dirnames.remove(dname)
+                    continue
+            except OSError as exc:
+                unreadable_directories += 1
+                representative_error = str(exc)
+                dirnames.remove(dname)
+                continue
+
+        for fname in filenames:
+            fpath = current_dir / fname
+            if fpath.suffix.casefold() in allowed_extensions:
+                try:
+                    resolved_fpath = fpath.resolve()
+                    if _is_excluded(resolved_fpath, excluded):
+                        continue
+                    if ignore_matcher.should_ignore(resolved_fpath):
+                        ignored_files_count += 1
+                        continue
+                    stat = fpath.stat()
+                    source_bytes += stat.st_size
+                    candidate_assets += 1
+                except OSError as exc:
+                    unreadable_files += 1
+                    representative_error = str(exc)
+
+        if progress_callback and candidate_assets > 0 and candidate_assets % 500 == 0:
+            progress_callback(candidate_assets)
+
+    return {
+        "root": str(root_resolved),
+        "candidate_assets": candidate_assets,
+        "source_bytes": source_bytes,
+        "ignored_directories": ignored_directories,
+        "ignored_files_count": ignored_files_count,
+        "unreadable_directories": unreadable_directories,
+        "unreadable_files": unreadable_files,
+        "error_text": representative_error,
+        "exact": True,
+        "duration_ms": int((time.monotonic() - start_time) * 1000),
+    }
+
+
+def check_overlapping_roots(roots: Sequence[Path]) -> list[tuple[Path, Path]]:
+    """Return list of overlapping root pairs (parent, child)."""
+    resolved_paths = sorted([r.expanduser().resolve() for r in roots], key=lambda p: len(p.parts))
+    overlaps = []
+    for i, path in enumerate(resolved_paths):
+        for other in resolved_paths[i+1:]:
+            try:
+                other.relative_to(path)
+                overlaps.append((path, other))
+            except ValueError:
+                pass
+    return overlaps
+
+

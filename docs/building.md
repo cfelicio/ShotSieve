@@ -93,6 +93,12 @@ python -m playwright install chromium
 
 For a quick manual visual QA pass, use [accessibility-checklist.md](./accessibility-checklist.md).
 
+## Performance measurement
+
+Performance diagnostics are opt-in and do not run as part of the ordinary test suite. The synthetic 60,000-row SQLite baseline and the procedure for collecting local real-photo scan, preview, and learned-IQA measurements are documented in [performance-measurement.md](./performance-measurement.md).
+
+Use that guide before changing indexes, pagination, or catalog storage behavior. It explains the required environment notes and separates database-query results from filesystem, preview, model-startup, and inference costs.
+
 ## Release builds and portable bundles
 
 Current release automation builds **runtime packs**, not legacy bootstrap helper bundles.

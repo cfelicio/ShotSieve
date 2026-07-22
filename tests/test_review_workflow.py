@@ -15,11 +15,13 @@ from shotsieve.review import (
     count_review_files,
     delete_files,
     get_review_file_detail,
+    list_analysis_diagnostics,
     list_review_files,
     list_review_state_file_ids,
     media_path_for_file,
     prune_missing_cache_entries,
     remove_files_from_cache,
+    review_selection_revision,
     review_overview,
     update_review_state,
     update_review_state_batch,
@@ -95,6 +97,162 @@ def test_review_listing_and_state_updates(tmp_path: Path) -> None:
     summary = _dict_value(overview["summary"])
     assert summary["delete_marked"] == 1
     assert summary["scored_files"] == 2
+
+
+def test_analysis_diagnostics_explain_preview_and_model_failures(tmp_path: Path) -> None:
+    db_path = tmp_path / "data" / "shotsieve.db"
+    preview_dir = tmp_path / "previews"
+    photo_dir = tmp_path / "photos"
+    photo_dir.mkdir()
+    preview_failed = photo_dir / "preview-failed.jpg"
+    model_failed = photo_dir / "model-failed.jpg"
+    create_image(preview_failed)
+    create_image(model_failed)
+    initialize_database(db_path)
+
+    class MixedBackend:
+        name = "topiq_nr"
+        model_version = "fake:mixed"
+
+        def score_paths(self, image_paths, *, batch_size: int = 4, resource_profile: str | None = None):
+            return [
+                LearnedScoreResult(
+                    raw_score=None if path.name == "model-failed.jpg" else 0.82,
+                    normalized_score=None if path.name == "model-failed.jpg" else 82.0,
+                    confidence=None if path.name == "model-failed.jpg" else 91.0,
+                    error="model unavailable" if path.name == "model-failed.jpg" else None,
+                )
+                for path in image_paths
+            ]
+
+    with connect(db_path) as connection:
+        scan_root(
+            connection,
+            root=photo_dir,
+            recursive=True,
+            extensions=(".jpg",),
+            preview_dir=preview_dir,
+            generate_previews=False,
+        )
+        score_files(connection, learned_backend_factory=lambda _model_name: MixedBackend())
+        connection.execute(
+            """
+            UPDATE files
+            SET preview_status = 'failed', last_error = 'decoder could not read image',
+                analysis_status = NULL, analysis_error = NULL
+            WHERE path = ?
+            """,
+            (str(preview_failed),),
+        )
+        connection.execute("DELETE FROM scores WHERE file_id = (SELECT id FROM files WHERE path = ?)", (str(preview_failed),))
+        diagnostics = list_analysis_diagnostics(connection, root=str(photo_dir))
+
+    assert diagnostics["total"] == 2
+    by_name = {Path(str(item["path"])).name: item for item in diagnostics["items"]}
+    assert by_name["preview-failed.jpg"]["status"] == "failed"
+    assert "decoder could not read image" in str(by_name["preview-failed.jpg"]["error"])
+    assert by_name["model-failed.jpg"]["status"] == "failed"
+    assert by_name["model-failed.jpg"]["error"] == "model unavailable"
+
+
+def test_unchanged_scan_preserves_prior_analysis_diagnostic(tmp_path: Path) -> None:
+    db_path = tmp_path / "data" / "shotsieve.db"
+    preview_dir = tmp_path / "previews"
+    photo_dir = tmp_path / "photos"
+    photo_dir.mkdir()
+    create_image(photo_dir / "sample.jpg")
+    initialize_database(db_path)
+
+    with connect(db_path) as connection:
+        scan_root(connection, root=photo_dir, recursive=True, extensions=(".jpg",), preview_dir=preview_dir)
+        connection.execute(
+            """
+            UPDATE files
+            SET analysis_status = 'failed', analysis_error = 'model process stopped',
+                last_analysis_time = '2026-03-24T00:00:00+00:00'
+            """
+        )
+        scan_root(connection, root=photo_dir, recursive=True, extensions=(".jpg",), preview_dir=preview_dir)
+        diagnostic = list_analysis_diagnostics(connection, root=str(photo_dir))["items"][0]
+
+    assert diagnostic["status"] == "failed"
+    assert diagnostic["error"] == "model process stopped"
+
+
+def test_review_overview_separates_active_library_from_catalog(tmp_path: Path) -> None:
+    db_path = tmp_path / "data" / "shotsieve.db"
+    preview_dir = tmp_path / "previews"
+    root_a = tmp_path / "library-a"
+    root_b = tmp_path / "library-b"
+    root_a.mkdir()
+    root_b.mkdir()
+    create_image(root_a / "a-1.jpg")
+    create_image(root_a / "a-2.jpg")
+    create_image(root_b / "b-1.jpg")
+
+    initialize_database(db_path)
+
+    with connect(db_path) as connection:
+        scan_root(connection, root=root_a, recursive=True, extensions=(".jpg",), preview_dir=preview_dir)
+        scan_root(connection, root=root_b, recursive=True, extensions=(".jpg",), preview_dir=preview_dir)
+        score_with_fake_learned_backend(connection)
+        b_id = int(connection.execute("SELECT id FROM files WHERE path LIKE ?", ("%b-1.jpg",)).fetchone()["id"])
+        update_review_state(
+            connection,
+            file_id=b_id,
+            decision_state="delete",
+            delete_marked=True,
+            export_marked=False,
+            updated_time="2026-07-20T00:00:00+00:00",
+        )
+
+        overview = review_overview(connection, root=str(root_b))
+        root_a_revision = review_selection_revision(connection, scope="review-browser", root=str(root_a))
+        root_b_revision = review_selection_revision(connection, scope="review-browser", root=str(root_b))
+        overview_none = review_overview(connection, root=None)
+        overview_empty = review_overview(connection, root=" ")
+
+    active = _dict_value(overview["active_library"])
+    catalog = _dict_value(overview["catalog"])
+    summary = _dict_value(overview["summary"])
+    assert active == {
+        "root": str(root_b.resolve()),
+        "total_files": 1,
+        "scored_files": 1,
+        "delete_marked": 1,
+        "export_marked": 0,
+    }
+    assert summary == {
+        "total_files": 1,
+        "scored_files": 1,
+        "delete_marked": 1,
+        "export_marked": 0,
+    }
+    assert catalog == {
+        "total_files": 3,
+        "scored_files": 3,
+        "delete_marked": 1,
+        "export_marked": 0,
+    }
+    assert root_a_revision != root_b_revision
+
+    active_none = _dict_value(overview_none["active_library"])
+    assert active_none == {
+        "root": None,
+        "total_files": 0,
+        "scored_files": 0,
+        "delete_marked": 0,
+        "export_marked": 0,
+    }
+
+    active_empty = _dict_value(overview_empty["active_library"])
+    assert active_empty == {
+        "root": None,
+        "total_files": 0,
+        "scored_files": 0,
+        "delete_marked": 0,
+        "export_marked": 0,
+    }
 
 
 def test_review_state_queries_do_not_require_scores(tmp_path: Path) -> None:

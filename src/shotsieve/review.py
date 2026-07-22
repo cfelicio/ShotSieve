@@ -5,8 +5,9 @@ from typing import Iterable, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from typing import Callable
 
-from shotsieve.config import BROWSER_SAFE_EXTENSIONS, PREVIEW_PRIORITY_EXTENSIONS, RAW_CAMERA_EXTENSIONS
-from shotsieve.db import escape_like, infer_preview_cache_roots, normalize_resolved_path, preview_cache_root_is_claimed, root_path_filter
+from shotsieve.config import RAW_CAMERA_EXTENSIONS
+from shotsieve.db import escape_like, infer_preview_cache_roots, normalize_resolved_path, preview_cache_root_is_claimed, roots_path_filter
+from shotsieve.performance import log_duration, monotonic_seconds
 from shotsieve.preview import clear_preview_cache_dir, delete_managed_preview_file
 
 
@@ -25,12 +26,20 @@ SORT_ORDERS = {
     "date_desc": "files.capture_time DESC, files.id ASC",
     "recent": "files.last_scan_time DESC, files.id DESC",
     "path": "files.path ASC",
+    "resolution_asc": "(files.width * files.height) ASC, files.id ASC",
+    "resolution_desc": "(files.width * files.height) DESC, files.id ASC",
+    "size_asc": "files.size_bytes ASC, files.id ASC",
+    "size_desc": "files.size_bytes DESC, files.id ASC",
+    "format": "files.format ASC, files.id ASC",
+    "width": "files.width ASC, files.id ASC",
+    "height": "files.height ASC, files.id ASC",
 }
 
 
-def review_overview(connection) -> dict[str, object]:
+def _review_summary(connection, *, root: str | None = None) -> dict[str, int]:
+    where_clause, params = _compile_where_clause(_build_file_filters(root=root))
     counts = connection.execute(
-        """
+        f"""
         SELECT
             COUNT(files.id) AS total_files,
             COUNT(scores.file_id) AS scored_files,
@@ -39,16 +48,50 @@ def review_overview(connection) -> dict[str, object]:
         FROM files
         LEFT JOIN scores ON scores.file_id = files.id
         LEFT JOIN review_state ON review_state.file_id = files.id
-        """
+        {where_clause}
+        """,
+        tuple(params),
     ).fetchone()
 
     return {
-        "summary": {
-            "total_files": counts["total_files"] or 0,
-            "scored_files": counts["scored_files"] or 0,
-            "delete_marked": counts["delete_marked"] or 0,
-            "export_marked": counts["export_marked"] or 0,
-        },
+        "total_files": int(counts["total_files"] or 0),
+        "scored_files": int(counts["scored_files"] or 0),
+        "delete_marked": int(counts["delete_marked"] or 0),
+        "export_marked": int(counts["export_marked"] or 0),
+    }
+
+
+def review_overview(connection, *, root: str | None = None) -> dict[str, object]:
+    """Return explicit active-library and catalog totals without splitting the cache."""
+    started_at = monotonic_seconds()
+    catalog = _review_summary(connection)
+    root_stripped = root.strip() if root else None
+    if root_stripped:
+        active_library = _review_summary(connection, root=root_stripped)
+        resolved_roots = [str(Path(p).expanduser().resolve()) for p in root_stripped.split("|") if p.strip()]
+        active_root = "|".join(resolved_roots) if resolved_roots else None
+    else:
+        active_library = {
+            "total_files": 0,
+            "scored_files": 0,
+            "delete_marked": 0,
+            "export_marked": 0,
+        }
+        active_root = None
+
+    log_duration(
+        "review.overview",
+        started_at,
+        scope="root" if root_stripped else "catalog",
+        total_files=active_library["total_files"],
+    )
+
+    return {
+        # Keep summary for existing callers. New clients should use the explicit
+        # active_library and catalog fields so their labels cannot be ambiguous.
+        "summary": active_library if root_stripped else catalog,
+        "active_library": {"root": active_root, **active_library},
+        "catalog": catalog,
         "roots": list_roots(connection),
         "scan_runs": list_scan_runs(connection),
     }
@@ -75,6 +118,65 @@ def list_scan_runs(connection, *, limit: int = 6) -> list[dict[str, object]]:
     return [dict(row) for row in rows]
 
 
+def list_analysis_diagnostics(
+    connection,
+    *,
+    root: str | None = None,
+    limit: int = 100,
+) -> dict[str, object]:
+    """Return actionable reasons for files that do not currently have a score."""
+    conditions, params = _build_file_filters(root=root)
+    conditions.append("scores.file_id IS NULL")
+    where_clause = "WHERE " + " AND ".join(conditions)
+    bounded_limit = max(1, min(int(limit), 500))
+
+    rows = connection.execute(
+        f"""
+        SELECT files.path, files.format, files.preview_status, files.last_error,
+               files.analysis_status, files.analysis_error, files.last_analysis_time
+        FROM files
+        LEFT JOIN scores ON scores.file_id = files.id
+        {where_clause}
+        ORDER BY files.last_analysis_time DESC, files.last_scan_time DESC, files.id ASC
+        LIMIT ?
+        """,
+        (*params, bounded_limit),
+    ).fetchall()
+    total_row = connection.execute(
+        f"""
+        SELECT COUNT(files.id) AS row_count
+        FROM files
+        LEFT JOIN scores ON scores.file_id = files.id
+        {where_clause}
+        """,
+        tuple(params),
+    ).fetchone()
+
+    items: list[dict[str, object]] = []
+    for row in rows:
+        status = str(row["analysis_status"] or "").strip() or "pending"
+        error = str(row["analysis_error"] or "").strip()
+        if row["preview_status"] == "failed":
+            detail = str(row["last_error"] or "").strip() or "Preview generation failed."
+            error = f"Preview generation failed: {detail}"
+            status = "failed"
+        if not error and status == "skipped":
+            error = "No compatible analysis image is available."
+        if not error and status == "failed":
+            error = "Analysis failed without an error detail."
+        if not error:
+            error = "Not analyzed yet. Run Analyze or Re-Score."
+        items.append({
+            "path": row["path"],
+            "format": row["format"],
+            "status": status,
+            "error": error,
+            "last_analysis_time": row["last_analysis_time"],
+        })
+
+    return {"total": int(total_row["row_count"] or 0), "items": items}
+
+
 
 def _build_file_filters(
     *,
@@ -86,16 +188,138 @@ def _build_file_filters(
     params: list[object] = []
 
     if root:
-        root_path = Path(root).expanduser().resolve()
-        root_clause, root_params = root_path_filter("files.path_key", root_path)
-        conditions.append(root_clause)
-        params.extend(root_params)
+        roots = [Path(p).expanduser().resolve() for p in root.split("|") if p.strip()]
+        if roots:
+            root_clause, root_params = roots_path_filter("files.path_key", roots)
+            conditions.append(root_clause)
+            params.extend(root_params)
 
     if path_query:
         conditions.append("unicode_casefold(files.path) LIKE ? ESCAPE '\\'")
         params.append(f"%{escape_like(path_query)}%")
 
     return conditions, params
+
+
+def _build_format_filters(*, formats: list[str] | None = None) -> tuple[list[str], list[object]]:
+    if not formats:
+        return [], []
+    
+    target_formats: set[str] = set()
+    include_other = False
+    
+    for f in formats:
+        f = f.strip().lower()
+        if not f:
+            continue
+        if f == "jpeg":
+            target_formats.update({"jpg", "jpeg"})
+        elif f == "png":
+            target_formats.add("png")
+        elif f == "tiff":
+            target_formats.update({"tif", "tiff"})
+        elif f in ("heif", "heic", "heif/heic"):
+            target_formats.update({"heic", "heif", "hif"})
+        elif f == "raw":
+            target_formats.update({ext.lstrip(".") for ext in RAW_CAMERA_EXTENSIONS})
+        elif f == "other":
+            include_other = True
+        else:
+            target_formats.add(f.lstrip("."))
+            
+    conditions: list[str] = []
+    params: list[object] = []
+    
+    sub_conditions: list[str] = []
+    if target_formats:
+        placeholders = ", ".join("?" for _ in target_formats)
+        sub_conditions.append(f"files.format IN ({placeholders})")
+        params.extend(target_formats)
+        
+    if include_other:
+        standard_sets = {"jpg", "jpeg", "png", "tif", "tiff", "heic", "heif", "hif"}
+        standard_sets.update({ext.lstrip(".") for ext in RAW_CAMERA_EXTENSIONS})
+        placeholders = ", ".join("?" for _ in standard_sets)
+        sub_conditions.append(f"files.format NOT IN ({placeholders}) OR files.format IS NULL")
+        params.extend(standard_sets)
+        
+    if sub_conditions:
+        conditions.append("(" + " OR ".join(sub_conditions) + ")")
+        
+    return conditions, params
+
+
+def _build_resolution_filters(
+    *,
+    min_mp: float | None = None,
+    max_mp: float | None = None,
+    min_width: int | None = None,
+    max_width: int | None = None,
+    min_height: int | None = None,
+    max_height: int | None = None,
+) -> tuple[list[str], list[object]]:
+    conditions: list[str] = []
+    params: list[object] = []
+    
+    if min_mp is not None:
+        conditions.append("files.width IS NOT NULL AND files.height IS NOT NULL AND (files.width * files.height) >= ?")
+        params.append(int(min_mp * 1_000_000))
+        
+    if max_mp is not None:
+        conditions.append("files.width IS NOT NULL AND files.height IS NOT NULL AND (files.width * files.height) <= ?")
+        params.append(int(max_mp * 1_000_000))
+        
+    if min_width is not None:
+        conditions.append("files.width IS NOT NULL AND files.width >= ?")
+        params.append(min_width)
+        
+    if max_width is not None:
+        conditions.append("files.width IS NOT NULL AND files.width <= ?")
+        params.append(max_width)
+        
+    if min_height is not None:
+        conditions.append("files.height IS NOT NULL AND files.height >= ?")
+        params.append(min_height)
+        
+    if max_height is not None:
+        conditions.append("files.height IS NOT NULL AND files.height <= ?")
+        params.append(max_height)
+        
+    return conditions, params
+
+
+def _build_size_filters(
+    *,
+    min_size: int | None = None,
+    max_size: int | None = None,
+) -> tuple[list[str], list[object]]:
+    conditions: list[str] = []
+    params: list[object] = []
+    
+    if min_size is not None:
+        conditions.append("files.size_bytes IS NOT NULL AND files.size_bytes >= ?")
+        params.append(min_size)
+        
+    if max_size is not None:
+        conditions.append("files.size_bytes IS NOT NULL AND files.size_bytes <= ?")
+        params.append(max_size)
+        
+    return conditions, params
+
+
+def _build_metadata_status_filters(*, metadata: str = "all") -> tuple[list[str], list[object]]:
+    conditions: list[str] = []
+    
+    if metadata not in {"all", "valid", "unknown"}:
+        raise ValueError("metadata must be one of: all, valid, unknown")
+        
+    if metadata == "unknown":
+        conditions.append("(files.width IS NULL OR files.height IS NULL OR files.size_bytes IS NULL OR files.format IS NULL)")
+    elif metadata == "valid":
+        conditions.append("(files.width IS NOT NULL AND files.height IS NOT NULL AND files.size_bytes IS NOT NULL AND files.format IS NOT NULL)")
+        
+    return conditions, []
+
 
 
 def _build_score_filters(
@@ -177,6 +401,16 @@ def _build_review_browser_where(
     query: str | None = None,
     min_score: float | None = None,
     max_score: float | None = None,
+    formats: list[str] | None = None,
+    min_mp: float | None = None,
+    max_mp: float | None = None,
+    min_width: int | None = None,
+    max_width: int | None = None,
+    min_height: int | None = None,
+    max_height: int | None = None,
+    min_size: int | None = None,
+    max_size: int | None = None,
+    metadata: str = "all",
 ) -> tuple[str, list[object]]:
     """Build the score-backed WHERE clause for the review browser queue."""
     return _compile_where_clause(
@@ -184,6 +418,14 @@ def _build_review_browser_where(
         _build_score_filters(require_scored=True, min_score=min_score, max_score=max_score),
         _build_review_state_filters(marked=marked),
         _build_issue_filters(issues=issues),
+        _build_format_filters(formats=formats),
+        _build_resolution_filters(
+            min_mp=min_mp, max_mp=max_mp,
+            min_width=min_width, max_width=max_width,
+            min_height=min_height, max_height=max_height,
+        ),
+        _build_size_filters(min_size=min_size, max_size=max_size),
+        _build_metadata_status_filters(metadata=metadata),
     )
 
 
@@ -196,11 +438,27 @@ def count_review_files(
     query: str | None = None,
     min_score: float | None = None,
     max_score: float | None = None,
+    formats: list[str] | None = None,
+    min_mp: float | None = None,
+    max_mp: float | None = None,
+    min_width: int | None = None,
+    max_width: int | None = None,
+    min_height: int | None = None,
+    max_height: int | None = None,
+    min_size: int | None = None,
+    max_size: int | None = None,
+    metadata: str = "all",
 ) -> int:
     """Return the total count of files matching the score-backed review browser filters."""
+    started_at = monotonic_seconds()
     where_clause, params = _build_review_browser_where(
         root=root, marked=marked, issues=issues,
         query=query, min_score=min_score, max_score=max_score,
+        formats=formats, min_mp=min_mp, max_mp=max_mp,
+        min_width=min_width, max_width=max_width,
+        min_height=min_height, max_height=max_height,
+        min_size=min_size, max_size=max_size,
+        metadata=metadata,
     )
     sql = f"""
         SELECT COUNT(*) AS total
@@ -210,7 +468,17 @@ def count_review_files(
         {where_clause}
     """
     row = connection.execute(sql, tuple(params)).fetchone()
-    return row["total"] or 0
+    total = int(row["total"] or 0)
+    log_duration(
+        "review.count",
+        started_at,
+        scope="root" if root else "catalog",
+        marked=marked,
+        issues=issues,
+        has_query=bool(query),
+        total=total,
+    )
+    return total
 
 
 def review_selection_revision(
@@ -223,7 +491,18 @@ def review_selection_revision(
     query: str | None = None,
     min_score: float | None = None,
     max_score: float | None = None,
+    formats: list[str] | None = None,
+    min_mp: float | None = None,
+    max_mp: float | None = None,
+    min_width: int | None = None,
+    max_width: int | None = None,
+    min_height: int | None = None,
+    max_height: int | None = None,
+    min_size: int | None = None,
+    max_size: int | None = None,
+    metadata: str = "all",
 ) -> str:
+    started_at = monotonic_seconds()
     if scope == "review-browser":
         where_clause, params = _build_review_browser_where(
             root=root,
@@ -232,6 +511,16 @@ def review_selection_revision(
             query=query,
             min_score=min_score,
             max_score=max_score,
+            formats=formats,
+            min_mp=min_mp,
+            max_mp=max_mp,
+            min_width=min_width,
+            max_width=max_width,
+            min_height=min_height,
+            max_height=max_height,
+            min_size=min_size,
+            max_size=max_size,
+            metadata=metadata,
         )
         joins = """
             LEFT JOIN scores ON scores.file_id = files.id
@@ -260,9 +549,15 @@ def review_selection_revision(
         """,
         tuple(params),
     ).fetchone()
-    return "|".join(
+    scope_key = "catalog"
+    if root:
+        resolved_roots = [normalize_resolved_path(Path(p).expanduser().resolve()) for p in root.split("|") if p.strip()]
+        scope_key = "|".join(resolved_roots) if resolved_roots else "catalog"
+    revision = "|".join(
         str(value or 0)
         for value in (
+            scope,
+            scope_key,
             row["total"],
             row["min_id"],
             row["max_id"],
@@ -270,6 +565,14 @@ def review_selection_revision(
             row["sum_sq_id"],
         )
     )
+    log_duration(
+        "review.selection_revision",
+        started_at,
+        scope=scope,
+        root_scoped=bool(root),
+        marked=marked,
+    )
+    return revision
 
 
 def list_review_files(
@@ -282,18 +585,34 @@ def list_review_files(
     query: str | None = None,
     min_score: float | None = None,
     max_score: float | None = None,
+    formats: list[str] | None = None,
+    min_mp: float | None = None,
+    max_mp: float | None = None,
+    min_width: int | None = None,
+    max_width: int | None = None,
+    min_height: int | None = None,
+    max_height: int | None = None,
+    min_size: int | None = None,
+    max_size: int | None = None,
+    metadata: str = "all",
     limit: int = 60,
     offset: int = 0,
 ) -> list[dict[str, object]]:
+    started_at = monotonic_seconds()
     order_by = SORT_ORDERS.get(sort, SORT_ORDERS["score_asc"])
     where_clause, params = _build_review_browser_where(
         root=root, marked=marked, issues=issues,
         query=query, min_score=min_score, max_score=max_score,
+        formats=formats, min_mp=min_mp, max_mp=max_mp,
+        min_width=min_width, max_width=max_width,
+        min_height=min_height, max_height=max_height,
+        min_size=min_size, max_size=max_size,
+        metadata=metadata,
     )
     sql_parts = [
         """
         SELECT files.id, files.path, files.format, files.preview_status, files.preview_path,
-             files.width, files.height, files.capture_time, files.last_error,
+             files.width, files.height, files.size_bytes, files.capture_time, files.last_error,
                scores.overall_score,
                scores.learned_backend, scores.learned_score_normalized, scores.learned_confidence,
                COALESCE(review_state.decision_state, 'pending') AS decision_state,
@@ -312,7 +631,17 @@ def list_review_files(
     params.extend([limit, offset])
 
     rows = connection.execute(" ".join(sql_parts), tuple(params)).fetchall()
-    return [dict(row) for row in rows]
+    payload = [dict(row) for row in rows]
+    log_duration(
+        "review.list",
+        started_at,
+        scope="root" if root else "catalog",
+        sort=sort if sort in SORT_ORDERS else "score_asc",
+        offset=offset,
+        limit=limit,
+        result_count=len(payload),
+    )
+    return payload
 
 
 def list_review_browser_file_ids(
@@ -324,6 +653,16 @@ def list_review_browser_file_ids(
     query: str | None = None,
     min_score: float | None = None,
     max_score: float | None = None,
+    formats: list[str] | None = None,
+    min_mp: float | None = None,
+    max_mp: float | None = None,
+    min_width: int | None = None,
+    max_width: int | None = None,
+    min_height: int | None = None,
+    max_height: int | None = None,
+    min_size: int | None = None,
+    max_size: int | None = None,
+    metadata: str = "all",
     limit: int | None = None,
     after_id: int | None = None,
 ) -> list[int]:
@@ -333,6 +672,14 @@ def list_review_browser_file_ids(
         _build_score_filters(require_scored=True, min_score=min_score, max_score=max_score),
         _build_review_state_filters(marked=marked),
         _build_issue_filters(issues=issues),
+        _build_format_filters(formats=formats),
+        _build_resolution_filters(
+            min_mp=min_mp, max_mp=max_mp,
+            min_width=min_width, max_width=max_width,
+            min_height=min_height, max_height=max_height,
+        ),
+        _build_size_filters(min_size=min_size, max_size=max_size),
+        _build_metadata_status_filters(metadata=metadata),
         _build_after_id_filter(after_id=after_id),
     )
     sql = f"""
@@ -813,20 +1160,11 @@ def _is_within_dir(path: Path, candidate_dir: Path) -> bool:
         return False
 
 
-_RAW_EXTENSIONS = RAW_CAMERA_EXTENSIONS
-_BROWSER_SAFE_SOURCE_EXTENSIONS = BROWSER_SAFE_EXTENSIONS
-_STRONGLY_PREFER_GENERATED_PREVIEW_EXTENSIONS = PREVIEW_PRIORITY_EXTENSIONS
-
-
 def _resolve_ready_preview_path(raw_preview_path: str | None, preview_status: str | None) -> Path | None:
     if not raw_preview_path or preview_status != "ready":
         return None
     preview_path = Path(raw_preview_path)
     return preview_path if preview_path.exists() else None
-
-
-def _should_strongly_prefer_generated_preview(source_ext: str) -> bool:
-    return source_ext.casefold() in _STRONGLY_PREFER_GENERATED_PREVIEW_EXTENSIONS
 
 
 def media_path_for_file(connection, *, file_id: int, variant: str) -> Path | None:

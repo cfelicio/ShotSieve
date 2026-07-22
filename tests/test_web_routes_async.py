@@ -169,6 +169,62 @@ class TestRouteHandlingAsync:
             release_event.set()
             server.shutdown()
 
+    def test_scan_async_forwards_ignore_rules_to_scanner(self, tmp_path: Path, monkeypatch):
+        from dataclasses import dataclass
+        from http.server import ThreadingHTTPServer
+        from shotsieve import web as web_module
+
+        @dataclass
+        class FakeSummary:
+            files_seen: int = 0
+            files_added: int = 0
+            files_updated: int = 0
+            files_unchanged: int = 0
+            files_removed: int = 0
+            files_failed: int = 0
+
+        captured: dict[str, object] = {}
+
+        def fake_scan_root(*_args, **kwargs):
+            captured["ignore_rules"] = kwargs["ignore_rules"]
+            return FakeSummary()
+
+        monkeypatch.setattr(web_module, "scan_root", fake_scan_root)
+
+        db_path = tmp_path / "data" / "shotsieve.db"
+        photo_dir = tmp_path / "photos"
+        excluded_dir = photo_dir / "Others" / "Beatrice Low Res"
+        excluded_dir.mkdir(parents=True)
+        initialize_database(db_path)
+
+        port = find_free_port()
+        server = ThreadingHTTPServer(("127.0.0.1", port), build_handler(db_path))
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            start_request = Request(
+                f"http://127.0.0.1:{port}/api/scan/start",
+                data=json.dumps({
+                    "roots": [str(photo_dir)],
+                    "generate_previews": False,
+                    "ignore_rules": [str(excluded_dir)],
+                }).encode("utf-8"),
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            job_id = json.loads(urlopen(start_request).read().decode("utf-8"))["job_id"]
+
+            deadline = time.time() + 2
+            while time.time() < deadline:
+                status = json.loads(urlopen(f"http://127.0.0.1:{port}/api/scan/status?job_id={job_id}").read().decode("utf-8"))
+                if status["status"] == "completed":
+                    break
+                time.sleep(0.05)
+        finally:
+            server.shutdown()
+
+        assert captured["ignore_rules"] == [str(excluded_dir)]
+
     def test_delete_async_status_and_result_routes(self, tmp_path: Path, monkeypatch):
         from http.server import ThreadingHTTPServer
         from shotsieve import web as web_module

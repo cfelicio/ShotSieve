@@ -36,10 +36,26 @@
       selectNone,
       selectAllMatching,
       invalidateLoadedReviewSelection,
+      activateLibraryScope,
+      resetReviewToActiveLibrary,
+      setReviewScope,
+      runPreflight,
+      renderLibraryRoots,
+      loadAnalysisDiagnostics,
     } = deps;
 
     const TAB_KEYS = new Set(["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Home", "End"]);
     let filterTimer = null;
+    let preflightTimer = null;
+
+    function triggerPreflightDebounced(delay = 250) {
+      window.clearTimeout(preflightTimer);
+      preflightTimer = window.setTimeout(() => {
+        if (typeof runPreflight === "function") {
+          runPreflight().catch(handleError);
+        }
+      }, delay);
+    }
 
     function moveTabFocus(currentButton, direction) {
       const buttons = [...document.querySelectorAll(".tab-button")].filter((button) => !button.hidden);
@@ -226,16 +242,62 @@
 
       document.getElementById("refresh-all").addEventListener("click", () => withBusy("Refreshing workspace...", () => refreshWorkspace()).catch(handleError));
       document.getElementById("clear-filters").addEventListener("click", () => {
-        ["query-filter", "min-score", "max-score"].forEach((id) => { document.getElementById(id).value = ""; });
-        ["root-filter", "marked-filter", "issues-filter"].forEach((id) => { document.getElementById(id).value = id === "root-filter" ? "" : "all"; });
+        ["query-filter", "min-score", "max-score", "filter-min-mp", "filter-max-mp", "filter-min-size", "filter-max-size"].forEach((id) => {
+          const el = document.getElementById(id);
+          if (el) el.value = "";
+        });
+        ["marked-filter", "issues-filter"].forEach((id) => {
+          const el = document.getElementById(id);
+          if (el) el.value = "all";
+        });
+        const metaStatus = document.getElementById("filter-metadata-status");
+        if (metaStatus) metaStatus.value = "all";
         document.getElementById("sort-filter").value = "learned_asc";
-        invalidateLoadedReviewSelection({ clearActiveSelection: true });
-        state.page = 0;
+        document.querySelectorAll("input[name='format-filter']").forEach((checkbox) => { checkbox.checked = true; });
+        resetReviewToActiveLibrary();
         loadQueue().catch(handleError);
       });
 
-      ["root-filter", "sort-filter", "marked-filter", "issues-filter"].forEach((id) => {
-        document.getElementById(id).addEventListener("change", () => {
+      const toggleAdvancedBtn = document.getElementById("toggle-advanced-filters");
+      if (toggleAdvancedBtn) {
+        toggleAdvancedBtn.addEventListener("click", () => {
+          const panel = document.getElementById("advanced-filters-panel");
+          if (panel.classList.contains("hidden")) {
+            panel.classList.remove("hidden");
+            toggleAdvancedBtn.textContent = "Hide Metadata Filters";
+          } else {
+            panel.classList.add("hidden");
+            toggleAdvancedBtn.textContent = "Show Metadata Filters";
+          }
+        });
+      }
+
+      ["root-filter", "sort-filter", "marked-filter", "issues-filter", "filter-metadata-status"].forEach((id) => {
+        const el = document.getElementById(id);
+        if (el) {
+          el.addEventListener("change", () => {
+            (async () => {
+            if (id === "root-filter") {
+              const root = document.getElementById("root-filter").value;
+              if (root) {
+                await activateLibraryScope(root);
+                return;
+              }
+              setReviewScope("");
+              await refreshWorkspace();
+              return;
+            }
+            invalidateLoadedReviewSelection({ clearActiveSelection: true });
+            state.page = 0;
+            saveUiState();
+            await loadQueue();
+            })().catch(handleError);
+          });
+        }
+      });
+
+      document.querySelectorAll("input[name='format-filter']").forEach((checkbox) => {
+        checkbox.addEventListener("change", () => {
           invalidateLoadedReviewSelection({ clearActiveSelection: true });
           state.page = 0;
           saveUiState();
@@ -243,22 +305,25 @@
         });
       });
 
-      ["min-score", "max-score"].forEach((id) => {
-        document.getElementById(id).addEventListener("change", () => { 
-          invalidateLoadedReviewSelection({ clearActiveSelection: true });
-          state.page = 0; 
-          saveUiState(); 
-          loadQueue().catch(handleError); 
-        });
-        document.getElementById(id).addEventListener("input", () => {
-          window.clearTimeout(filterTimer);
-          invalidateLoadedReviewSelection({ clearActiveSelection: true });
-          filterTimer = window.setTimeout(() => { 
+      ["min-score", "max-score", "filter-min-mp", "filter-max-mp", "filter-min-size", "filter-max-size"].forEach((id) => {
+        const el = document.getElementById(id);
+        if (el) {
+          el.addEventListener("change", () => { 
+            invalidateLoadedReviewSelection({ clearActiveSelection: true });
             state.page = 0; 
             saveUiState(); 
             loadQueue().catch(handleError); 
-          }, 250);
-        });
+          });
+          el.addEventListener("input", () => {
+            window.clearTimeout(filterTimer);
+            invalidateLoadedReviewSelection({ clearActiveSelection: true });
+            filterTimer = window.setTimeout(() => { 
+              state.page = 0; 
+              saveUiState(); 
+              loadQueue().catch(handleError); 
+            }, 250);
+          });
+        }
       });
 
       [
@@ -267,13 +332,106 @@
         "recursive-toggle",
         "model-select",
         "device-select",
+        "ignore-rules-input",
       ].forEach((id) => {
-        document.getElementById(id).addEventListener("change", () => {
-          saveUiState();
-        });
+        const el = document.getElementById(id);
+        if (el) {
+          el.addEventListener("change", () => {
+            saveUiState();
+          });
+        }
       });
 
-      document.getElementById("library-root-input").addEventListener("input", () => saveUiState());
+      document.getElementById("library-root-input").addEventListener("input", () => {
+        saveUiState();
+      });
+
+      document.getElementById("library-root-input").addEventListener("change", () => {
+        const val = document.getElementById("library-root-input").value;
+        activateLibraryScope(val).catch(handleError);
+        renderLibraryRoots();
+        if (typeof runPreflight === "function") {
+          runPreflight().catch(handleError);
+        }
+      });
+
+      document.getElementById("ignore-rules-input")?.addEventListener("input", () => {
+        saveUiState();
+        triggerPreflightDebounced(350);
+      });
+      document.getElementById("ignore-rules-input")?.addEventListener("change", () => {
+        saveUiState();
+        triggerPreflightDebounced(50);
+      });
+
+      document.getElementById("recursive-toggle")?.addEventListener("change", () => {
+        saveUiState();
+        triggerPreflightDebounced(50);
+      });
+
+      document.getElementById("extensions-input")?.addEventListener("input", () => {
+        saveUiState();
+        triggerPreflightDebounced(350);
+      });
+      document.getElementById("extensions-input")?.addEventListener("change", () => {
+        saveUiState();
+        triggerPreflightDebounced(50);
+      });
+
+      const addRootBtn = document.getElementById("browse-library-root");
+      if (addRootBtn) {
+        addRootBtn.addEventListener("click", () => {
+          openBrowser("add-root-helper-input").catch(handleError);
+        });
+      }
+
+      const addRootHelper = document.getElementById("add-root-helper-input");
+      if (addRootHelper) {
+        addRootHelper.addEventListener("change", () => {
+          const newPath = addRootHelper.value.trim();
+          if (!newPath) return;
+
+          const currentVal = document.getElementById("library-root-input").value;
+          const roots = currentVal.split("|").map(r => r.trim()).filter(Boolean);
+
+          if (!roots.includes(newPath)) {
+            roots.push(newPath);
+            const hiddenInput = document.getElementById("library-root-input");
+            hiddenInput.value = roots.join("|");
+            hiddenInput.dispatchEvent(new Event("input", { bubbles: true }));
+            hiddenInput.dispatchEvent(new Event("change", { bubbles: true }));
+          }
+          addRootHelper.value = "";
+        });
+      }
+
+      const excludeFolderBtn = document.getElementById("exclude-library-folder");
+      if (excludeFolderBtn) {
+        excludeFolderBtn.addEventListener("click", () => {
+          openBrowser("exclude-root-helper-input").catch(handleError);
+        });
+      }
+
+      const excludeRootHelper = document.getElementById("exclude-root-helper-input");
+      if (excludeRootHelper) {
+        excludeRootHelper.addEventListener("change", () => {
+          const newPath = excludeRootHelper.value.trim();
+          if (!newPath) return;
+
+          const textarea = document.getElementById("ignore-rules-input");
+          if (textarea) {
+            let currentVal = textarea.value.trim();
+            const lines = currentVal ? currentVal.split("\n").map(l => l.trim()).filter(Boolean) : [];
+            if (!lines.includes(newPath)) {
+              lines.push(newPath);
+              textarea.value = lines.join("\n");
+              textarea.dispatchEvent(new Event("input", { bubbles: true }));
+              textarea.dispatchEvent(new Event("change", { bubbles: true }));
+            }
+          }
+          excludeRootHelper.value = "";
+        });
+      }
 
       document.getElementById("query-filter").addEventListener("input", () => {
         window.clearTimeout(filterTimer);
@@ -337,6 +495,10 @@
 
       document.getElementById("compare-cancel-operation").addEventListener("click", requestOperationCancel);
 
+      document.getElementById("refresh-analysis-diagnostics")?.addEventListener("click", () => {
+        loadAnalysisDiagnostics().catch(handleError);
+      });
+
       confirmAndRun("prune-missing-cache", "Cleaning up missing files...", "missing", "Cleaned up missing files");
       confirmAndRun("clear-scores", "Clearing scores...", "scores", "Cleared score cache");
       confirmAndRun("clear-review", "Clearing review marks...", "review", "Cleared review marks");
@@ -360,13 +522,52 @@
         });
       }
 
-      document.getElementById("browse-library-root").addEventListener("click", () => openBrowser("library-root-input").catch(handleError));
       document.getElementById("browser-up").addEventListener("click", () => {
         if (!state.browserPath) return;
-        const parent = state.browserPath.replace(/[\\/]+$/, "").replace(/[\\/][^\\/]+$/, "") || state.browserPath;
+        const norm = state.browserPath.replace(/\\/g, "/").replace(/\/+$/, "");
+        const isUnc = state.browserPath.startsWith("\\\\") || state.browserPath.startsWith("//");
+        
+        let parent = "";
+        if (isUnc) {
+          const parts = norm.slice(2).split("/").filter(Boolean);
+          if (parts.length <= 2) {
+            parent = "\\\\" + parts.join("\\");
+          } else {
+            parts.pop();
+            parent = "\\\\" + parts.join("\\");
+          }
+        } else if (/^[a-zA-Z]:/.test(norm)) {
+          const driveLetter = norm.slice(0, 2);
+          const rest = norm.slice(2).split("/").filter(Boolean);
+          if (rest.length <= 1) {
+            parent = driveLetter + "\\";
+          } else {
+            rest.pop();
+            parent = driveLetter + "\\" + rest.join("\\");
+          }
+        } else {
+          const parts = norm.split("/").filter(Boolean);
+          if (parts.length <= 1) {
+            parent = "/";
+          } else {
+            parts.pop();
+            parent = "/" + parts.join("/");
+          }
+        }
+
         browseDirectory(parent).catch(handleError);
       });
       document.getElementById("browser-choose").addEventListener("click", chooseBrowserPath);
+
+      const browserPathInput = document.getElementById("browser-path");
+      if (browserPathInput) {
+        browserPathInput.addEventListener("keydown", (event) => {
+          if (event.key === "Enter") {
+            event.preventDefault();
+            browseDirectory(browserPathInput.value.trim()).catch(handleError);
+          }
+        });
+      }
 
       document.addEventListener("keydown", (event) => {
         if (isShortcutTarget(event.target)) {

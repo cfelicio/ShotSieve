@@ -7,7 +7,8 @@ import time
 from typing import Callable, Protocol, runtime_checkable
 
 from shotsieve.config import ALL_PREVIEWABLE_EXTENSIONS, DEFAULT_RAW_PREVIEW_MODE, PIL_ANALYSIS_EXTENSIONS, PREVIEW_PRIORITY_EXTENSIONS
-from shotsieve.db import root_path_filter, set_preview_cache_root
+from shotsieve.db import roots_path_filter, set_preview_cache_root
+from shotsieve.performance import log_duration, monotonic_seconds
 from shotsieve.learned_iqa import DEFAULT_BATCH_SIZE, DEFAULT_MODEL_NAME, LearnedIqaBackend, LearnedScoreResult, build_learned_backend, normalize_model_name, release_learned_backend, recommended_batch_size, recommended_cpu_workers, detect_hardware_capabilities, resolve_learned_model_version
 from shotsieve.preview import PreviewResult, generate_previews_parallel
 from shotsieve.scanner import utc_now
@@ -255,12 +256,13 @@ def score_files(
     *,
     limit: int | None = None,
     offset: int = 0,
-    raw_root: str | None = None,
+    raw_root: str | Sequence[str] | Sequence[Path] | None = None,
     force: bool = False,
     learned_backend_name: str | None = None,
     learned_device: str | None = None,
     learned_batch_size: int = DEFAULT_BATCH_SIZE,
     preview_dir: Path | None = None,
+
     preview_workers: int | None = None,
     raw_preview_mode: str = DEFAULT_RAW_PREVIEW_MODE,
     learned_backend_factory: Callable[[str], LearnedIqaBackend] | None = None,
@@ -287,6 +289,16 @@ def score_files(
     def drop_stale_score_row(row) -> None:
         if row["existing_score_id"] is not None:
             delete_score_row(connection, file_id=int(row["id"]))
+
+    def record_analysis_outcome(row, *, status: str, error: str | None = None) -> None:
+        connection.execute(
+            """
+            UPDATE files
+            SET analysis_status = ?, analysis_error = ?, last_analysis_time = ?
+            WHERE id = ?
+            """,
+            (status, error, utc_now(), _row_int(row, "id")),
+        )
 
     def queue_row_for_scoring(row) -> None:
         summary.files_considered += 1
@@ -394,13 +406,28 @@ def score_files(
 
     for row in prepared.unavailable_rows:
         drop_stale_score_row(row)
+        record_analysis_outcome(
+            row,
+            status="skipped",
+            error="No usable source image or ready preview is available for analysis.",
+        )
         summary.files_skipped += 1
 
     for unresolved_preview in prepared.unresolved_preview_results:
         drop_stale_score_row(unresolved_preview.row)
         if unresolved_preview.preview_result.status == "failed":
+            record_analysis_outcome(
+                unresolved_preview.row,
+                status="failed",
+                error=unresolved_preview.preview_result.error_text or "Preview generation failed before analysis.",
+            )
             summary.files_failed += 1
         else:
+            record_analysis_outcome(
+                unresolved_preview.row,
+                status="skipped",
+                error="A preview was unavailable for analysis.",
+            )
             summary.files_skipped += 1
 
     if not pending_learned:
@@ -449,6 +476,11 @@ def score_files(
             for (row, _), learned_result in zip(chunk, learned_results, strict=True):
                 if _is_failed_learned_result(learned_result):
                     delete_score_row(connection, file_id=_row_int(row, "id"))
+                    record_analysis_outcome(
+                        row,
+                        status="failed",
+                        error=learned_result.error or "The learned quality model returned no score.",
+                    )
                     summary.files_failed += 1
                     log.warning(
                         "Failed to score %s with backend %s: %s",
@@ -465,6 +497,7 @@ def score_files(
                     learned_backend=backend.name,
                     learned_model_version=backend.model_version,
                 )
+                record_analysis_outcome(row, status="ready")
                 summary.files_scored += 1
                 summary.learned_scored += 1
 
@@ -534,8 +567,9 @@ def compare_learned_models(
     model_names: list[str],
     limit: int | None = None,
     offset: int = 0,
-    raw_root: str | None = None,
+    raw_root: str | Sequence[str] | Sequence[Path] | None = None,
     learned_device: str | None = None,
+
     learned_batch_size: int = DEFAULT_BATCH_SIZE,
     learned_backend_factory: Callable[[str], LearnedIqaBackend] | None = None,
     compare_chunk_size: int | None = None,
@@ -731,7 +765,20 @@ def compare_learned_models(
     return summary
 
 
-def fetch_score_rows(connection, *, raw_root: str | None, limit: int | None, offset: int = 0):
+def _resolve_roots_argument(raw_root: str | Sequence[str] | Sequence[Path] | None) -> list[Path]:
+    if not raw_root:
+        return []
+    if isinstance(raw_root, str):
+        paths_str = [p.strip() for p in raw_root.split("|") if p.strip()]
+        return [Path(p).expanduser().resolve() for p in paths_str]
+    elif isinstance(raw_root, Path):
+        return [raw_root.expanduser().resolve()]
+    else:
+        return [Path(p).expanduser().resolve() for p in raw_root if p]
+
+
+def fetch_score_rows(connection, *, raw_root: str | Sequence[str] | Sequence[Path] | None, limit: int | None, offset: int = 0):
+    started_at = monotonic_seconds()
     query = [
         """
         SELECT files.id, files.path, files.path_key, files.preview_path, files.preview_status,
@@ -753,9 +800,9 @@ def fetch_score_rows(connection, *, raw_root: str | None, limit: int | None, off
     conditions: list[str] = []
     params: list[object] = []
 
-    if raw_root:
-        root = Path(raw_root).expanduser().resolve()
-        root_clause, root_params = root_path_filter("files.path_key", root)
+    roots = _resolve_roots_argument(raw_root)
+    if roots:
+        root_clause, root_params = roots_path_filter("files.path_key", roots)
         conditions.append(root_clause)
         params.extend(root_params)
 
@@ -774,10 +821,20 @@ def fetch_score_rows(connection, *, raw_root: str | None, limit: int | None, off
         query.append("LIMIT -1 OFFSET ?")
         params.append(offset)
 
-    return connection.execute(" ".join(query), tuple(params)).fetchall()
+    rows = connection.execute(" ".join(query), tuple(params)).fetchall()
+    log_duration(
+        "scoring.fetch_rows",
+        started_at,
+        scope="root" if raw_root else "catalog",
+        offset=offset,
+        limit=limit,
+        result_count=len(rows),
+    )
+    return rows
 
 
-def count_score_rows(connection, *, raw_root: str | None = None) -> int:
+def count_score_rows(connection, *, raw_root: str | Sequence[str] | Sequence[Path] | None = None) -> int:
+    started_at = monotonic_seconds()
     query = [
         """
         SELECT COUNT(files.id) AS row_count
@@ -786,16 +843,20 @@ def count_score_rows(connection, *, raw_root: str | None = None) -> int:
     ]
     params: list[object] = []
 
-    if raw_root:
-        root = Path(raw_root).expanduser().resolve()
-        root_clause, root_params = root_path_filter("files.path_key", root)
+    roots = _resolve_roots_argument(raw_root)
+    if roots:
+        root_clause, root_params = roots_path_filter("files.path_key", roots)
         query.append(f"WHERE {root_clause}")
         params.extend(root_params)
 
     row = connection.execute(" ".join(query), tuple(params)).fetchone()
     if row is None:
+        log_duration("scoring.count_rows", started_at, scope="root" if raw_root else "catalog", total=0)
         return 0
-    return int(row["row_count"] or 0)
+    total = int(row["row_count"] or 0)
+    log_duration("scoring.count_rows", started_at, scope="root" if raw_root else "catalog", total=total)
+    return total
+
 
 
 def delete_score_row(connection, *, file_id: int) -> None:

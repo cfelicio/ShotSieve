@@ -33,6 +33,27 @@ def test_initialize_database_creates_preview_path_index(tmp_path: Path) -> None:
     assert "idx_files_preview_path" in indexes
 
 
+def test_initialize_database_adds_analysis_diagnostic_columns_to_existing_files_table(tmp_path: Path) -> None:
+    db_path = tmp_path / "data" / "shotsieve.db"
+    db_path.parent.mkdir()
+    legacy_schema = SCHEMA_SQL.replace(
+        "    analysis_status TEXT,\n    analysis_error TEXT,\n    last_analysis_time TEXT\n",
+        "",
+    ).replace(
+        "    scan_status TEXT NOT NULL DEFAULT 'new',\n",
+        "    scan_status TEXT NOT NULL DEFAULT 'new'\n",
+    )
+    with sqlite3.connect(db_path) as connection:
+        connection.executescript(legacy_schema)
+
+    initialize_database(db_path)
+
+    with connect(db_path) as connection:
+        columns = {row["name"] for row in connection.execute("PRAGMA table_info(files)").fetchall()}
+
+    assert {"analysis_status", "analysis_error", "last_analysis_time"}.issubset(columns)
+
+
 def test_scan_populates_cache_and_preview(tmp_path: Path) -> None:
     db_path = tmp_path / "data" / "shotsieve.db"
     preview_dir = tmp_path / "previews"
@@ -174,6 +195,80 @@ def test_scan_removes_deleted_files_on_rescan(tmp_path: Path) -> None:
     assert summary.files_seen == 0
     assert summary.files_removed == 1
     assert count == 0
+
+
+def test_scan_excludes_absolute_folder_rules_and_removes_prior_rows(tmp_path: Path) -> None:
+    db_path = tmp_path / "data" / "shotsieve.db"
+    preview_dir = tmp_path / "previews"
+    photo_dir = tmp_path / "photos"
+    excluded_dir = photo_dir / "Others" / "Beatrice Low Res"
+    photo_dir.mkdir()
+    excluded_dir.mkdir(parents=True)
+    create_image(photo_dir / "keep.jpg")
+    create_image(excluded_dir / "exclude-1.jpg")
+    create_image(excluded_dir / "exclude-2.jpg")
+
+    initialize_database(db_path)
+
+    with connect(db_path) as connection:
+        scan_root(
+            connection,
+            root=photo_dir,
+            recursive=True,
+            extensions=(".jpg",),
+            preview_dir=preview_dir,
+            generate_previews=False,
+        )
+        summary = scan_root(
+            connection,
+            root=photo_dir,
+            recursive=True,
+            extensions=(".jpg",),
+            preview_dir=preview_dir,
+            generate_previews=False,
+            ignore_rules=(str(excluded_dir.resolve()),),
+        )
+        paths = [row["path"] for row in connection.execute("SELECT path FROM files ORDER BY path").fetchall()]
+
+    assert summary.files_seen == 1
+    assert summary.files_removed == 2
+    assert paths == [str((photo_dir / "keep.jpg").resolve())]
+
+
+def test_scan_and_preflight_apply_file_ignore_rules_consistently(tmp_path: Path) -> None:
+    db_path = tmp_path / "data" / "shotsieve.db"
+    preview_dir = tmp_path / "previews"
+    photo_dir = tmp_path / "photos"
+    photo_dir.mkdir()
+    create_image(photo_dir / "keep.jpg")
+    create_image(photo_dir / "ignored.jpg")
+
+    initialize_database(db_path)
+
+    from shotsieve.scanner import preflight_root
+
+    preflight = preflight_root(
+        photo_dir,
+        recursive=False,
+        extensions=(".jpg",),
+        ignore_rules=("ignored.jpg",),
+    )
+    with connect(db_path) as connection:
+        summary = scan_root(
+            connection,
+            root=photo_dir,
+            recursive=False,
+            extensions=(".jpg",),
+            preview_dir=preview_dir,
+            generate_previews=False,
+            ignore_rules=("ignored.jpg",),
+        )
+        paths = [row["path"] for row in connection.execute("SELECT path FROM files").fetchall()]
+
+    assert preflight["candidate_assets"] == 1
+    assert preflight["ignored_files_count"] == 1
+    assert summary.files_seen == 1
+    assert paths == [str((photo_dir / "keep.jpg").resolve())]
 
 
 def test_scan_rescan_does_not_purge_sibling_prefix_root_entries(tmp_path: Path) -> None:
