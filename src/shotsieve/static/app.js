@@ -165,6 +165,7 @@ const {
     showToast,
   },
   review: {
+    applyReviewUpdate,
     isAutoAdvanceEnabled,
     loadQueue,
     refreshOverview,
@@ -1180,6 +1181,29 @@ async function selectFile(fileId) {
   
   state.detail = await detailPromise;
   renderDetail();
+}
+
+function applyReviewUpdate(updatedDetail) {
+  const fileId = Number(updatedDetail?.id);
+  if (!Number.isInteger(fileId) || fileId <= 0) {
+    return false;
+  }
+
+  const queueIndex = state.queue.findIndex((item) => item.id === fileId);
+  if (queueIndex >= 0) {
+    state.queue[queueIndex] = {
+      ...state.queue[queueIndex],
+      ...updatedDetail,
+    };
+  }
+
+  state.activeId = fileId;
+  state.detail = state.detail?.id === fileId
+    ? { ...state.detail, ...updatedDetail }
+    : updatedDetail;
+  renderQueue();
+  renderDetail();
+  return queueIndex >= 0;
 }
 
 async function refreshWorkspace() {

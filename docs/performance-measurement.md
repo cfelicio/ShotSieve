@@ -60,6 +60,8 @@ SHOTSIEVE_RUN_PERFORMANCE_BASELINE=1 python -m pytest tests/test_performance_bas
 
 The test prints JSON containing fixture insertion time, catalog overview time, active-root Review and score-query timings, and `EXPLAIN QUERY PLAN` details for a representative root-prefix query. It does not benchmark real image analysis.
 
+The baseline's active-root measurements answer whether a small current library remains responsive inside a large shared catalog. They do **not** represent the intentional **All libraries** view at a deep page. When investigating reported lag in that view, enable application timing logs and compare both an early page and a late page for the selected sort.
+
 ## Measure a local photo folder
 
 `scripts/measure_performance.py` performs a safe, reproducible local measurement:
@@ -103,7 +105,14 @@ For each sample, record these workflows separately:
 4. **Cold score:** start with unscored cached rows; record model-load time separately from scoring progress.
 5. **Warm score:** repeat with unchanged files and the same model; verify no unnecessary learned-IQA work occurs.
 6. **Review switch:** open Review for a 100–500 photo active folder while the catalog contains 60,000+ cached/scored rows; record overview, first queue load, and navigation responsiveness.
-7. **Compare:** if comparison is a supported workflow, record model loading and per-image execution separately.
+7. **Global Review navigation:** only when diagnosing the explicit **All libraries** view, compare an early page and a late page for the active sort. Review renders a bounded page (60 photos by default) and lazy-loads queue thumbnails; investigate list/count/revision timing before assuming the browser loaded the catalog.
+8. **Compare:** if comparison is a supported workflow, record model loading and per-image execution separately.
+
+### Current Review query behavior
+
+ShotSieve creates score-order indexes during normal database initialization for the default lowest-AI-score sort and the score-descending sort. These improve deep-page Review queries without changing the stable file-ID tie-breaker.
+
+Single-photo Keep, Reject, and Reset actions update the visible Review page from the server response instead of fetching the queue again. Summary totals still refresh, so this is not a substitute for measuring page navigation or a bulk action.
 
 ## Record the environment with every run
 
@@ -116,6 +125,7 @@ Include the operating system, CPU/RAM/GPU/runtime, Python and SQLite versions, S
 - [ ] Incremental scan timing with changed/new files.
 - [ ] Cold and warm scoring timings, with model startup separated from per-image scoring.
 - [ ] Review first-page/count/revision timings for a small active library within a large catalog.
+- [ ] If global Review is a reported concern, early- and late-page timings for the relevant sort.
 - [ ] Format-specific observations for every format actually used by the workflow.
 - [ ] A written finding identifying the largest measured bottleneck and whether it is SQL, filesystem traversal, preview/decode work, model initialization, or model inference.
 - [ ] Query plans captured for every Review sort that is slow enough to investigate.

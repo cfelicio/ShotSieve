@@ -1004,6 +1004,23 @@ def test_review_keep_button_auto_advances_when_acting_on_active_photo(chromium_p
     expect(chromium_page.locator("#detail-title")).to_have_text(next_title)
 
 
+def test_review_keep_updates_current_page_without_reloading_queue(chromium_page) -> None:
+    chromium_page, expect = chromium_page
+    _open_review_tab(chromium_page)
+
+    requests: list[str] = []
+    chromium_page.on("request", lambda request: requests.append(request.url))
+
+    chromium_page.get_by_role("button", name="✓ Keep").click()
+
+    expect(chromium_page.locator("#queue-list .badge-select").first).to_be_visible()
+    chromium_page.wait_for_function(
+        "() => document.getElementById('detail-title')?.textContent === document.querySelectorAll('#queue-list .queue-file')[1]?.textContent"
+    )
+
+    assert not any("/api/files?" in url for url in requests)
+
+
 def test_review_batch_scope_label_clarifies_selected_target_after_opening_other_photo(chromium_page) -> None:
     chromium_page, expect = chromium_page
     _open_review_tab(chromium_page)

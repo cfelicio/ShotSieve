@@ -57,6 +57,12 @@ ON scores(overall_score);
 CREATE INDEX IF NOT EXISTS idx_scores_learned_normalized
 ON scores(learned_score_normalized);
 
+CREATE INDEX IF NOT EXISTS idx_scores_review_overall_desc_file
+ON scores(overall_score DESC, file_id ASC);
+
+CREATE INDEX IF NOT EXISTS idx_scores_review_learned_asc_file
+ON scores(learned_score_normalized ASC, overall_score ASC, file_id ASC);
+
 CREATE TABLE IF NOT EXISTS review_state (
     file_id INTEGER PRIMARY KEY,
     decision_state TEXT DEFAULT 'pending',

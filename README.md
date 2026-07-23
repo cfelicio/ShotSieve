@@ -126,6 +126,8 @@ The review server binds to `127.0.0.1:8765` by default. The UI is organized arou
 
 ShotSieve keeps one shared local catalog so previously generated previews and scores can be reused when you return to a folder. The selected `Library` folder(s) define the active scope for Review by default: its discovered, scored, rejected, and selected totals are shown separately from the explicitly labelled **All cached libraries** totals. Review also names the active scope above its filters.
 
+Review keeps navigation bounded even for a large shared catalog: it displays one page at a time (60 photos by default) and loads queue thumbnails only as they approach view. The explicit **All libraries (global)** view can still be slower than a small active library because it intentionally searches the whole catalog.
+
 ### Metadata-Led Culling & Filtering
 The Review interface supports advanced resolution and format culling tools to isolate target files:
 - **Format Groups**: Filter by JPEG, PNG, TIFF, HEIF, RAW, or other extensions.

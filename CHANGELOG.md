@@ -17,6 +17,7 @@ All notable changes to this project will be documented in this file.
 
 ### Changed
 
+- Improved large-catalog Review responsiveness by adding score-order indexes for the default AI-score and score-descending sorts. The Review queue remains paged, and single-photo keep/reject/reset actions now update the visible page without reloading the queue.
 - Optimised file scanning traversal by pruning ignored directory names directly from `os.walk` list before descending.
 
 - Made the selected Library folder the persisted default Review scope while retaining one shared catalog for preview and score reuse.

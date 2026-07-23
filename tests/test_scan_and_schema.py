@@ -33,6 +33,23 @@ def test_initialize_database_creates_preview_path_index(tmp_path: Path) -> None:
     assert "idx_files_preview_path" in indexes
 
 
+def test_initialize_database_creates_review_score_sort_indexes(tmp_path: Path) -> None:
+    db_path = tmp_path / "data" / "shotsieve.db"
+
+    initialize_database(db_path)
+
+    with connect(db_path) as connection:
+        indexes = {
+            row["name"]
+            for row in connection.execute("PRAGMA index_list(scores)").fetchall()
+        }
+
+    assert {
+        "idx_scores_review_overall_desc_file",
+        "idx_scores_review_learned_asc_file",
+    }.issubset(indexes)
+
+
 def test_initialize_database_adds_analysis_diagnostic_columns_to_existing_files_table(tmp_path: Path) -> None:
     db_path = tmp_path / "data" / "shotsieve.db"
     db_path.parent.mkdir()

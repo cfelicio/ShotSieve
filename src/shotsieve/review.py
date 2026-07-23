@@ -19,8 +19,8 @@ _PRUNE_MISSING_CACHE_BATCH_SIZE = 5000
 
 SORT_ORDERS = {
     "score_asc": "scores.overall_score ASC, files.id ASC",
-    "score_desc": "scores.overall_score DESC, files.id ASC",
-    "learned_asc": "scores.learned_score_normalized ASC, scores.overall_score ASC, files.id ASC",
+    "score_desc": "scores.overall_score DESC, scores.file_id ASC",
+    "learned_asc": "scores.learned_score_normalized ASC, scores.overall_score ASC, scores.file_id ASC",
     "learned_desc": "scores.learned_score_normalized DESC, files.id ASC",
     "date_asc": "files.capture_time ASC, files.id ASC",
     "date_desc": "files.capture_time DESC, files.id ASC",

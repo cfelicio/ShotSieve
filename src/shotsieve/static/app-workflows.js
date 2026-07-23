@@ -49,6 +49,7 @@
     } = formatting;
     const { addLogEntry, showToast } = notifications;
     const {
+      applyReviewUpdate,
       isAutoAdvanceEnabled,
       loadQueue,
       refreshOverview,
@@ -792,7 +793,11 @@
         showToast("Pick a file first.", "error");
         return;
       }
-      await postJson("/api/review", { file_id: state.activeId, ...payload });
+      const updatedDetail = await postJson("/api/review", { file_id: state.activeId, ...payload });
+      if (typeof applyReviewUpdate === "function" && applyReviewUpdate(updatedDetail)) {
+        await refreshOverview();
+        return;
+      }
       await refreshOverview();
       await loadQueue();
     }
