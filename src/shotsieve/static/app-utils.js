@@ -18,8 +18,8 @@
   function getScoreColor(value) {
     if (value === null || value === undefined) return "";
     const score = Number(value);
-    if (score >= 80) return "score-high";
-    if (score >= 50) return "score-mid";
+    if (score >= 70) return "score-high";
+    if (score >= 30) return "score-mid";
     return "score-low";
   }
 

@@ -252,7 +252,7 @@ def test_scan_excludes_absolute_folder_rules_and_removes_prior_rows(tmp_path: Pa
     assert paths == [str((photo_dir / "keep.jpg").resolve())]
 
 
-def test_scan_and_preflight_apply_file_ignore_rules_consistently(tmp_path: Path) -> None:
+def test_scan_applies_file_ignore_rules_consistently(tmp_path: Path) -> None:
     db_path = tmp_path / "data" / "shotsieve.db"
     preview_dir = tmp_path / "previews"
     photo_dir = tmp_path / "photos"
@@ -262,14 +262,6 @@ def test_scan_and_preflight_apply_file_ignore_rules_consistently(tmp_path: Path)
 
     initialize_database(db_path)
 
-    from shotsieve.scanner import preflight_root
-
-    preflight = preflight_root(
-        photo_dir,
-        recursive=False,
-        extensions=(".jpg",),
-        ignore_rules=("ignored.jpg",),
-    )
     with connect(db_path) as connection:
         summary = scan_root(
             connection,
@@ -282,8 +274,6 @@ def test_scan_and_preflight_apply_file_ignore_rules_consistently(tmp_path: Path)
         )
         paths = [row["path"] for row in connection.execute("SELECT path FROM files").fetchall()]
 
-    assert preflight["candidate_assets"] == 1
-    assert preflight["ignored_files_count"] == 1
     assert summary.files_seen == 1
     assert paths == [str((photo_dir / "keep.jpg").resolve())]
 

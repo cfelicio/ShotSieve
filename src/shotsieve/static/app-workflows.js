@@ -56,6 +56,7 @@
       refreshWorkspace,
       reviewDecisions,
       selectFile,
+      renderPagination,
       syncReviewRoot,
     } = review;
     const {
@@ -796,6 +797,9 @@
       const updatedDetail = await postJson("/api/review", { file_id: state.activeId, ...payload });
       if (typeof applyReviewUpdate === "function" && applyReviewUpdate(updatedDetail)) {
         await refreshOverview();
+        if (typeof renderPagination === "function") {
+          renderPagination();
+        }
         return;
       }
       await refreshOverview();
@@ -862,6 +866,8 @@
       return {
         file_ids: fileIds,
         count: fileIds.length,
+        selection_revision: currentSelectionRevision(),
+        page_selection: state.loadedReviewSelection?.selection || null,
       };
     }
 
@@ -1126,10 +1132,11 @@
 
       const filesTotalRef = { value: null };
       try {
-        // Lightweight hint from the existing cache (DB-only), avoids an expensive filesystem pre-walk.
+        // Lightweight hint from the existing cache (DB-only)
         const estimate = await postJson("/api/score-estimate", { root });
         const cachedTotal = Number(estimate.rows_total || 0);
         filesTotalRef.value = cachedTotal > 0 ? cachedTotal : null;
+      }
       } catch {
         filesTotalRef.value = null;
       }
@@ -1326,154 +1333,12 @@
             hiddenInput.dispatchEvent(new Event("input", { bubbles: true }));
             hiddenInput.dispatchEvent(new Event("change", { bubbles: true }));
             renderLibraryRoots();
-            if (typeof runPreflight === "function") {
-              runPreflight().catch(handleError);
-            }
           }
         });
       });
     }
 
-    let activePreflightSeq = 0;
 
-    async function runPreflight() {
-      const currentSeq = ++activePreflightSeq;
-      const rootStr = currentLibraryRoot();
-      const roots = rootStr.split("|").map(r => r.trim()).filter(Boolean);
-      const card = document.getElementById("preflight-card");
-      const spinner = document.getElementById("preflight-spinner");
-      const metrics = document.getElementById("preflight-metrics");
-      const warnings = document.getElementById("preflight-warnings");
-
-      if (roots.length === 0) {
-        if (currentSeq === activePreflightSeq) {
-          if (card) {
-            card.classList.add("hidden");
-            card.classList.remove("preflight-updating");
-          }
-          if (spinner) {
-            spinner.textContent = "Updating…";
-            spinner.classList.add("hidden");
-          }
-        }
-        return null;
-      }
-
-      if (card) {
-        card.classList.remove("hidden");
-        card.classList.add("preflight-updating");
-      }
-      if (spinner) {
-        spinner.textContent = "Updating…";
-        spinner.classList.remove("hidden");
-      }
-
-      const ignoreRulesStr = document.getElementById("ignore-rules-input")?.value || "";
-      const ignoreRules = ignoreRulesStr.split("\n").map(line => line.trim()).filter(Boolean);
-      const recursive = document.getElementById("recursive-toggle")?.checked ?? true;
-      const extensionsStr = document.getElementById("extensions-input")?.value || "";
-
-      try {
-        const payload = {
-          roots,
-          ignore_rules: ignoreRules,
-          recursive,
-          extensions: extensionsStr || "jpg,raw,png",
-        };
-        const startRes = await postJson("/api/library/preflight/start", payload);
-        const jobId = startRes?.job_id;
-        if (!jobId) {
-          if (currentSeq === activePreflightSeq) {
-            if (card) card.classList.remove("preflight-updating");
-            if (spinner) {
-              spinner.textContent = "Updating…";
-              spinner.classList.add("hidden");
-            }
-          }
-          return null;
-        }
-
-        let result = null;
-        while (true) {
-          if (currentSeq !== activePreflightSeq) {
-            return null;
-          }
-          const statusRes = await fetchJson(`/api/library/preflight/status?job_id=${encodeURIComponent(jobId)}`);
-          if (currentSeq !== activePreflightSeq) {
-            return null;
-          }
-
-          if (spinner && statusRes?.progress?.files_processed > 0) {
-            const count = Number(statusRes.progress.files_processed);
-            spinner.textContent = `Updating… (${formatNumber(count)} files)`;
-          }
-
-          if (statusRes?.status === "completed") {
-            result = await fetchJson(`/api/library/preflight/result?job_id=${encodeURIComponent(jobId)}`);
-            break;
-          }
-          if (statusRes?.status === "failed") {
-            throw new Error(statusRes.error || "Preflight check failed.");
-          }
-          await new Promise(resolve => window.setTimeout(resolve, 250));
-        }
-
-        if (currentSeq !== activePreflightSeq) {
-          return null;
-        }
-
-        if (spinner) {
-          spinner.textContent = "Updating…";
-          spinner.classList.add("hidden");
-        }
-        if (card) card.classList.remove("preflight-updating");
-
-        if (result && card && metrics) {
-          card.classList.remove("hidden");
-          metrics.innerHTML = `
-            <div class="preflight-metric-row">
-              <span class="preflight-metric-label">Candidate Photos:</span>
-              <span class="preflight-metric-value">${formatNumber(result.candidate_assets || 0)}</span>
-            </div>
-            <div class="preflight-metric-row">
-              <span class="preflight-metric-label">Ignored Folders:</span>
-              <span class="preflight-metric-value">${formatNumber(result.ignored_directories || 0)}</span>
-            </div>
-          `;
-          if (warnings) {
-            const warningMessages = [];
-            if (result.error_text) warningMessages.push(escapeHtml(result.error_text));
-            if (result.unreadable_directories > 0) warningMessages.push(`${result.unreadable_directories} unreadable directories`);
-            if (result.unreadable_files > 0) warningMessages.push(`${result.unreadable_files} unreadable files`);
-            if (warningMessages.length > 0) {
-              warnings.classList.remove("hidden");
-              warnings.innerHTML = warningMessages.join("<br>");
-            } else {
-              warnings.classList.add("hidden");
-              warnings.innerHTML = "";
-            }
-          }
-        }
-        return result;
-      } catch (err) {
-        if (currentSeq !== activePreflightSeq) {
-          return null;
-        }
-        if (spinner) {
-          spinner.textContent = "Updating…";
-          spinner.classList.add("hidden");
-        }
-        if (card) {
-          card.classList.remove("preflight-updating");
-          card.classList.remove("hidden");
-        }
-        if (warnings) {
-          warnings.classList.remove("hidden");
-          warnings.textContent = err?.message || "Preflight check failed.";
-        }
-        return null;
-      }
-    }
 
 
 
@@ -1646,7 +1511,7 @@
       const pathInput = document.getElementById("browser-path");
       if (pathInput) pathInput.value = path;
 
-      if (list) {
+      if (list && !list.children.length) {
         list.innerHTML = `<p class="muted">Loading directory contents...</p>`;
       }
 
@@ -1751,7 +1616,6 @@
       openBrowser,
       browseDirectory,
       chooseBrowserPath,
-      runPreflight,
       renderLibraryRoots,
       handleError,
     };

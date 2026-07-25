@@ -229,6 +229,13 @@ def generate_raw_preview(
     try:
         with _captured_stderr(stderr_buffer):
             with rawpy.imread(str(source_path)) as raw_image:
+                raw_width = None
+                raw_height = None
+                if hasattr(raw_image, "sizes") and raw_image.sizes is not None:
+                    sizes = raw_image.sizes
+                    raw_width = getattr(sizes, "iwidth", None) or getattr(sizes, "width", None)
+                    raw_height = getattr(sizes, "iheight", None) or getattr(sizes, "height", None)
+
                 # Fast path: extract the embedded JPEG thumbnail (most RAW files have one).
                 # Use it only when it is large enough for our target preview size;
                 # tiny embedded thumbnails look visibly softer than the source.
@@ -236,6 +243,8 @@ def generate_raw_preview(
                     raw_image,
                     preview_path,
                     raw_preview_mode=raw_preview_mode,
+                    raw_width=raw_width,
+                    raw_height=raw_height,
                 )
                 if result is not None:
                     cleanup_stale_preview_paths(stale_preview_paths)
@@ -260,6 +269,8 @@ def generate_raw_preview(
 
     image = Image.fromarray(rgb)
     width, height = image.size
+    if raw_width and raw_height:
+        width, height = raw_width, raw_height
     image.thumbnail(MAX_PREVIEW_SIZE, Image.Resampling.LANCZOS)
     image.save(preview_path, format="JPEG", quality=85, optimize=False)
     cleanup_stale_preview_paths(stale_preview_paths)
@@ -282,6 +293,8 @@ def _try_extract_raw_thumbnail(
     preview_path: Path,
     *,
     raw_preview_mode: str = DEFAULT_RAW_PREVIEW_MODE,
+    raw_width: int | None = None,
+    raw_height: int | None = None,
 ) -> PreviewResult | None:
     """Try to extract the embedded JPEG thumbnail from a RAW file.
 
@@ -315,18 +328,19 @@ def _try_extract_raw_thumbnail(
                         image = image.convert("RGB")
                     image.thumbnail(MAX_PREVIEW_SIZE, Image.Resampling.LANCZOS)
                     image.save(preview_path, format="JPEG", quality=85, optimize=False)
-                    width, height = image.size
                 else:
                     preview_path.write_bytes(thumb.data)
         except (OSError, UnidentifiedImageError):
             # Thumbnail was written but unreadable — treat as failed extraction.
             return None
 
+        final_w = raw_width if (raw_width and raw_height) else width
+        final_h = raw_height if (raw_width and raw_height) else height
         return PreviewResult(
             path=str(preview_path.resolve()),
             status="ready",
-            width=width,
-            height=height,
+            width=final_w,
+            height=final_h,
             capture_time=capture_time,
         )
 
@@ -339,11 +353,13 @@ def _try_extract_raw_thumbnail(
         image.thumbnail(MAX_PREVIEW_SIZE, Image.Resampling.LANCZOS)
         image.save(preview_path, format="JPEG", quality=85, optimize=False)
 
+        final_w = raw_width if (raw_width and raw_height) else width
+        final_h = raw_height if (raw_width and raw_height) else height
         return PreviewResult(
             path=str(preview_path.resolve()),
             status="ready",
-            width=width,
-            height=height,
+            width=final_w,
+            height=final_h,
             capture_time=capture_time,
         )
 

@@ -119,7 +119,7 @@ Runtime compatibility note: `qalign` is **not** available on `cpu` or `directml`
 
 The review server binds to `127.0.0.1:8765` by default. The UI is organized around four tabs:
 
-1. `Library` for managing multiple workspace source folders, setting directory ignore rules, running preflight validation audits, and launching scan/score actions.
+1. `Library` for managing multiple workspace source folders, setting directory ignore rules, and launching scan/score actions.
 2. `Compare` for side-by-side learned-model benchmarking.
 3. `Review` for queue navigation, filtering (by score, format, megapixels, size, and completeness), sorting, marking, and export/delete flows.
 4. `Settings` for runtime info, resource profile, and maintenance actions.

@@ -257,6 +257,8 @@ def _build_resolution_filters(
     max_width: int | None = None,
     min_height: int | None = None,
     max_height: int | None = None,
+    min_edge: int | None = None,
+    max_edge: int | None = None,
 ) -> tuple[list[str], list[object]]:
     conditions: list[str] = []
     params: list[object] = []
@@ -284,6 +286,14 @@ def _build_resolution_filters(
     if max_height is not None:
         conditions.append("files.height IS NOT NULL AND files.height <= ?")
         params.append(max_height)
+    
+    if min_edge is not None:
+        conditions.append("files.width IS NOT NULL AND files.height IS NOT NULL AND (CASE WHEN files.width > files.height THEN files.width ELSE files.height END) >= ?")
+        params.append(min_edge)
+
+    if max_edge is not None:
+        conditions.append("files.width IS NOT NULL AND files.height IS NOT NULL AND (CASE WHEN files.width > files.height THEN files.width ELSE files.height END) <= ?")
+        params.append(max_edge)
         
     return conditions, params
 
@@ -408,6 +418,8 @@ def _build_review_browser_where(
     max_width: int | None = None,
     min_height: int | None = None,
     max_height: int | None = None,
+    min_edge: int | None = None,
+    max_edge: int | None = None,
     min_size: int | None = None,
     max_size: int | None = None,
     metadata: str = "all",
@@ -423,6 +435,7 @@ def _build_review_browser_where(
             min_mp=min_mp, max_mp=max_mp,
             min_width=min_width, max_width=max_width,
             min_height=min_height, max_height=max_height,
+            min_edge=min_edge, max_edge=max_edge,
         ),
         _build_size_filters(min_size=min_size, max_size=max_size),
         _build_metadata_status_filters(metadata=metadata),
@@ -445,6 +458,8 @@ def count_review_files(
     max_width: int | None = None,
     min_height: int | None = None,
     max_height: int | None = None,
+    min_edge: int | None = None,
+    max_edge: int | None = None,
     min_size: int | None = None,
     max_size: int | None = None,
     metadata: str = "all",
@@ -457,6 +472,7 @@ def count_review_files(
         formats=formats, min_mp=min_mp, max_mp=max_mp,
         min_width=min_width, max_width=max_width,
         min_height=min_height, max_height=max_height,
+        min_edge=min_edge, max_edge=max_edge,
         min_size=min_size, max_size=max_size,
         metadata=metadata,
     )
@@ -498,6 +514,8 @@ def review_selection_revision(
     max_width: int | None = None,
     min_height: int | None = None,
     max_height: int | None = None,
+    min_edge: int | None = None,
+    max_edge: int | None = None,
     min_size: int | None = None,
     max_size: int | None = None,
     metadata: str = "all",
@@ -518,6 +536,8 @@ def review_selection_revision(
             max_width=max_width,
             min_height=min_height,
             max_height=max_height,
+            min_edge=min_edge,
+            max_edge=max_edge,
             min_size=min_size,
             max_size=max_size,
             metadata=metadata,
@@ -592,6 +612,8 @@ def list_review_files(
     max_width: int | None = None,
     min_height: int | None = None,
     max_height: int | None = None,
+    min_edge: int | None = None,
+    max_edge: int | None = None,
     min_size: int | None = None,
     max_size: int | None = None,
     metadata: str = "all",
@@ -606,6 +628,7 @@ def list_review_files(
         formats=formats, min_mp=min_mp, max_mp=max_mp,
         min_width=min_width, max_width=max_width,
         min_height=min_height, max_height=max_height,
+        min_edge=min_edge, max_edge=max_edge,
         min_size=min_size, max_size=max_size,
         metadata=metadata,
     )
@@ -660,6 +683,8 @@ def list_review_browser_file_ids(
     max_width: int | None = None,
     min_height: int | None = None,
     max_height: int | None = None,
+    min_edge: int | None = None,
+    max_edge: int | None = None,
     min_size: int | None = None,
     max_size: int | None = None,
     metadata: str = "all",
@@ -677,6 +702,7 @@ def list_review_browser_file_ids(
             min_mp=min_mp, max_mp=max_mp,
             min_width=min_width, max_width=max_width,
             min_height=min_height, max_height=max_height,
+            min_edge=min_edge, max_edge=max_edge,
         ),
         _build_size_filters(min_size=min_size, max_size=max_size),
         _build_metadata_status_filters(metadata=metadata),
@@ -735,7 +761,7 @@ def get_review_file_detail(connection, file_id: int) -> dict[str, object] | None
     row = connection.execute(
         """
         SELECT files.id, files.path, files.format, files.preview_status, files.preview_path,
-             files.width, files.height, files.capture_time, files.last_error,
+               files.width, files.height, files.size_bytes, files.capture_time, files.last_error,
                scores.overall_score,
                scores.learned_backend, scores.learned_raw_score, scores.learned_score_normalized,
                scores.learned_confidence,

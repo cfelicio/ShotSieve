@@ -24,6 +24,13 @@ All notable changes to this project will be documented in this file.
 - Displayed separate **This library** and **All cached libraries** totals for discovered, scored, rejected, and selected photos, with a clear global Review scope indicator.
 - Scoped rejected-file move and deletion shortcuts to the active library and named that library in destructive deletion confirmations.
 
+### Fixed
+
+- Fixed review-state and review-browser bulk delete/move requests so they require an explicit active-library root and cannot widen to the full catalog when the root is missing.
+- Fixed direct file_ids delete and export/move operations by requiring page-level selection revision tokens to guard against stale selections after navigation or catalog updates.
+- Fixed the Review rejected-actions bar so it stays consistent after repeated reject, move, and delete cycles.
+- Fixed RAW image metadata extraction to record full RAW sensor dimensions and megapixels instead of embedded JPEG thumbnail dimensions.
+
 ## [0.2.3] - 2026-05-01
 
 ### Added

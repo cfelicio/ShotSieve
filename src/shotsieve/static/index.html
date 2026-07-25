@@ -65,15 +65,6 @@
             </div>
           </div>
 
-          <div id="preflight-card" class="preflight-card hidden">
-            <div class="preflight-header">
-              <h3 id="preflight-title">Preflight Summary</h3>
-              <span id="preflight-spinner" class="preflight-spinner hidden" aria-live="polite">Updating…</span>
-            </div>
-            <div id="preflight-metrics" class="preflight-metrics"></div>
-            <div id="preflight-warnings" class="preflight-warnings hidden"></div>
-          </div>
-
           <div class="library-actions">
             <button id="analyze-library" type="button" class="primary-action" data-busy-lock="true">
               Analyze
@@ -213,134 +204,138 @@
 
     <!-- ─── REVIEW TAB ─── -->
     <section class="tab-panel" id="tab-review" role="tabpanel" aria-labelledby="tab-review-button" hidden>
-      <div class="review-layout">
-        <section class="review-sidebar">
-          <div class="sidebar-scroller">
-            <p id="review-scope-context" class="review-scope-context" data-scope="library" role="status" aria-live="polite"></p>
-            <div class="sidebar-group" aria-label="Review filters">
-              <div class="filter-grid compact-filters">
-                <label class="floating-label filter-span-full">
-                  <span class="label-text">Search</span>
-                  <input id="query-filter" type="search" placeholder="Filename or folder...">
-                </label>
-                <label class="floating-label">
-                  <span class="label-text">Library Root</span>
-                  <select id="root-filter">
-                    <option value="">All libraries (global)</option>
-                  </select>
-                </label>
-                <label class="floating-label">
-                  <span class="label-text">Sort</span>
-                  <select id="sort-filter">
-                    <optgroup label="Score">
-                      <option value="learned_asc">Lowest Score</option>
-                      <option value="learned_desc">Highest Score</option>
-                    </optgroup>
-                    <optgroup label="Resolution & Size">
-                      <option value="resolution_asc">Resolution (Low to High)</option>
-                      <option value="resolution_desc">Resolution (High to Low)</option>
-                      <option value="size_asc">File Size (Small to Large)</option>
-                      <option value="size_desc">File Size (Large to Small)</option>
-                    </optgroup>
-                    <optgroup label="Dimensions & Format">
-                      <option value="format">Format Name</option>
-                      <option value="width">Width</option>
-                      <option value="height">Height</option>
-                    </optgroup>
-                    <optgroup label="Other">
-                      <option value="date_asc">Oldest Date</option>
-                      <option value="date_desc">Newest Date</option>
-                      <option value="recent">Recent Scan</option>
-                      <option value="path">Path A–Z</option>
-                    </optgroup>
-                  </select>
-                </label>
-                <label class="floating-label">
-                  <span class="label-text">Visibility</span>
-                  <select id="marked-filter">
-                    <option value="all">All Photos</option>
-                    <option value="delete">Rejected</option>
-                    <option value="export">Selected</option>
-                  </select>
-                </label>
-                <label class="floating-label">
-                  <span class="label-text">Issues</span>
-                  <select id="issues-filter">
-                    <option value="all">All Photos</option>
-                    <option value="issues">Issues Only</option>
-                  </select>
-                </label>
+      <p id="review-scope-context" class="review-scope-context" data-scope="library" role="status" aria-live="polite"></p>
 
-                <div class="filter-span-full advanced-filters-toggle-row">
-                  <button id="toggle-advanced-filters" type="button" class="ghost text-button link-style">Show Metadata Filters</button>
-                </div>
+      <!-- Top Horizontal Filter Toolbar -->
+      <header class="review-topbar" aria-label="Review filters">
+        <div class="topbar-filter-row">
+          <div class="filter-input-wrap filter-search-wrap">
+            <input id="query-filter" type="search" placeholder="Search filename or path...">
+          </div>
+          <div class="filter-input-wrap filter-select-wrap">
+            <select id="root-filter" aria-label="Library Root">
+              <option value="">All libraries (global)</option>
+            </select>
+          </div>
+          <div class="filter-input-wrap filter-select-wrap">
+            <select id="sort-filter" aria-label="Sort Order">
+              <optgroup label="Score">
+                <option value="learned_asc">Lowest Score</option>
+                <option value="learned_desc">Highest Score</option>
+              </optgroup>
+              <optgroup label="Resolution & Size">
+                <option value="resolution_asc">Resolution (Low to High)</option>
+                <option value="resolution_desc">Resolution (High to Low)</option>
+                <option value="size_asc">File Size (Small to Large)</option>
+                <option value="size_desc">File Size (Large to Small)</option>
+              </optgroup>
+              <optgroup label="Dimensions & Format">
+                <option value="format">Format Name</option>
+                <option value="width">Width</option>
+                <option value="height">Height</option>
+              </optgroup>
+              <optgroup label="Other">
+                <option value="date_asc">Oldest Date</option>
+                <option value="date_desc">Newest Date</option>
+                <option value="recent">Recent Scan</option>
+                <option value="path">Path A–Z</option>
+              </optgroup>
+            </select>
+          </div>
+          <div class="filter-input-wrap filter-select-wrap">
+            <select id="marked-filter" aria-label="Visibility Status">
+              <option value="all">All Photos</option>
+              <option value="delete">Rejected</option>
+              <option value="export">Selected</option>
+            </select>
+          </div>
+          <div class="filter-input-wrap filter-select-wrap">
+            <select id="issues-filter" aria-label="Issue Filter">
+              <option value="all">All Photos</option>
+              <option value="issues">Issues Only</option>
+            </select>
+          </div>
+          <button id="toggle-advanced-filters" type="button" class="ghost text-button">⚙️ Metadata Filters</button>
+          <button id="clear-filters" type="button" class="ghost text-button">Reset Filters</button>
+        </div>
 
-                <div id="advanced-filters-panel" class="filter-span-full advanced-filters-panel hidden">
-                  <div class="advanced-filters-grid">
-                    <div class="filter-group">
-                      <span class="label-text">Formats</span>
-                      <div class="format-checkboxes">
-                        <label class="checkbox-label"><input type="checkbox" name="format-filter" value="jpeg" checked> JPEG</label>
-                        <label class="checkbox-label"><input type="checkbox" name="format-filter" value="png" checked> PNG</label>
-                        <label class="checkbox-label"><input type="checkbox" name="format-filter" value="tiff" checked> TIFF</label>
-                        <label class="checkbox-label"><input type="checkbox" name="format-filter" value="heif" checked> HEIF</label>
-                        <label class="checkbox-label"><input type="checkbox" name="format-filter" value="raw" checked> RAW</label>
-                        <label class="checkbox-label"><input type="checkbox" name="format-filter" value="other" checked> Other</label>
-                      </div>
-                    </div>
-
-                    <div class="filter-inputs-row">
-                      <label class="floating-label">
-                        <span class="label-text">Min Megapixels (MP)</span>
-                        <input id="filter-min-mp" type="number" step="0.1" min="0" placeholder="e.g. 12">
-                      </label>
-                      <label class="floating-label">
-                        <span class="label-text">Max Megapixels (MP)</span>
-                        <input id="filter-max-mp" type="number" step="0.1" min="0" placeholder="e.g. 50">
-                      </label>
-                    </div>
-
-                    <div class="filter-inputs-row">
-                      <label class="floating-label">
-                        <span class="label-text">Min Size (MB)</span>
-                        <input id="filter-min-size" type="number" step="0.1" min="0" placeholder="e.g. 1">
-                      </label>
-                      <label class="floating-label">
-                        <span class="label-text">Max Size (MB)</span>
-                        <input id="filter-max-size" type="number" step="0.1" min="0" placeholder="e.g. 100">
-                      </label>
-                    </div>
-
-                    <div class="filter-inputs-row">
-                      <label class="floating-label filter-span-full">
-                        <span class="label-text">Metadata Completeness</span>
-                        <select id="filter-metadata-status">
-                          <option value="all">All Photos</option>
-                          <option value="valid">Valid Metadata Only</option>
-                          <option value="unknown">Unknown/Missing Metadata</option>
-                        </select>
-                      </label>
-                    </div>
-                  </div>
-                </div>
-
-                <div class="filter-inline-pair filter-span-full">
-                  <label class="floating-label">
-                    <span class="label-text">Min AI Score</span>
-                    <input id="min-score" type="number" min="0" max="100" placeholder="0">
-                  </label>
-                  <label class="floating-label">
-                    <span class="label-text">Max AI Score</span>
-                    <input id="max-score" type="number" min="0" max="100" placeholder="100">
-                  </label>
-                </div>
+        <!-- Expanded Advanced Metadata Filters Drawer -->
+        <div id="advanced-filters-panel" class="advanced-filters-panel hidden">
+          <div class="advanced-filters-grid">
+            <div class="filter-group format-filter-group">
+              <span class="label-text">Formats</span>
+              <div class="format-chips-bar" id="format-chips-bar">
+                <button type="button" class="format-chip active" data-chip-format="all">ALL</button>
+                <button type="button" class="format-chip active" data-chip-format="jpeg">JPEG</button>
+                <button type="button" class="format-chip active" data-chip-format="raw">RAW</button>
+                <button type="button" class="format-chip active" data-chip-format="png">PNG</button>
+                <button type="button" class="format-chip active" data-chip-format="heif">HEIF</button>
+                <button type="button" class="format-chip active" data-chip-format="tiff">TIFF</button>
+                <button type="button" class="format-chip active" data-chip-format="other">Other</button>
               </div>
-              <div class="sidebar-actions">
-                <button id="clear-filters" type="button" class="ghost">Reset Filters</button>
+              <div class="format-checkboxes hidden">
+                <label class="checkbox-label"><input type="checkbox" name="format-filter" value="jpeg" checked> JPEG</label>
+                <label class="checkbox-label"><input type="checkbox" name="format-filter" value="png" checked> PNG</label>
+                <label class="checkbox-label"><input type="checkbox" name="format-filter" value="tiff" checked> TIFF</label>
+                <label class="checkbox-label"><input type="checkbox" name="format-filter" value="heif" checked> HEIF</label>
+                <label class="checkbox-label"><input type="checkbox" name="format-filter" value="raw" checked> RAW</label>
+                <label class="checkbox-label"><input type="checkbox" name="format-filter" value="other" checked> Other</label>
               </div>
             </div>
 
+            <div class="filter-inputs-row">
+              <label class="floating-label">
+                <span class="label-text">Min Megapixels (MP)</span>
+                <input id="filter-min-mp" type="number" step="0.1" min="0" placeholder="e.g. 12">
+              </label>
+              <label class="floating-label">
+                <span class="label-text">Max Megapixels (MP)</span>
+                <input id="filter-max-mp" type="number" step="0.1" min="0" placeholder="e.g. 50">
+              </label>
+              <label class="floating-label">
+                <span class="label-text">Min Longest Edge (px)</span>
+                <input id="filter-min-edge" type="number" step="1" min="0" placeholder="e.g. 1920">
+              </label>
+              <label class="floating-label">
+                <span class="label-text">Max Longest Edge (px)</span>
+                <input id="filter-max-edge" type="number" step="1" min="0" placeholder="e.g. 4000">
+              </label>
+              <label class="floating-label">
+                <span class="label-text">Min Size (MB)</span>
+                <input id="filter-min-size" type="number" step="0.1" min="0" placeholder="e.g. 1">
+              </label>
+              <label class="floating-label">
+                <span class="label-text">Max Size (MB)</span>
+                <input id="filter-max-size" type="number" step="0.1" min="0" placeholder="e.g. 100">
+              </label>
+            </div>
 
+            <div class="filter-inputs-row">
+              <label class="floating-label">
+                <span class="label-text">Min AI Score</span>
+                <input id="min-score" type="number" min="0" max="100" placeholder="0">
+              </label>
+              <label class="floating-label">
+                <span class="label-text">Max AI Score</span>
+                <input id="max-score" type="number" min="0" max="100" placeholder="100">
+              </label>
+              <label class="floating-label filter-span-full">
+                <span class="label-text">Metadata Completeness</span>
+                <select id="filter-metadata-status">
+                  <option value="all">All Photos</option>
+                  <option value="valid">Valid Metadata Only</option>
+                  <option value="unknown">Unknown/Missing Metadata</option>
+                </select>
+              </label>
+            </div>
+          </div>
+        </div>
+      </header>
+
+      <!-- 2-Column Split Workspace -->
+      <div class="review-layout" id="review-layout">
+        <section class="review-sidebar" id="review-sidebar">
+          <div class="sidebar-scroller">
             <div class="sidebar-group" aria-labelledby="review-batch-heading">
               <h3 id="review-batch-heading" class="sidebar-label">Batch Actions</h3>
               <div class="batch-bar" id="batch-bar">
@@ -362,6 +357,7 @@
                 </div>
               </div>
             </div>
+
             <div class="pagination-bar" id="pagination-bar">
               <span id="page-info" class="muted">Showing 0 of 0</span>
               <div class="pagination-actions">
@@ -376,9 +372,13 @@
               <button id="delete-all-rejected" type="button" class="danger-ghost" data-busy-lock="true">Delete rejected in this library</button>
             </div>
 
+            <!-- Dedicated Full-Height Vertical Queue -->
             <div id="queue-list" class="queue-list"></div>
           </div>
         </section>
+
+        <!-- Interactive Splitter Resizer Handle -->
+        <div id="review-splitter" class="review-splitter" role="separator" tabindex="0" aria-label="Resize sidebar width" title="Drag to adjust sidebar width"></div>
 
         <section class="panel board-panel review-detail" aria-label="Selected photo details">
           <div id="detail-empty" class="detail-empty">Select a photo from the list to view details, scores, and make your keep/reject decision.</div>
@@ -388,8 +388,8 @@
                 <p id="detail-title" class="detail-title"></p>
                 <p id="review-position" class="review-position"></p>
                 <p id="detail-path" class="detail-path"></p>
-                <p id="detail-scoreline" class="detail-scoreline"></p>
-                <div id="detail-metadata-strip" class="detail-metadata-strip"></div>
+                <p id="detail-scoreline" class="detail-scoreline hidden"></p>
+                <div id="detail-metadata-strip" class="detail-metadata-strip hidden"></div>
                 <p id="detail-issues-note" class="detail-issues-note hidden"></p>
               </div>
               <div class="inline-actions detail-toolbar-actions">
@@ -401,6 +401,9 @@
 
             <div class="detail-grid">
               <div class="detail-media-shell">
+                <div id="detail-image-stats-badge" class="detail-image-stats-badge hidden" aria-label="Photo dimensions and file properties">
+                  <!-- Dynamically populated overlay stats -->
+                </div>
                 <img id="detail-image" alt="Selected photo preview" role="button" tabindex="0" aria-label="Open selected photo in lightbox">
               </div>
             </div>
@@ -411,98 +414,118 @@
 
     <!-- ─── SETTINGS TAB ─── -->
     <section class="tab-panel" id="tab-settings" role="tabpanel" aria-labelledby="tab-settings-button" hidden>
-      <div class="settings-layout">
-        <section class="panel settings-panel">
-          <div class="panel-topline">
-            <div>
-              <p class="eyebrow">System Information</p>
-              <h2>Your Setup</h2>
+      <div class="settings-layout settings-dashboard">
+        <!-- Left Column: System & Runtime Capabilities -->
+        <div class="settings-column">
+          <section class="panel settings-card">
+            <div class="panel-topline">
+              <div>
+                <p class="eyebrow">Hardware Acceleration</p>
+                <h2>System Capabilities</h2>
+              </div>
             </div>
-          </div>
-          <p class="settings-help">ShotSieve runs locally on your machine. Here's what's available for photo analysis.</p>
+            <p class="settings-help">ShotSieve leverages your computer's local hardware for fast AI scoring.</p>
 
-          <div class="settings-section">
-            <h3 class="settings-subhead">Detected Hardware</h3>
-            <div id="hardware-cards" class="runtime-cards"></div>
-          </div>
+            <div class="settings-section">
+              <h3 class="settings-subhead">Detected Hardware</h3>
+              <div id="hardware-cards" class="runtime-cards"></div>
+            </div>
 
-          <div class="settings-section">
-            <h3 class="settings-subhead">Runtime & Formats</h3>
-            <div id="runtime-cards" class="runtime-cards"></div>
-          </div>
+            <div class="settings-section">
+              <h3 class="settings-subhead">Runtime Engine &amp; Support</h3>
+              <div id="runtime-cards" class="runtime-cards"></div>
+            </div>
+          </section>
 
-          <div class="settings-section">
-            <h3 class="settings-subhead">Resource Usage</h3>
-            <p class="settings-help">Controls how aggressively ShotSieve uses your CPU and GPU during analysis. Change this if you need to use your computer for other tasks while scanning.</p>
-            <div class="form-grid two-up">
+          <section class="panel settings-card">
+            <div class="panel-topline">
+              <div>
+                <p class="eyebrow">Performance Tuning</p>
+                <h2>Resource Allocation</h2>
+              </div>
+            </div>
+            <p class="settings-help">Control CPU cores and GPU memory limits for background photo analysis.</p>
+            <div class="form-grid">
               <label>
                 <span>Performance Profile</span>
                 <select id="resource-profile-select">
-                  <option value="aggressive">Aggressive - Uses almost all CPU cores and GPU memory</option>
-                  <option value="normal" selected>Normal - Balanced usage, leaves room for other tasks</option>
-                  <option value="low">Low - Minimal resource usage for background processing</option>
+                  <option value="aggressive">Aggressive - Maximum CPU cores &amp; GPU memory</option>
+                  <option value="normal" selected>Normal - Balanced usage, leaves room for multitasking</option>
+                  <option value="low">Low - Quiet background processing</option>
                 </select>
                 <span id="resource-profile-detail" class="field-hint">Current scaling will appear here after hardware detection.</span>
               </label>
             </div>
-          </div>
+          </section>
 
-          <div id="system-info" class="system-info-grid"></div>
-        </section>
+          <section class="panel settings-card">
+            <div class="panel-topline">
+              <div>
+                <p class="eyebrow">Storage Engine</p>
+                <h2>System Storage &amp; Formats</h2>
+              </div>
+            </div>
+            <p class="settings-help">Database and image cache storage paths on your local machine.</p>
+            <div id="system-info" class="system-info-grid"></div>
+          </section>
+        </div>
 
-        <section class="panel settings-panel">
-          <div class="panel-topline">
-            <div>
-              <p class="eyebrow">Troubleshooting</p>
-              <h2>Analysis Diagnostics</h2>
+        <!-- Right Column: Diagnostics & Maintenance -->
+        <div class="settings-column">
+          <section class="panel settings-card">
+            <div class="panel-topline">
+              <div>
+                <p class="eyebrow">Maintenance</p>
+                <h2>Database &amp; Cleanup</h2>
+              </div>
             </div>
-            <button id="refresh-analysis-diagnostics" type="button" class="ghost">Refresh</button>
-          </div>
-          <p id="analysis-diagnostics-summary" class="settings-help" role="status" aria-live="polite">
-            Checking for photos that need attention…
-          </p>
-          <div id="analysis-diagnostics-list" class="analysis-diagnostics-list"></div>
-        </section>
+            <p class="settings-help">Manage database state and clear cached calculations. Original photos are never modified or deleted.</p>
+            <div class="maintenance-grid">
+              <div class="maintenance-item">
+                <button id="prune-missing-cache" type="button" data-busy-lock="true"
+                  data-confirm="This removes database entries for photos that no longer exist on disk. Your actual files are NOT deleted - only stale references are cleaned up.">
+                  Clean Up Missing Files
+                </button>
+                <p class="maintenance-desc">Purge database records for moved or deleted files</p>
+              </div>
+              <div class="maintenance-item">
+                <button id="clear-scores" type="button" class="ghost" data-busy-lock="true"
+                  data-confirm="This erases all quality scores. You'll need to re-run scoring to get scores back. Your photos and review decisions are not affected.">
+                  Reset All Scores
+                </button>
+                <p class="maintenance-desc">Erase quality scores to re-analyze with updated models</p>
+              </div>
+              <div class="maintenance-item">
+                <button id="clear-review" type="button" class="ghost" data-busy-lock="true"
+                  data-confirm="This clears all keep/reject decisions. Your photos and scores are not affected.">
+                  Reset All Reviews
+                </button>
+                <p class="maintenance-desc">Clear keep/reject marks across all photos</p>
+              </div>
+              <div class="maintenance-item">
+                <button id="clear-all-cache" type="button" class="danger" data-busy-lock="true"
+                  data-confirm="This completely resets ShotSieve's database - all scores, reviews, and cached information will be erased. Your original photo files are never touched. You'll start fresh.">
+                  Reset Everything
+                </button>
+                <p class="maintenance-desc">Wipe database cache completely and start fresh</p>
+              </div>
+            </div>
+          </section>
 
-        <section class="panel settings-panel">
-          <div class="panel-topline">
-            <div>
-              <p class="eyebrow">Maintenance</p>
-              <h2>Database &amp; Cleanup</h2>
+          <section class="panel settings-card">
+            <div class="panel-topline">
+              <div>
+                <p class="eyebrow">Troubleshooting</p>
+                <h2>Analysis Diagnostics</h2>
+              </div>
+              <button id="refresh-analysis-diagnostics" type="button" class="ghost">Refresh</button>
             </div>
-          </div>
-          <p class="settings-help">Manage your ShotSieve database. These actions are permanent and cannot be undone.</p>
-          <div class="maintenance-grid">
-            <div class="maintenance-item">
-              <button id="prune-missing-cache" type="button" data-busy-lock="true"
-                data-confirm="This removes database entries for photos that no longer exist on disk. Your actual files are NOT deleted - only stale references are cleaned up.">
-                Clean Up Missing Files
-              </button>
-              <p class="maintenance-desc">Remove entries for photos that were moved or deleted outside ShotSieve</p>
-            </div>
-            <div class="maintenance-item">
-              <button id="clear-scores" type="button" class="ghost" data-busy-lock="true"
-                data-confirm="This erases all quality scores. You'll need to re-run scoring to get scores back. Your photos and review decisions are not affected.">
-                Reset All Scores
-              </button>
-              <p class="maintenance-desc">Erase quality scores so you can re-analyze with different settings</p>
-            </div>
-            <div class="maintenance-item">
-              <button id="clear-review" type="button" class="ghost" data-busy-lock="true"
-                data-confirm="This clears all keep/reject decisions. Your photos and scores are not affected.">
-                Reset All Reviews
-              </button>
-              <p class="maintenance-desc">Clear all keep/reject decisions</p>
-            </div>
-            <div class="maintenance-item">
-              <button id="clear-all-cache" type="button" class="danger" data-busy-lock="true"
-                data-confirm="This completely resets ShotSieve's database - all scores, reviews, and cached information will be erased. Your original photo files are never touched. You'll start fresh.">
-                Reset Everything
-              </button>
-              <p class="maintenance-desc">Completely wipe the database and start fresh (photos are never deleted)</p>
-            </div>
-          </div>
-        </section>
+            <p id="analysis-diagnostics-summary" class="settings-help" role="status" aria-live="polite">
+              Checking for photos that need attention…
+            </p>
+            <div id="analysis-diagnostics-list" class="analysis-diagnostics-list"></div>
+          </section>
+        </div>
       </div>
     </section>
   </main>

@@ -130,7 +130,6 @@ class WebRouteContext:
     media_mime_fallbacks: dict[str, str]
     dependencies: object
     operation_registry: JobRegistry | None = None
-    preflight_registry: JobRegistry | None = None
 
 
 def _require_registry(registry: JobRegistry | None, *, label: str) -> JobRegistry:
@@ -268,7 +267,6 @@ def _handle_job_get_routes(handler: Any, context: WebRouteContext, parsed: Any) 
         "/api/operations/status": (context.operation_registry, "Operation"),
         "/api/score/status": (context.score_registry, "Score"),
         "/api/scan/status": (context.scan_registry, "Scan"),
-        "/api/library/preflight/status": (context.preflight_registry, "Preflight"),
     }
     status_route = status_routes.get(parsed.path)
     if status_route is not None:
@@ -281,7 +279,6 @@ def _handle_job_get_routes(handler: Any, context: WebRouteContext, parsed: Any) 
         "/api/operations/result": (context.operation_registry, "Operation"),
         "/api/score/result": (context.score_registry, "Score"),
         "/api/scan/result": (context.scan_registry, "Scan"),
-        "/api/library/preflight/result": (context.preflight_registry, "Preflight"),
     }
     result_route = result_routes.get(parsed.path)
     if result_route is None:
@@ -319,6 +316,8 @@ def _handle_review_get_routes(handler: Any, context: WebRouteContext, parsed: An
         max_width = deps.optional_int(deps.first_value(params, "max_width", None))
         min_height = deps.optional_int(deps.first_value(params, "min_height", None))
         max_height = deps.optional_int(deps.first_value(params, "max_height", None))
+        min_edge = deps.optional_int(deps.first_value(params, "min_edge", None))
+        max_edge = deps.optional_int(deps.first_value(params, "max_edge", None))
         min_size = deps.optional_int(deps.first_value(params, "min_size", None))
         max_size = deps.optional_int(deps.first_value(params, "max_size", None))
         metadata = deps.first_value(params, "metadata", "all")
@@ -342,6 +341,8 @@ def _handle_review_get_routes(handler: Any, context: WebRouteContext, parsed: An
                     max_width=max_width,
                     min_height=min_height,
                     max_height=max_height,
+                    min_edge=min_edge,
+                    max_edge=max_edge,
                     min_size=min_size,
                     max_size=max_size,
                     metadata=metadata,
@@ -363,6 +364,8 @@ def _handle_review_get_routes(handler: Any, context: WebRouteContext, parsed: An
                     max_width=max_width,
                     min_height=min_height,
                     max_height=max_height,
+                    min_edge=min_edge,
+                    max_edge=max_edge,
                     min_size=min_size,
                     max_size=max_size,
                     metadata=metadata,
@@ -622,6 +625,8 @@ def _parse_selection_payload(deps: WebRouteDependencies, payload: dict[str, obje
         "query": deps.optional_string(raw_selection.get("query")),
         "selection_revision": deps.optional_string(payload.get("selection_revision")),
     }
+    if scope == "review-state" and not selection["root"]:
+        raise ValueError("selection.root is required for review-state bulk actions")
     if scope == "review-browser":
         selection["issues"] = deps.required_choice(
             raw_selection.get("issues") or "all",
@@ -679,6 +684,49 @@ def _validate_selection_revision(connection: Any, deps: WebRouteDependencies, se
     )
     if selection_revision != current_revision:
         raise ValueError("Selected results changed. Refresh the queue and select again.")
+
+
+def _validate_page_revision(connection: Any, deps: WebRouteDependencies, payload: dict[str, object]) -> None:
+    """Validate that the page the caller was viewing hasn't changed since it was loaded.
+
+    This guards the direct file_ids path against stale selections: the
+    frontend sends the revision and filter context of its currently loaded
+    page so the backend can recompute and compare.
+    """
+    page_revision = deps.optional_string(payload.get("selection_revision"))
+    page_selection = payload.get("page_selection")
+    if not page_revision:
+        raise ValueError("selection_revision is required for file_ids operations")
+    if not page_selection or not isinstance(page_selection, dict):
+        raise ValueError("page_selection is required for file_ids operations")
+    current = deps.review_selection_revision(
+        connection,
+        scope=page_selection.get("scope", "review-browser"),
+        root=deps.optional_string(page_selection.get("root")),
+        marked=page_selection.get("marked", "all"),
+        issues=page_selection.get("issues", "all"),
+        query=deps.optional_string(page_selection.get("query")),
+        min_score=_optional_payload_float(deps, page_selection.get("min_score"), name="page_selection.min_score"),
+        max_score=_optional_payload_float(deps, page_selection.get("max_score"), name="page_selection.max_score"),
+        formats=_optional_payload_string_list(deps, page_selection.get("formats"), name="page_selection.formats"),
+        min_mp=_optional_payload_float(deps, page_selection.get("min_mp"), name="page_selection.min_mp"),
+        max_mp=_optional_payload_float(deps, page_selection.get("max_mp"), name="page_selection.max_mp"),
+        min_width=_optional_payload_int(deps, page_selection.get("min_width"), name="page_selection.min_width"),
+        max_width=_optional_payload_int(deps, page_selection.get("max_width"), name="page_selection.max_width"),
+        min_height=_optional_payload_int(deps, page_selection.get("min_height"), name="page_selection.min_height"),
+        max_height=_optional_payload_int(deps, page_selection.get("max_height"), name="page_selection.max_height"),
+        min_size=_optional_payload_int(deps, page_selection.get("min_size"), name="page_selection.min_size"),
+        max_size=_optional_payload_int(deps, page_selection.get("max_size"), name="page_selection.max_size"),
+        metadata=page_selection.get("metadata", "all"),
+    )
+    if page_revision != current:
+        raise ValueError("Selected results changed. Refresh the queue and select again.")
+
+
+def _require_root_for_destructive_selection(selection: dict[str, object]) -> None:
+    """Reject destructive bulk operations that have no root scope."""
+    if not selection.get("root"):
+        raise ValueError("selection.root is required for destructive bulk operations")
 
 
 def _materialize_selection_batches(connection: Any, deps: WebRouteDependencies, selection: dict[str, object]) -> list[list[int]]:
@@ -854,11 +902,6 @@ def _handle_analysis_post_routes(handler: Any, context: WebRouteContext, parsed:
         start_compare_job(handler, context, payload)
         return True
 
-    if parsed.path == "/api/library/preflight/start":
-        payload = deps.read_json_body(handler, max_body_size=context.max_request_body_size)
-        start_preflight_job(handler, context, payload)
-        return True
-
     if parsed.path in {"/api/score-estimate", "/api/compare-estimate"}:
         _send_rows_total_estimate(handler, context)
         return True
@@ -872,7 +915,6 @@ def _handle_job_cancel_post_routes(handler: Any, context: WebRouteContext, parse
         "/api/operations/cancel": context.operation_registry,
         "/api/score/cancel": context.score_registry,
         "/api/scan/cancel": context.scan_registry,
-        "/api/library/preflight/cancel": context.preflight_registry,
     }
     registry = cancel_routes.get(parsed.path)
     if registry is None:
@@ -1008,6 +1050,8 @@ def _execute_delete_request(
 ) -> DeleteResultPayload:
     deps = cast(WebRouteDependencies, context.dependencies)
     selection = _parse_selection_payload(deps, payload)
+    if selection is not None:
+        _require_root_for_destructive_selection(selection)
     delete_from_disk = deps.coerce_bool(payload.get("delete_from_disk"), default=False)
     total_hint = _progress_total_hint(deps, payload)
 
@@ -1015,6 +1059,7 @@ def _execute_delete_request(
         preview_cache_root = deps.get_preview_cache_root(connection, db_path=context.db_path, persist=False)
         if selection is None:
             file_ids = deps.required_int_list(payload.get("file_ids"), name="file_ids")
+            _validate_page_revision(connection, deps, payload)
             total = total_hint if total_hint is not None else len(file_ids)
             if progress_callback is not None:
                 progress_callback(0, total, "deleting_files")
@@ -1077,6 +1122,8 @@ def _execute_export_request(
 ) -> object:
     deps = cast(WebRouteDependencies, context.dependencies)
     selection = _parse_selection_payload(deps, payload)
+    if selection is not None:
+        _require_root_for_destructive_selection(selection)
     destination = deps.optional_string(payload.get("destination"))
     mode_raw = payload.get("mode")
     mode = (
@@ -1093,6 +1140,7 @@ def _execute_export_request(
         preview_cache_root = deps.get_preview_cache_root(connection, db_path=context.db_path, persist=False)
         if selection is None:
             file_ids = deps.required_int_list(payload.get("file_ids"), name="file_ids")
+            _validate_page_revision(connection, deps, payload)
             total = total_hint if total_hint is not None else len(file_ids)
             if progress_callback is not None:
                 progress_callback(0, total, phase)
@@ -1691,119 +1739,4 @@ def send_json_error(handler: Any, status: HTTPStatus, message: str) -> None:
         raise
 
 
-def start_preflight_job(handler: Any, context: WebRouteContext, payload: dict[str, object]) -> None:
-    deps = cast(WebRouteDependencies, context.dependencies)
-    preflight_registry = _require_registry(context.preflight_registry, label="Preflight")
-
-    try:
-        raw_roots = payload.get("roots")
-        roots = deps.required_path_list(raw_roots, name="roots")
-        ignore_rules = deps.required_string_list(payload.get("ignore_rules"), name="ignore_rules")
-        recursive = deps.coerce_bool(payload.get("recursive"), default=True)
-        extensions = parse_extensions(deps.optional_string(payload.get("extensions")))
-    except Exception as exc:
-        handler.send_error(HTTPStatus.BAD_REQUEST, str(exc))
-        return
-
-    # Deduplicate resolved roots
-    resolved_roots = []
-    seen = set()
-    for root in roots:
-        res = root.expanduser().resolve()
-        if res not in seen:
-            seen.add(res)
-            resolved_roots.append(root)
-
-    # Validate overlapping roots
-    from shotsieve.scanner import check_overlapping_roots
-    overlaps = check_overlapping_roots(resolved_roots)
-    if overlaps:
-        parent, child = overlaps[0]
-        handler.send_error(
-            HTTPStatus.BAD_REQUEST,
-            f"Overlapping folders detected: '{child}' is a subfolder of '{parent}'. Please remove the subfolder."
-        )
-        return
-
-    job_id = preflight_registry.create(initial_progress={
-        "phase": "preflight",
-        "files_processed": 0,
-        "files_total": 0,
-    })
-
-    def run_preflight_job() -> None:
-        try:
-            from shotsieve.scanner import preflight_root
-            # Get preview cache root to exclude it from preflight traversal
-            with deps.database(context.db_path) as connection:
-                preview_dir = deps.get_preview_cache_root(connection, db_path=context.db_path, persist=False)
-                existing_preview_roots = []
-                stored_preview_root = deps.get_preview_cache_root(connection, db_path=context.db_path, persist=False)
-                if stored_preview_root:
-                    existing_preview_roots.append(stored_preview_root)
-                from shotsieve.db import infer_preview_cache_roots
-                existing_preview_roots.extend(infer_preview_cache_roots(connection))
-                excluded_preview_dirs = list(dict.fromkeys(existing_preview_roots))
-
-            def cancel_check() -> None:
-                if preflight_registry.is_cancelled(job_id):
-                    raise InterruptedError("Preflight job was cancelled by user.")
-
-            def publish_progress(count: int) -> None:
-                preflight_registry.update_progress(job_id, {
-                    "phase": "preflight",
-                    "files_processed": count,
-                    "files_total": 0,
-                })
-
-            sources = []
-            combined_assets = 0
-            combined_bytes = 0
-            combined_ignored_dirs = 0
-            combined_ignored_files = 0
-            combined_unreadable_dirs = 0
-            combined_unreadable_files = 0
-            representative_error = None
-            start_time = time.monotonic()
-
-            for root in resolved_roots:
-                cancel_check()
-                res = preflight_root(
-                    root,
-                    recursive=recursive,
-                    extensions=extensions,
-                    excluded_dirs=excluded_preview_dirs,
-                    ignore_rules=ignore_rules,
-                    cancel_check=cancel_check,
-                    progress_callback=publish_progress,
-                )
-                sources.append(res)
-                combined_assets += res["candidate_assets"]
-                combined_bytes += res["source_bytes"]
-                combined_ignored_dirs += res["ignored_directories"]
-                combined_ignored_files += res["ignored_files_count"]
-                combined_unreadable_dirs += res["unreadable_directories"]
-                combined_unreadable_files += res["unreadable_files"]
-                if res.get("error_text"):
-                    representative_error = res["error_text"]
-
-            duration_ms = int((time.monotonic() - start_time) * 1000)
-            summary = {
-                "sources": sources,
-                "candidate_assets": combined_assets,
-                "source_bytes": combined_bytes,
-                "ignored_directories": combined_ignored_dirs,
-                "ignored_files_count": combined_ignored_files,
-                "unreadable_directories": combined_unreadable_dirs,
-                "unreadable_files": combined_unreadable_files,
-                "error_text": representative_error,
-                "exact": True,
-                "duration_ms": duration_ms
-            }
-            preflight_registry.complete(job_id, summary=summary)
-        except Exception as exc:
-            preflight_registry.fail(job_id, error=str(exc))
-
-    deps.thread_factory(target=run_preflight_job, daemon=True).start()
-    send_json(handler, {"job_id": job_id, "status": "running"})
 

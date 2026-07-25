@@ -791,6 +791,7 @@ class TestRouteHandling:
                 "selection": {
                     "scope": "review-state",
                     "marked": "delete",
+                    "root": str(tmp_path / "library"),
                 },
                 "selection_revision": "rev-1",
                 "delete_from_disk": True,
@@ -829,6 +830,44 @@ class TestRouteHandling:
             "failed_count": 0,
             "delete_from_disk": True,
         }
+
+    def test_files_delete_route_rejects_review_state_selection_without_root(self, tmp_path: Path):
+        from shotsieve import web_routes as route_module
+
+        deps = SimpleNamespace(
+            read_json_body=lambda _handler, *, max_body_size: {
+                "selection": {
+                    "scope": "review-state",
+                    "marked": "delete",
+                },
+                "selection_revision": "rev-1",
+                "delete_from_disk": True,
+            },
+            required_int_list=lambda value, *, name: (_ for _ in ()).throw(AssertionError("file_ids should not be required for selection payloads")),
+            required_choice=lambda value, *, name, choices: value if value in choices else (_ for _ in ()).throw(ValueError(name)),
+            optional_string=lambda value: value if isinstance(value, str) else None,
+            coerce_bool=lambda value, *, default: default if value is None else bool(value),
+            database=lambda _path: (_ for _ in ()).throw(AssertionError("database should not be opened after invalid selection")),
+            review_selection_revision=lambda _connection, **kwargs: "rev-1",
+            list_review_state_file_ids=lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("selection should not be materialized after invalid selection")),
+            get_preview_cache_root=lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("preview cache should not be queried after invalid selection")),
+            delete_files=lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("delete_files should not be called after invalid selection")),
+        )
+        context = route_module.WebRouteContext(
+            db_path=tmp_path / "shotsieve.db",
+            operation_lock=threading.Lock(),
+            scan_registry=None,
+            score_registry=None,
+            compare_registry=None,
+            max_request_body_size=1024,
+            static_dir=tmp_path,
+            media_mime_fallbacks={},
+            dependencies=deps,
+        )
+        handler = SimpleNamespace(path="/api/files/delete", headers={"Content-Length": "20"})
+
+        with pytest.raises(ValueError, match="selection.root is required"):
+            route_module._handle_file_action_post_routes(handler, context, urlparse(handler.path))
 
     def test_files_export_route_accepts_review_browser_selection_payload(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         from shotsieve import web_routes as route_module
@@ -900,3 +939,210 @@ class TestRouteHandling:
         assert handled is True
         assert captured["export_batches"] == [[21, 22], [23]]
         assert captured["payload"] == {"copied": 3, "moved": 0, "failed": []}
+
+    def test_files_delete_route_accepts_file_ids_with_matching_page_revision(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+        from shotsieve import web_routes as route_module
+
+        captured: dict[str, object] = {}
+        connection = object()
+        preview_root = (tmp_path / "previews").resolve()
+
+        class _DatabaseContext:
+            def __enter__(self):
+                return connection
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+        def fake_send_json(_handler, payload: object) -> None:
+            captured["payload"] = payload
+
+        def fake_delete_files(_connection, **kwargs):
+            ids = list(kwargs["file_ids"])
+            return {
+                "deleted_ids": ids,
+                "deleted_count": len(ids),
+                "failed": [],
+                "failed_count": 0,
+                "delete_from_disk": kwargs["delete_from_disk"],
+            }
+
+        monkeypatch.setattr(route_module, "send_json", fake_send_json)
+
+        deps = SimpleNamespace(
+            read_json_body=lambda _handler, *, max_body_size: {
+                "file_ids": [1, 2, 3],
+                "delete_from_disk": True,
+                "selection_revision": "rev-match",
+                "page_selection": {
+                    "scope": "review-browser",
+                    "marked": "all",
+                    "root": "C:/photos",
+                },
+            },
+            required_int_list=lambda value, *, name: list(value),
+            required_choice=lambda value, *, name, choices: value if value in choices else (_ for _ in ()).throw(ValueError(name)),
+            optional_string=lambda value: value if isinstance(value, str) else None,
+            coerce_bool=lambda value, *, default: default if value is None else bool(value),
+            database=lambda _path: _DatabaseContext(),
+            review_selection_revision=lambda _connection, **kwargs: "rev-match",
+            get_preview_cache_root=lambda _connection, *, db_path, persist: preview_root,
+            delete_files=fake_delete_files,
+        )
+        context = route_module.WebRouteContext(
+            db_path=tmp_path / "shotsieve.db",
+            operation_lock=threading.Lock(),
+            scan_registry=None,
+            score_registry=None,
+            compare_registry=None,
+            max_request_body_size=1024,
+            static_dir=tmp_path,
+            media_mime_fallbacks={},
+            dependencies=deps,
+        )
+        handler = SimpleNamespace(path="/api/files/delete", headers={"Content-Length": "20"})
+
+        handled = route_module._handle_file_action_post_routes(handler, context, urlparse(handler.path))
+
+        assert handled is True
+        result = captured["payload"]
+        assert result["deleted_count"] == 3
+
+    def test_files_delete_route_rejects_file_ids_with_mismatched_page_revision(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+        from shotsieve import web_routes as route_module
+
+        connection = object()
+        preview_root = (tmp_path / "previews").resolve()
+
+        class _DatabaseContext:
+            def __enter__(self):
+                return connection
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+        deps = SimpleNamespace(
+            read_json_body=lambda _handler, *, max_body_size: {
+                "file_ids": [1, 2],
+                "delete_from_disk": True,
+                "selection_revision": "rev-stale",
+                "page_selection": {
+                    "scope": "review-browser",
+                    "marked": "all",
+                    "root": "C:/photos",
+                },
+            },
+            required_int_list=lambda value, *, name: list(value),
+            required_choice=lambda value, *, name, choices: value if value in choices else (_ for _ in ()).throw(ValueError(name)),
+            optional_string=lambda value: value if isinstance(value, str) else None,
+            coerce_bool=lambda value, *, default: default if value is None else bool(value),
+            database=lambda _path: _DatabaseContext(),
+            review_selection_revision=lambda _connection, **kwargs: "rev-current",
+            get_preview_cache_root=lambda _connection, *, db_path, persist: preview_root,
+            delete_files=lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("delete_files should not be called with stale revision")),
+        )
+        context = route_module.WebRouteContext(
+            db_path=tmp_path / "shotsieve.db",
+            operation_lock=threading.Lock(),
+            scan_registry=None,
+            score_registry=None,
+            compare_registry=None,
+            max_request_body_size=1024,
+            static_dir=tmp_path,
+            media_mime_fallbacks={},
+            dependencies=deps,
+        )
+        handler = SimpleNamespace(path="/api/files/delete", headers={"Content-Length": "20"})
+
+        with pytest.raises(ValueError, match="Selected results changed"):
+            route_module._handle_file_action_post_routes(handler, context, urlparse(handler.path))
+
+    def test_files_delete_route_rejects_file_ids_without_page_revision(self, tmp_path: Path):
+        from shotsieve import web_routes as route_module
+
+        connection = object()
+        preview_root = (tmp_path / "previews").resolve()
+
+        class _DatabaseContext:
+            def __enter__(self):
+                return connection
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+        deps = SimpleNamespace(
+            read_json_body=lambda _handler, *, max_body_size: {
+                "file_ids": [1, 2],
+                "delete_from_disk": True,
+            },
+            required_int_list=lambda value, *, name: list(value),
+            required_choice=lambda value, *, name, choices: value if value in choices else (_ for _ in ()).throw(ValueError(name)),
+            optional_string=lambda value: value if isinstance(value, str) else None,
+            coerce_bool=lambda value, *, default: default if value is None else bool(value),
+            database=lambda _path: _DatabaseContext(),
+            review_selection_revision=lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("revision should not be computed without page_selection")),
+            get_preview_cache_root=lambda _connection, *, db_path, persist: preview_root,
+            delete_files=lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("delete_files should not be called without revision")),
+        )
+        context = route_module.WebRouteContext(
+            db_path=tmp_path / "shotsieve.db",
+            operation_lock=threading.Lock(),
+            scan_registry=None,
+            score_registry=None,
+            compare_registry=None,
+            max_request_body_size=1024,
+            static_dir=tmp_path,
+            media_mime_fallbacks={},
+            dependencies=deps,
+        )
+        handler = SimpleNamespace(path="/api/files/delete", headers={"Content-Length": "20"})
+
+        with pytest.raises(ValueError, match="selection_revision is required"):
+            route_module._handle_file_action_post_routes(handler, context, urlparse(handler.path))
+
+    def test_files_delete_route_rejects_review_browser_selection_without_root(self, tmp_path: Path):
+        from shotsieve import web_routes as route_module
+
+        connection = object()
+
+        class _DatabaseContext:
+            def __enter__(self):
+                return connection
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+        deps = SimpleNamespace(
+            read_json_body=lambda _handler, *, max_body_size: {
+                "selection": {
+                    "scope": "review-browser",
+                    "marked": "all",
+                    "issues": "all",
+                },
+                "selection_revision": "rev-1",
+                "delete_from_disk": True,
+            },
+            required_int_list=lambda value, *, name: (_ for _ in ()).throw(AssertionError("file_ids should not be required for selection payloads")),
+            required_choice=lambda value, *, name, choices: value if value in choices else (_ for _ in ()).throw(ValueError(name)),
+            optional_string=lambda value: value if isinstance(value, str) else None,
+            coerce_bool=lambda value, *, default: default if value is None else bool(value),
+            database=lambda _path: _DatabaseContext(),
+            review_selection_revision=lambda _connection, **kwargs: "rev-1",
+            get_preview_cache_root=lambda _connection, *, db_path, persist: (_ for _ in ()).throw(AssertionError("preview cache should not be queried after invalid selection")),
+            delete_files=lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("delete_files should not be called after invalid selection")),
+        )
+        context = route_module.WebRouteContext(
+            db_path=tmp_path / "shotsieve.db",
+            operation_lock=threading.Lock(),
+            scan_registry=None,
+            score_registry=None,
+            compare_registry=None,
+            max_request_body_size=1024,
+            static_dir=tmp_path,
+            media_mime_fallbacks={},
+            dependencies=deps,
+        )
+        handler = SimpleNamespace(path="/api/files/delete", headers={"Content-Length": "20"})
+
+        with pytest.raises(ValueError, match="selection.root is required for destructive bulk operations"):
+            route_module._handle_file_action_post_routes(handler, context, urlparse(handler.path))

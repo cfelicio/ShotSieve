@@ -39,23 +39,12 @@
       activateLibraryScope,
       resetReviewToActiveLibrary,
       setReviewScope,
-      runPreflight,
       renderLibraryRoots,
       loadAnalysisDiagnostics,
     } = deps;
 
     const TAB_KEYS = new Set(["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Home", "End"]);
     let filterTimer = null;
-    let preflightTimer = null;
-
-    function triggerPreflightDebounced(delay = 250) {
-      window.clearTimeout(preflightTimer);
-      preflightTimer = window.setTimeout(() => {
-        if (typeof runPreflight === "function") {
-          runPreflight().catch(handleError);
-        }
-      }, delay);
-    }
 
     function moveTabFocus(currentButton, direction) {
       const buttons = [...document.querySelectorAll(".tab-button")].filter((button) => !button.hidden);
@@ -296,8 +285,38 @@
         }
       });
 
-      document.querySelectorAll("input[name='format-filter']").forEach((checkbox) => {
-        checkbox.addEventListener("change", () => {
+      function syncFormatChipsState() {
+        const checkboxes = document.querySelectorAll("input[name='format-filter']");
+        if (!checkboxes.length) return;
+        const allChecked = Array.from(checkboxes).every((cb) => cb.checked);
+
+        const allChip = document.querySelector("[data-chip-format='all']") || document.querySelector("[data-format-chip='all']");
+        if (allChip) {
+          allChip.classList.toggle("active", allChecked);
+        }
+
+        checkboxes.forEach((cb) => {
+          const chip = document.querySelector(`[data-chip-format='${cb.value}']`) || document.querySelector(`[data-format-chip='${cb.value}']`);
+          if (chip) {
+            chip.classList.toggle("active", cb.checked);
+          }
+        });
+      }
+
+      document.querySelectorAll("[data-chip-format], [data-format-chip]").forEach((chip) => {
+        chip.addEventListener("click", () => {
+          const format = chip.dataset.chipFormat || chip.dataset.formatChip;
+          const checkboxes = document.querySelectorAll("input[name='format-filter']");
+          if (format === "all") {
+            const allChecked = Array.from(checkboxes).every((cb) => cb.checked);
+            checkboxes.forEach((cb) => { cb.checked = !allChecked; });
+          } else {
+            const cb = document.querySelector(`input[name='format-filter'][value='${format}']`);
+            if (cb) {
+              cb.checked = !cb.checked;
+            }
+          }
+          syncFormatChipsState();
           invalidateLoadedReviewSelection({ clearActiveSelection: true });
           state.page = 0;
           saveUiState();
@@ -305,7 +324,59 @@
         });
       });
 
-      ["min-score", "max-score", "filter-min-mp", "filter-max-mp", "filter-min-size", "filter-max-size"].forEach((id) => {
+      document.querySelectorAll("input[name='format-filter']").forEach((checkbox) => {
+        checkbox.addEventListener("change", () => {
+          syncFormatChipsState();
+          invalidateLoadedReviewSelection({ clearActiveSelection: true });
+          state.page = 0;
+          saveUiState();
+          loadQueue().catch(handleError);
+        });
+      });
+
+      // Interactive Resizable Splitter Bar
+      const splitter = document.getElementById("review-splitter");
+      const layout = document.getElementById("review-layout");
+      if (splitter && layout) {
+        const savedWidth = localStorage.getItem("shotsieve_review_sidebar_width");
+        if (savedWidth) {
+          layout.style.setProperty("--sidebar-width", `${savedWidth}px`);
+        }
+
+        let isDragging = false;
+
+        const onPointerMove = (e) => {
+          if (!isDragging) return;
+          const rect = layout.getBoundingClientRect();
+          const offsetX = e.clientX - rect.left;
+          const minW = 280;
+          const maxW = Math.min(800, window.innerWidth - 350);
+          const clampedW = Math.max(minW, Math.min(maxW, offsetX));
+          layout.style.setProperty("--sidebar-width", `${clampedW}px`);
+          localStorage.setItem("shotsieve_review_sidebar_width", clampedW);
+        };
+
+        const onPointerUp = () => {
+          if (!isDragging) return;
+          isDragging = false;
+          splitter.classList.remove("dragging");
+          document.body.style.cursor = "";
+          document.body.style.userSelect = "";
+          window.removeEventListener("pointermove", onPointerMove);
+          window.removeEventListener("pointerup", onPointerUp);
+        };
+
+        splitter.addEventListener("pointerdown", (e) => {
+          isDragging = true;
+          splitter.classList.add("dragging");
+          document.body.style.cursor = "col-resize";
+          document.body.style.userSelect = "none";
+          window.addEventListener("pointermove", onPointerMove);
+          window.addEventListener("pointerup", onPointerUp);
+        });
+      }
+
+      ["min-score", "max-score", "filter-min-mp", "filter-max-mp", "filter-min-edge", "filter-max-edge", "filter-min-size", "filter-max-size"].forEach((id) => {
         const el = document.getElementById(id);
         if (el) {
           el.addEventListener("change", () => { 
@@ -350,32 +421,24 @@
         const val = document.getElementById("library-root-input").value;
         activateLibraryScope(val).catch(handleError);
         renderLibraryRoots();
-        if (typeof runPreflight === "function") {
-          runPreflight().catch(handleError);
-        }
       });
 
       document.getElementById("ignore-rules-input")?.addEventListener("input", () => {
         saveUiState();
-        triggerPreflightDebounced(350);
       });
       document.getElementById("ignore-rules-input")?.addEventListener("change", () => {
         saveUiState();
-        triggerPreflightDebounced(50);
       });
 
       document.getElementById("recursive-toggle")?.addEventListener("change", () => {
         saveUiState();
-        triggerPreflightDebounced(50);
       });
 
       document.getElementById("extensions-input")?.addEventListener("input", () => {
         saveUiState();
-        triggerPreflightDebounced(350);
       });
       document.getElementById("extensions-input")?.addEventListener("change", () => {
         saveUiState();
-        triggerPreflightDebounced(50);
       });
 
       const addRootBtn = document.getElementById("browse-library-root");
@@ -456,6 +519,17 @@
 
       document.getElementById("batch-delete-mark").addEventListener("click", () => runReviewToolbarAction("reject", "Applying review mark...", "Marked delete"));
       document.getElementById("batch-export-mark").addEventListener("click", () => runReviewToolbarAction("keep", "Applying review mark...", "Marked export"));
+
+      const decisionKeepBtn = document.getElementById("decision-keep-btn");
+      if (decisionKeepBtn) {
+        decisionKeepBtn.addEventListener("click", () => runReviewToolbarAction("keep", "Applying review mark...", "Marked export"));
+      }
+
+      const decisionRejectBtn = document.getElementById("decision-reject-btn");
+      if (decisionRejectBtn) {
+        decisionRejectBtn.addEventListener("click", () => runReviewToolbarAction("reject", "Applying review mark...", "Marked delete"));
+      }
+
       document.getElementById("batch-clear-mark").addEventListener("click", () => runReviewToolbarAction("reset", "Clearing review mark...", "Cleared marks"));
       document.getElementById("batch-move").addEventListener("click", () => openExportDialog("move", "Select at least one file to move."));
 

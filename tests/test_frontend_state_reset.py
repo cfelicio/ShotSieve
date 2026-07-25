@@ -99,3 +99,17 @@ def test_load_queue_keeps_query_available_after_page_clamp_retry(frontend_server
     assert "let query = null;" in load_queue_block
     assert "query = currentQuery();" in load_queue_block
     assert "reviewSelectionSnapshotFromQuery(query, data.total || 0)" in load_queue_block
+
+
+def test_review_save_refreshes_rejected_actions_pagination(frontend_server: str) -> None:
+    app_body = urlopen(f"{frontend_server}/app.js").read().decode("utf-8")
+    workflows_body = urlopen(f"{frontend_server}/app-workflows.js").read().decode("utf-8")
+
+    assert "renderPagination," in app_body
+
+    save_index = workflows_body.index("async function saveReview(payload)")
+    save_block = workflows_body[save_index : save_index + 900]
+
+    assert "await refreshOverview();" in save_block
+    assert "renderPagination();" in save_block
+    assert save_block.index("await refreshOverview();") < save_block.index("renderPagination();")

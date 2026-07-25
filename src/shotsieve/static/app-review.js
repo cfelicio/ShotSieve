@@ -191,9 +191,9 @@
               </div>
               <div class="queue-primary">
                 <strong class="queue-file">${filename}</strong>
-                <span class="queue-score ${getScoreColor(primaryScore)}">${formatNumberFn(primaryScore)}</span>
+                <span class="queue-score ${getScoreColor(primaryScore)}">★ ${formatNumberFn(primaryScore)}</span>
               </div>
-              <div class="queue-path">${escapeHtml(pathDirectory(item.path))}</div>
+              ${item.format ? `<div class="queue-sub"><span class="queue-fmt-tag">${escapeHtml(String(item.format).toUpperCase())}</span></div>` : ""}
             </div>
           </button>
         </article>
@@ -301,6 +301,8 @@
     if (!state.detail) {
       document.getElementById("detail-empty").classList.remove("hidden");
       document.getElementById("detail-content").classList.add("hidden");
+      const statsBadge = document.getElementById("detail-image-stats-badge");
+      if (statsBadge) statsBadge.classList.add("hidden");
       updateCompactReviewNavigation(state);
       return;
     }
@@ -339,16 +341,70 @@
 
     document.getElementById("detail-scoreline").textContent = `AI score ${formatNumberFn(aiScore)}`;
 
+    // Top-Right Floating Image Stats Overlay Badge
+    function updateStatsOverlay(naturalW, naturalH) {
+      const statsBadge = document.getElementById("detail-image-stats-badge");
+      if (!statsBadge) return;
+      const statPills = [];
+      const fmt = detail.format || (detail.path ? detail.path.split('.').pop() : "");
+      if (fmt) {
+        statPills.push(`<span class="stat-badge-pill pill-format">${escapeHtml(String(fmt).toUpperCase())}</span>`);
+      }
+      const effectiveW = detail.width || naturalW;
+      const effectiveH = detail.height || naturalH;
+      if (effectiveW && effectiveH) {
+        const mp = ((effectiveW * effectiveH) / 1000000).toFixed(1);
+        statPills.push(`<span class="stat-badge-pill pill-dims">${effectiveW} × ${effectiveH}</span>`);
+        statPills.push(`<span class="stat-badge-pill pill-mp">${mp} MP</span>`);
+      }
+      if (detail.size_bytes) {
+        const bytes = detail.size_bytes;
+        let sizeStr = `${bytes} B`;
+        if (bytes >= 1000) {
+          const kb = bytes / 1000;
+          if (kb < 1000) sizeStr = `${kb.toFixed(1)} KB`;
+          else {
+            const mb = kb / 1000;
+            if (mb < 1000) sizeStr = `${mb.toFixed(1)} MB`;
+            else sizeStr = `${(mb / 1000).toFixed(2)} GB`;
+          }
+        }
+        statPills.push(`<span class="stat-badge-pill pill-size">${sizeStr}</span>`);
+      }
+      if (aiScore !== null && aiScore !== undefined) {
+        const scoreColorClass = getScoreColor ? getScoreColor(aiScore) : "";
+        statPills.push(`<span class="stat-badge-pill pill-score ${scoreColorClass}">★ ${formatNumberFn(aiScore)}</span>`);
+      }
+
+      if (statPills.length > 0) {
+        statsBadge.innerHTML = statPills.join("");
+        statsBadge.classList.remove("hidden");
+      } else {
+        statsBadge.classList.add("hidden");
+      }
+    }
+
+    updateStatsOverlay(null, null);
+
+    const detailImg = document.getElementById("detail-image");
+    if (detailImg) {
+      detailImg.onload = () => {
+        if (detailImg.naturalWidth && detailImg.naturalHeight) {
+          updateStatsOverlay(detailImg.naturalWidth, detailImg.naturalHeight);
+        }
+      };
+    }
+
     const metadataStrip = document.getElementById("detail-metadata-strip");
     if (metadataStrip) {
       metadataStrip.innerHTML = "";
       const chips = [];
       if (detail.format) {
-        chips.push(`<span class="metadata-chip">${escapeHtml(detail.format)}</span>`);
+        chips.push(`<span class="metadata-chip chip-format">${escapeHtml(String(detail.format).toUpperCase())}</span>`);
       }
       if (detail.width && detail.height) {
         const mp = ((detail.width * detail.height) / 1000000).toFixed(1);
-        chips.push(`<span class="metadata-chip">${detail.width} × ${detail.height} (${mp} MP)</span>`);
+        chips.push(`<span class="metadata-chip chip-res">${detail.width} × ${detail.height} (${mp} MP)</span>`);
         
         // Inline Aspect Ratio helper
         const ratio = detail.width / detail.height;
@@ -372,7 +428,7 @@
             break;
           }
         }
-        chips.push(`<span class="metadata-chip">Aspect ${ar}</span>`);
+        chips.push(`<span class="metadata-chip chip-aspect">Aspect ${ar}</span>`);
       }
       if (detail.size_bytes) {
         const bytes = detail.size_bytes;
@@ -383,13 +439,10 @@
           else {
             const mb = kb / 1000;
             if (mb < 1000) sizeStr = `${mb.toFixed(1)} MB`;
-            else {
-              const gb = mb / 1000;
-              sizeStr = `${gb.toFixed(2)} GB`;
-            }
+            else sizeStr = `${(mb / 1000).toFixed(2)} GB`;
           }
         }
-        chips.push(`<span class="metadata-chip">${sizeStr}</span>`);
+        chips.push(`<span class="metadata-chip chip-size">${sizeStr}</span>`);
       }
       metadataStrip.innerHTML = chips.join("");
     }

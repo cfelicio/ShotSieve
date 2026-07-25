@@ -390,6 +390,46 @@ def test_generate_raw_preview_uses_embedded_thumbnail_when_it_is_large_enough(
     assert Path(result.path).read_bytes() == thumb_bytes
 
 
+def test_generate_raw_preview_uses_rawpy_sizes_for_raw_dimensions(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    source_path = tmp_path / "sample.dng"
+    preview_dir = tmp_path / "previews"
+    source_path.write_bytes(b"fake-raw")
+
+    thumb_buffer = io.BytesIO()
+    preview_module.Image.new("RGB", (1024, 768), color="blue").save(thumb_buffer, format="JPEG")
+    thumb_bytes = thumb_buffer.getvalue()
+
+    class FakeRawImageWithSizes:
+        sizes = SimpleNamespace(iwidth=6000, iheight=4000, width=6000, height=4000)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def extract_thumb(self):
+            return SimpleNamespace(format="jpeg", data=thumb_bytes)
+
+    monkeypatch.setattr(
+        preview_module,
+        "rawpy",
+        SimpleNamespace(
+            imread=lambda _path: FakeRawImageWithSizes(),
+            ThumbFormat=SimpleNamespace(JPEG="jpeg", BITMAP="bitmap"),
+        ),
+    )
+
+    result = preview_module.generate_raw_preview(source_path, preview_dir)
+
+    assert result.status == "ready"
+    assert result.width == 6000
+    assert result.height == 4000
+
+
 def test_generate_raw_preview_fast_mode_uses_small_embedded_thumbnail(
     monkeypatch,
     tmp_path: Path,

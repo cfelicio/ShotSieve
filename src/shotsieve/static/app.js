@@ -124,7 +124,6 @@ const {
   openBrowser,
   browseDirectory,
   chooseBrowserPath,
-  runPreflight,
   renderLibraryRoots,
   handleError,
 } = workflowsModule.createWorkflows({
@@ -171,6 +170,7 @@ const {
     refreshOverview,
     refreshWorkspace,
     reviewDecisions: REVIEW_DECISIONS,
+    renderPagination,
     selectFile,
     syncReviewRoot,
   },
@@ -300,7 +300,6 @@ const installEvents = eventsModule.createEvents({
   activateLibraryScope,
   resetReviewToActiveLibrary,
   setReviewScope,
-  runPreflight,
   renderLibraryRoots,
   loadAnalysisDiagnostics,
 });
@@ -707,6 +706,12 @@ function currentQuery() {
   const maxMp = document.getElementById("filter-max-mp").value;
   if (maxMp) params.set("max_mp", maxMp);
 
+  const minEdge = document.getElementById("filter-min-edge")?.value;
+  if (minEdge) params.set("min_edge", minEdge);
+
+  const maxEdge = document.getElementById("filter-max-edge")?.value;
+  if (maxEdge) params.set("max_edge", maxEdge);
+
   const minSize = document.getElementById("filter-min-size").value;
   if (minSize) params.set("min_size", String(Math.round(parseFloat(minSize) * 1000000)));
 
@@ -732,13 +737,15 @@ function hasActiveReviewFilters() {
   const formatFilters = [...document.querySelectorAll("input[name='format-filter']:checked")].map((i) => i.value);
   const minMp = document.getElementById("filter-min-mp")?.value || "";
   const maxMp = document.getElementById("filter-max-mp")?.value || "";
+  const minEdge = document.getElementById("filter-min-edge")?.value || "";
+  const maxEdge = document.getElementById("filter-max-edge")?.value || "";
   const minSize = document.getElementById("filter-min-size")?.value || "";
   const maxSize = document.getElementById("filter-max-size")?.value || "";
   const metadataStatus = document.getElementById("filter-metadata-status")?.value || "all";
 
   return Boolean(
     query || root || minScore || maxScore || marked !== "all" || issues !== "all"
-    || formatFilters.length < 6 || minMp || maxMp || minSize || maxSize || metadataStatus !== "all"
+    || formatFilters.length < 6 || minMp || maxMp || minEdge || maxEdge || minSize || maxSize || metadataStatus !== "all"
   );
 }
 
@@ -945,7 +952,6 @@ function renderOptions() {
   `).join("");
 
   renderLibraryRoots();
-  runPreflight().catch(handleError);
 }
 
 function updateResourceProfileDetail(hw) {
