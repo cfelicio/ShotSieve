@@ -44,7 +44,6 @@ from shotsieve.review import (
     update_review_state_batch,
 )
 from shotsieve.scanner import scan_root, utc_now
-from shotsieve.scoring import AnalysisProgress  # noqa: F401
 from shotsieve.scoring import compare_learned_models, count_score_rows, score_files
 from shotsieve import web_request as _request_helpers
 from shotsieve.web_routes import (

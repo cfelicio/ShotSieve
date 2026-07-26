@@ -4,6 +4,8 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-07-25
+
 ### Added
 
 - Added support for configuring multiple non-overlapping directory paths as sources in the active library workspace.
@@ -19,10 +21,10 @@ All notable changes to this project will be documented in this file.
 
 - Improved large-catalog Review responsiveness by adding score-order indexes for the default AI-score and score-descending sorts. The Review queue remains paged, and single-photo keep/reject/reset actions now update the visible page without reloading the queue.
 - Optimised file scanning traversal by pruning ignored directory names directly from `os.walk` list before descending.
-
 - Made the selected Library folder the persisted default Review scope while retaining one shared catalog for preview and score reuse.
 - Displayed separate **This library** and **All cached libraries** totals for discovered, scored, rejected, and selected photos, with a clear global Review scope indicator.
 - Scoped rejected-file move and deletion shortcuts to the active library and named that library in destructive deletion confirmations.
+- Refactored and modularized all active Python modules, JavaScript components, CSS stylesheets
 
 ### Fixed
 
@@ -30,6 +32,7 @@ All notable changes to this project will be documented in this file.
 - Fixed direct file_ids delete and export/move operations by requiring page-level selection revision tokens to guard against stale selections after navigation or catalog updates.
 - Fixed the Review rejected-actions bar so it stays consistent after repeated reject, move, and delete cycles.
 - Fixed RAW image metadata extraction to record full RAW sensor dimensions and megapixels instead of embedded JPEG thumbnail dimensions.
+- Resolved all linter warnings, missing type hints (`Sequence`, `Iterable`), and test mock signatures across `src/` and `tests/`.
 
 ## [0.2.3] - 2026-05-01
 

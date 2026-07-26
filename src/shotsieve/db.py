@@ -4,7 +4,7 @@ import platform
 import sqlite3
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Iterator
+from typing import Iterator, Sequence
 
 from shotsieve.config import resolve_preview_dir
 from shotsieve.schema import SCHEMA_MIGRATIONS, SCHEMA_SQL

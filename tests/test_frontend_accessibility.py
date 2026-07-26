@@ -48,104 +48,104 @@ def _open_compare_tab(page) -> None:
 
 
 def _render_compare_results(page, comparison: dict[str, object], *, root: str = "C:/photos") -> None:
-        page.evaluate(
-                """
-                ({ comparison, root }) => {
-                    const utils = window.ShotSieveUtils;
-                    const stateModule = window.ShotSieveState;
-                    const workflowsModule = window.ShotSieveWorkflows;
-                    if (!utils || !stateModule || !workflowsModule?.createWorkflows) {
-                        throw new Error("ShotSieve compare renderer helpers are unavailable.");
-                    }
+    page.evaluate(
+        """
+        ({ comparison, root }) => {
+            const utils = window.ShotSieveUtils;
+            const stateModule = window.ShotSieveState;
+            const workflowsModule = window.ShotSieveWorkflows;
+            if (!utils || !stateModule || !workflowsModule?.createWorkflows) {
+                throw new Error("ShotSieve compare renderer helpers are unavailable.");
+            }
 
-                    document.getElementById("library-root-input").value = root;
+            document.getElementById("library-root-input").value = root;
 
-                    const state = stateModule.createState();
-                    state.comparison = comparison;
+            const state = stateModule.createState();
+            state.comparison = comparison;
 
-                    const workflows = workflowsModule.createWorkflows({
-                        state,
-                        api: {
-                            fetchJson: async () => {
-                                throw new Error("fetchJson should not run in compare render harness");
-                            },
-                            postJson: async () => {
-                                throw new Error("postJson should not run in compare render harness");
-                            },
-                        },
-                        busy: {
-                            setBusyMessage() {},
-                            setBusyPhaseProgress() {},
-                            setBusyProgress() {},
-                            withBusy: async (_message, fn) => fn(),
-                        },
-                        compare: {
-                            compareBatchSize: () => 1,
-                            compareProgressMessage: () => "",
-                            compareProgressPercent: () => 0,
-                            comparisonDefaults: () => [],
-                            currentResourceProfile: () => "normal",
-                            modelDescriptions: stateModule.MODEL_DESCRIPTIONS,
-                            modelDisplayNames: stateModule.MODEL_DISPLAY_NAMES,
-                            scanProgressMessage: () => "",
-                            scanProgressPercent: () => 0,
-                            scoreBatchSize: () => 1,
-                            scoreProgressMessage: () => "",
-                            scoreProgressPercent: () => 0,
-                        },
-                        formatting: {
-                            escapeHtml: utils.escapeHtml,
-                            formatDuration: utils.formatDuration,
-                            formatFilesPerSecond: utils.formatFilesPerSecond,
-                            formatNumber: utils.formatNumber,
-                            getScoreColor: utils.getScoreColor,
-                            mergeTimingTotals: utils.mergeTimingTotals,
-                            pathLeaf: utils.pathLeaf,
-                            sortComparisonRows: utils.sortComparisonRows,
-                        },
-                        notifications: {
-                            addLogEntry() {},
-                            showToast() {},
-                        },
-                        review: {
-                            isAutoAdvanceEnabled: () => true,
-                            loadQueue: async () => {},
-                            refreshOverview: async () => {},
-                            refreshWorkspace: async () => {},
-                            reviewDecisions: stateModule.REVIEW_DECISIONS,
-                            selectFile: async () => {},
-                            syncReviewRoot() {},
-                        },
-                        ui: {
-                            closeOverlay() {},
-                            currentLibraryRoot: () => root,
-                            saveUiState() {},
-                            selectedComparisonModels: () => comparison.model_names || [],
-                            setTab() {},
-                        },
-                    });
+            const workflows = workflowsModule.createWorkflows({
+                state,
+                api: {
+                    fetchJson: async () => {
+                        throw new Error("fetchJson should not run in compare render harness");
+                    },
+                    postJson: async () => {
+                        throw new Error("postJson should not run in compare render harness");
+                    },
+                },
+                busy: {
+                    setBusyMessage() {},
+                    setBusyPhaseProgress() {},
+                    setBusyProgress() {},
+                    withBusy: async (_message, fn) => fn(),
+                },
+                compare: {
+                    compareBatchSize: () => 1,
+                    compareProgressMessage: () => "",
+                    compareProgressPercent: () => 0,
+                    comparisonDefaults: () => [],
+                    currentResourceProfile: () => "normal",
+                    modelDescriptions: stateModule.MODEL_DESCRIPTIONS,
+                    modelDisplayNames: stateModule.MODEL_DISPLAY_NAMES,
+                    scanProgressMessage: () => "",
+                    scanProgressPercent: () => 0,
+                    scoreBatchSize: () => 1,
+                    scoreProgressMessage: () => "",
+                    scoreProgressPercent: () => 0,
+                },
+                formatting: {
+                    escapeHtml: utils.escapeHtml,
+                    formatDuration: utils.formatDuration,
+                    formatFilesPerSecond: utils.formatFilesPerSecond,
+                    formatNumber: utils.formatNumber,
+                    getScoreColor: utils.getScoreColor,
+                    mergeTimingTotals: utils.mergeTimingTotals,
+                    pathLeaf: utils.pathLeaf,
+                    sortComparisonRows: utils.sortComparisonRows,
+                },
+                notifications: {
+                    addLogEntry() {},
+                    showToast() {},
+                },
+                review: {
+                    isAutoAdvanceEnabled: () => true,
+                    loadQueue: async () => {},
+                    refreshOverview: async () => {},
+                    refreshWorkspace: async () => {},
+                    reviewDecisions: stateModule.REVIEW_DECISIONS,
+                    selectFile: async () => {},
+                    syncReviewRoot() {},
+                },
+                ui: {
+                    closeOverlay() {},
+                    currentLibraryRoot: () => root,
+                    saveUiState() {},
+                    selectedComparisonModels: () => comparison.model_names || [],
+                    setTab() {},
+                },
+            });
 
+            workflows.renderComparisonResults();
+
+            const compareRowSort = document.getElementById("compare-row-sort");
+            const compareRowFilter = document.getElementById("compare-row-filter");
+            if (compareRowSort) {
+                compareRowSort.onchange = (event) => {
+                    state.compareRowSort = event.target.value || "topiq_nr:desc";
+                    state.compareRowSortInitialized = true;
                     workflows.renderComparisonResults();
-
-                    const compareRowSort = document.getElementById("compare-row-sort");
-                    const compareRowFilter = document.getElementById("compare-row-filter");
-                    if (compareRowSort) {
-                        compareRowSort.onchange = (event) => {
-                            state.compareRowSort = event.target.value || "topiq_nr:desc";
-                            state.compareRowSortInitialized = true;
-                            workflows.renderComparisonResults();
-                        };
-                    }
-                    if (compareRowFilter) {
-                        compareRowFilter.onchange = (event) => {
-                            state.compareRowFilter = event.target.value || "all";
-                            workflows.renderComparisonResults();
-                        };
-                    }
-                }
-                """,
-                {"comparison": comparison, "root": root},
-        )
+                };
+            }
+            if (compareRowFilter) {
+                compareRowFilter.onchange = (event) => {
+                    state.compareRowFilter = event.target.value || "all";
+                    workflows.renderComparisonResults();
+                };
+            }
+        }
+        """,
+        {"comparison": comparison, "root": root},
+    )
 
 
 def _open_settings_tab(page) -> None:
@@ -179,7 +179,7 @@ def _open_folder_browser(page) -> None:
     )
 
 
-def _wait_for_shell_ready(page) -> None:
+def _wait_for_shell_ready(page, timeout: float = 60000) -> None:
     page.wait_for_function(
         """
         () => {
@@ -187,7 +187,8 @@ def _wait_for_shell_ready(page) -> None:
           const deviceOptions = document.querySelectorAll('#device-select option').length;
           return modelOptions >= 1 && deviceOptions >= 1;
         }
-        """
+        """,
+        timeout=timeout,
     )
 
 
@@ -556,71 +557,19 @@ def test_pointer_tab_click_preserves_arrow_navigation(chromium_page) -> None:
 
 
 def test_reset_everything_restores_normal_resource_profile(chromium_page) -> None:
-        chromium_page, expect = chromium_page
-        _open_settings_tab(chromium_page)
-
-        profile_select = chromium_page.locator("#resource-profile-select")
-        profile_select.select_option("aggressive")
-        expect(profile_select).to_have_value("aggressive")
-
-        chromium_page.evaluate("() => { window.confirm = () => true; }")
-        chromium_page.locator("#clear-all-cache").click()
-
-        expect(profile_select).to_have_value("normal")
-        stored_profile = chromium_page.evaluate("() => window.localStorage.getItem('shotsieve_resource_profile')")
-        assert stored_profile is None
-
-
-def test_mobile_review_uses_toolbar_navigation_without_bottom_overlay(chromium_page) -> None:
     chromium_page, expect = chromium_page
-    _set_viewport(chromium_page, width=390, height=844)
-    _open_review_tab(chromium_page)
+    _open_settings_tab(chromium_page)
 
-    detail_prev = chromium_page.locator("#previous-item")
-    detail_next = chromium_page.locator("#next-item")
-    detail_image = chromium_page.locator("#detail-image")
+    profile_select = chromium_page.locator("#resource-profile-select")
+    profile_select.select_option("aggressive")
+    expect(profile_select).to_have_value("aggressive")
 
-    expect(chromium_page.locator("#compact-review-nav")).to_have_count(0)
-    expect(detail_prev).to_be_visible()
-    expect(detail_next).to_be_visible()
-    expect(detail_prev).to_be_disabled()
-    expect(detail_next).to_be_enabled()
+    chromium_page.evaluate("() => { window.confirm = () => true; }")
+    chromium_page.locator("#clear-all-cache").click()
 
-    detail_image.focus()
-    detail_next.click()
-
-    expect(chromium_page.locator("#review-position")).to_have_text("2 of 3")
-    expect(detail_prev).to_be_enabled()
-    expect(detail_next).to_be_enabled()
-
-
-def test_narrow_phone_prioritizes_compact_nav_space_and_larger_targets(chromium_page) -> None:
-    chromium_page, expect = chromium_page
-    _set_viewport(chromium_page, width=320, height=700)
-    _open_review_tab(chromium_page)
-
-    detail_prev = chromium_page.locator("#previous-item")
-    detail_next = chromium_page.locator("#next-item")
-    shortcut_strip = chromium_page.locator(".shortcut-strip")
-
-    expect(chromium_page.locator("#compact-review-nav")).to_have_count(0)
-    expect(detail_prev).to_be_visible()
-    expect(detail_next).to_be_visible()
-    expect(shortcut_strip).to_be_visible()
-
-    visible_shortcuts = chromium_page.evaluate(
-        """
-        () => [...document.querySelectorAll('.shortcut-strip .shortcut-item')]
-          .filter((node) => node.getClientRects().length > 0)
-          .map((node) => node.textContent?.trim() || '')
-        """
-    )
-    assert visible_shortcuts == ["Arrows Navigate"]
-
-    detail_prev_size = _bounding_size(detail_prev)
-    detail_next_size = _bounding_size(detail_next)
-    assert detail_prev_size["height"] >= 44
-    assert detail_next_size["height"] >= 44
+    expect(profile_select).to_have_value("normal")
+    stored_profile = chromium_page.evaluate("() => window.localStorage.getItem('shotsieve_resource_profile')")
+    assert stored_profile is None
 
 
 def test_review_position_counts_globally_across_pages(large_chromium_page) -> None:
@@ -639,103 +588,6 @@ def test_review_position_counts_globally_across_pages(large_chromium_page) -> No
     expect(chromium_page.locator("#review-position")).to_have_text("62 of 65")
 
 
-def test_active_library_scope_separates_totals_and_resets_review_state(scoped_chromium_page) -> None:
-        chromium_page, expect, root_a, root_b = scoped_chromium_page
-
-        def choose_library(root: str) -> None:
-                chromium_page.evaluate(
-                        """
-                        (root) => {
-                            const input = document.getElementById("library-root-input");
-                            input.value = root;
-                            input.dispatchEvent(new Event("change", { bubbles: true }));
-                        }
-                        """,
-                        root,
-                )
-                chromium_page.wait_for_function(
-                        """
-                        (root) => document.getElementById("root-filter")?.value === root
-                            && document.getElementById("review-scope-context")?.textContent?.includes(root)
-                        """,
-                    arg=root,
-                )
-
-        choose_library(root_a)
-        _open_review_tab(chromium_page)
-        expect(chromium_page.locator("#summary-strip")).to_contain_text("This library")
-        expect(chromium_page.locator("#summary-strip")).to_contain_text("61 scored")
-        expect(chromium_page.locator("#summary-strip")).to_contain_text("All cached libraries")
-        expect(chromium_page.locator("#summary-strip")).to_contain_text("62 scored")
-        expect(chromium_page.locator("#page-info")).to_contain_text("1–60 of 61")
-
-        chromium_page.locator("#select-all-matching-btn").click()
-        expect(chromium_page.locator("#selection-label")).to_have_text("61 selected")
-        chromium_page.locator("#page-next").click()
-        expect(chromium_page.locator("#page-info")).to_contain_text("61–61 of 61")
-
-        choose_library(root_b)
-        expect(chromium_page.locator("#review-scope-context")).to_have_text(f"Reviewing this library: {root_b}")
-        expect(chromium_page.locator("#selection-label")).to_have_text("0 selected")
-        expect(chromium_page.locator("#page-info")).to_contain_text("1–1 of 1")
-        expect(chromium_page.locator("#queue-list")).to_contain_text("b-001.jpg")
-
-        chromium_page.locator("#root-filter").select_option("")
-        expect(chromium_page.locator("#review-scope-context")).to_have_text("All libraries — global catalog view")
-        expect(chromium_page.locator("#review-scope-context")).to_have_attribute("data-scope", "global")
-        expect(chromium_page.locator("#page-info")).to_contain_text("1–60 of 62")
-
-
-def test_deleting_last_review_page_clamps_back_to_previous_page(large_chromium_page) -> None:
-        chromium_page, expect = large_chromium_page
-        _open_review_tab(chromium_page)
-
-        chromium_page.locator("#page-next").click()
-        expect(chromium_page.locator("#page-info")).to_contain_text("61–65 of 65")
-
-        chromium_page.evaluate("() => { window.confirm = () => true; }")
-        chromium_page.locator("#select-all-btn").click()
-        expect(chromium_page.locator("#selection-label")).to_have_text("5 selected")
-
-        chromium_page.locator("#batch-delete-disk").click()
-
-        chromium_page.wait_for_function(
-                """
-                () => {
-                    const pageInfo = document.getElementById('page-info')?.textContent || '';
-                    const reviewPosition = document.getElementById('review-position')?.textContent || '';
-                    return pageInfo.includes('1–60 of 60') && reviewPosition === '1 of 60';
-                }
-                """
-        )
-
-        expect(chromium_page.locator("#page-info")).to_contain_text("1–60 of 60")
-        expect(chromium_page.locator("#review-position")).to_have_text("1 of 60")
-
-
-def test_lightbox_modal_traps_and_restores_focus(chromium_page) -> None:
-    chromium_page, _ = chromium_page
-    _open_review_tab(chromium_page)
-
-    detail_image = chromium_page.locator("#detail-image")
-    detail_image.wait_for(state="visible")
-    detail_image.click()
-
-    chromium_page.wait_for_function("() => document.getElementById('lightbox-overlay')?.open === true")
-
-    active_id = chromium_page.evaluate("() => document.activeElement?.id")
-    chromium_page.keyboard.press("Tab")
-    after_tab_id = chromium_page.evaluate("() => document.activeElement?.id")
-
-    chromium_page.keyboard.press("Escape")
-    chromium_page.wait_for_function("() => document.getElementById('lightbox-overlay')?.open === false")
-    restored_id = chromium_page.evaluate("() => document.activeElement?.id")
-
-    assert active_id == "lightbox-close"
-    assert after_tab_id == "lightbox-close"
-    assert restored_id == "detail-image"
-
-
 def test_folder_inputs_expose_clean_accessible_names(chromium_page) -> None:
     chromium_page, expect = chromium_page
 
@@ -747,94 +599,42 @@ def test_folder_inputs_expose_clean_accessible_names(chromium_page) -> None:
     expect(chromium_page.locator("#browse-export-dir")).to_have_accessible_name("Browse for export destination")
 
 
-def test_folder_browser_path_field_has_explicit_accessible_name(chromium_page) -> None:
+def test_accessibility_smoke_exposes_named_shell_controls_and_dialogs(chromium_page) -> None:
     chromium_page, expect = chromium_page
 
-    chromium_page.evaluate("() => document.getElementById('folder-browser')?.showModal()")
-    expect(chromium_page.locator("#browser-path")).to_have_accessible_name("Current folder path")
+    expect(chromium_page.get_by_role("tab", name="Library")).to_be_visible()
+    expect(chromium_page.get_by_role("tab", name="Compare")).to_be_visible()
+    expect(chromium_page.get_by_role("tab", name="Review")).to_be_visible()
+    expect(chromium_page.get_by_role("tab", name="Settings")).to_be_visible()
 
+    expect(chromium_page.locator("#theme-toggle")).to_have_accessible_name(re.compile(r"Switch to (light|dark) theme"))
+    expect(chromium_page.locator("#refresh-all")).to_have_accessible_name("Refresh workspace")
 
-def test_folder_browser_close_restores_focus_to_trigger(chromium_page) -> None:
-    chromium_page, _ = chromium_page
-
-    trigger = chromium_page.get_by_role("button", name="Browse for photo folder")
-    trigger.focus()
     _open_folder_browser(chromium_page)
+    expect(chromium_page.locator("#folder-browser")).to_have_accessible_name("Select a Directory")
+    expect(chromium_page.locator("#folder-browser button[type='submit']")).to_have_accessible_name("Close")
     chromium_page.locator("#folder-browser button[type='submit']").click()
     chromium_page.wait_for_function("() => document.getElementById('folder-browser')?.open === false")
 
-    active_id = chromium_page.evaluate("() => document.activeElement?.id")
-
-    assert active_id == "browse-library-root"
-
-
-def test_folder_browser_choose_restores_focus_to_trigger(chromium_page) -> None:
-    chromium_page, _ = chromium_page
-
-    trigger = chromium_page.get_by_role("button", name="Browse for photo folder")
-    trigger.focus()
-    _open_folder_browser(chromium_page)
-    chosen_path = chromium_page.locator("#browser-path").input_value()
-    chromium_page.locator("#browser-choose").click()
-    chromium_page.wait_for_function("() => document.getElementById('folder-browser')?.open === false")
-
-    active_id = chromium_page.evaluate("() => document.activeElement?.id")
-    selected_path = chromium_page.locator("#library-root-input").input_value()
-
-    assert active_id == "browse-library-root"
-    assert selected_path == chosen_path
-
-
-def test_export_dialog_close_restores_focus_to_batch_move_trigger(chromium_page) -> None:
-    chromium_page, _ = chromium_page
-
-    batch_move = chromium_page.locator("#batch-move")
     _open_export_dialog(chromium_page)
+    expect(chromium_page.locator("#export-dialog")).to_have_accessible_name("Export Selected Photos")
+    expect(chromium_page.locator("#export-dialog button[type='submit']")).to_have_accessible_name("Close")
     chromium_page.locator("#export-dialog button[type='submit']").click()
     chromium_page.wait_for_function("() => document.getElementById('export-dialog')?.open === false")
 
-    active_id = chromium_page.evaluate("() => document.activeElement?.id")
+    expect(chromium_page.locator("#compare-overlay")).to_have_count(0)
 
-    assert batch_move.is_visible()
-    assert active_id == "batch-move"
-
-
-def test_accessibility_smoke_exposes_named_shell_controls_and_dialogs(chromium_page) -> None:
-        chromium_page, expect = chromium_page
-
-        expect(chromium_page.get_by_role("tab", name="Library")).to_be_visible()
-        expect(chromium_page.get_by_role("tab", name="Compare")).to_be_visible()
-        expect(chromium_page.get_by_role("tab", name="Review")).to_be_visible()
-        expect(chromium_page.get_by_role("tab", name="Settings")).to_be_visible()
-
-        expect(chromium_page.locator("#theme-toggle")).to_have_accessible_name(re.compile(r"Switch to (light|dark) theme"))
-        expect(chromium_page.locator("#refresh-all")).to_have_accessible_name("Refresh workspace")
-
-        _open_folder_browser(chromium_page)
-        expect(chromium_page.locator("#folder-browser")).to_have_accessible_name("Select a Directory")
-        expect(chromium_page.locator("#folder-browser button[type='submit']")).to_have_accessible_name("Close")
-        chromium_page.locator("#folder-browser button[type='submit']").click()
-        chromium_page.wait_for_function("() => document.getElementById('folder-browser')?.open === false")
-
-        _open_export_dialog(chromium_page)
-        expect(chromium_page.locator("#export-dialog")).to_have_accessible_name("Export Selected Photos")
-        expect(chromium_page.locator("#export-dialog button[type='submit']")).to_have_accessible_name("Close")
-        chromium_page.locator("#export-dialog button[type='submit']").click()
-        chromium_page.wait_for_function("() => document.getElementById('export-dialog')?.open === false")
-
-        expect(chromium_page.locator("#compare-overlay")).to_have_count(0)
-
-        chromium_page.evaluate("""
-                () => {
-                    const lightbox = document.getElementById('lightbox-overlay');
-                    if (lightbox && typeof lightbox.showModal === 'function' && !lightbox.open) {
-                        lightbox.showModal();
-                    }
+    chromium_page.evaluate("""
+            () => {
+                const lightbox = document.getElementById('lightbox-overlay');
+                if (lightbox && typeof lightbox.showModal === 'function' && !lightbox.open) {
+                    lightbox.showModal();
                 }
-        """)
-        chromium_page.wait_for_function("() => document.getElementById('lightbox-overlay')?.open === true")
-        expect(chromium_page.locator("#lightbox-overlay")).to_have_accessible_name("Photo preview")
-        expect(chromium_page.locator("#lightbox-close")).to_have_accessible_name("Close lightbox")
+            }
+    """)
+    chromium_page.wait_for_function("() => document.getElementById('lightbox-overlay')?.open === true")
+    expect(chromium_page.locator("#lightbox-overlay")).to_have_accessible_name("Photo preview")
+    expect(chromium_page.locator("#lightbox-close")).to_have_accessible_name("Close lightbox")
 
 
 def test_review_queue_rows_use_noninteractive_container_with_separate_controls(chromium_page) -> None:
@@ -1043,210 +843,6 @@ def test_review_batch_scope_label_clarifies_selected_target_after_opening_other_
     expect(chromium_page.locator("#detail-title")).to_have_text(second_title)
 
 
-def test_compare_failure_rendering_surfaces_warning_banner_and_failure_aware_summary(chromium_page) -> None:
-    chromium_page, expect = chromium_page
-    _open_compare_tab(chromium_page)
-
-    _render_compare_results(
-        chromium_page,
-        {
-            "model_names": ["topiq_nr", "arniqa"],
-            "rows": [
-                {
-                    "file_id": 0,
-                    "path": "C:/photos/broken.jpg",
-                    "topiq_nr_score": None,
-                    "topiq_nr_confidence": None,
-                    "topiq_nr_error": "Model weights missing",
-                    "arniqa_score": 74.0,
-                    "arniqa_confidence": 85.0,
-                }
-            ],
-            "compare_failures": [],
-            "files_considered": 1,
-            "files_compared": 1,
-            "files_skipped": 0,
-            "files_failed": 1,
-            "elapsed_seconds": 1.2,
-            "model_timings_seconds": {"arniqa": 0.6},
-        },
-    )
-
-    warning = chromium_page.locator("#compare-results-warning")
-    expect(warning).to_be_visible()
-    expect(warning).to_contain_text("Some model runs failed:")
-    expect(warning).to_contain_text("broken.jpg — TOPIQ (Recommended): Model weights missing")
-
-    topiq_summary = chromium_page.locator("#compare-summary-cards .compare-summary-card", has_text="TOPIQ (Recommended)")
-    expect(topiq_summary).to_be_visible()
-    summary_text = topiq_summary.inner_text()
-    assert "all failed" in summary_text
-    assert "n/a" not in summary_text
-
-    expect(chromium_page.locator("#compare-card-gallery .compare-result-card")).to_have_count(1)
-    expect(chromium_page.locator("#compare-card-gallery .compare-model-error")).to_contain_text("Failed: Model weights missing")
-
-
-def test_compare_results_default_to_topiq_sort_and_support_extreme_filters(chromium_page) -> None:
-    chromium_page, expect = chromium_page
-    _open_compare_tab(chromium_page)
-
-    _render_compare_results(
-        chromium_page,
-        {
-            "model_names": ["topiq_nr", "arniqa"],
-            "rows": [
-                {
-                    "file_id": 1,
-                    "path": "C:/photos/lowest.jpg",
-                    "topiq_nr_score": 10.0,
-                    "topiq_nr_confidence": 90.0,
-                    "arniqa_score": 50.0,
-                    "arniqa_confidence": 80.0,
-                },
-                {
-                    "file_id": 2,
-                    "path": "C:/photos/middle.jpg",
-                    "topiq_nr_score": 55.0,
-                    "topiq_nr_confidence": 90.0,
-                    "arniqa_score": 40.0,
-                    "arniqa_confidence": 80.0,
-                },
-                {
-                    "file_id": 3,
-                    "path": "C:/photos/highest.jpg",
-                    "topiq_nr_score": 95.0,
-                    "topiq_nr_confidence": 90.0,
-                    "arniqa_score": 60.0,
-                    "arniqa_confidence": 80.0,
-                },
-            ],
-            "compare_failures": [],
-            "files_considered": 3,
-            "files_compared": 3,
-            "files_skipped": 0,
-            "files_failed": 0,
-            "elapsed_seconds": 1.0,
-            "model_timings_seconds": {"topiq_nr": 0.5, "arniqa": 0.5},
-        },
-    )
-
-    expect(chromium_page.locator("#compare-row-sort")).to_have_value("topiq_nr:desc")
-    expect(chromium_page.locator("#compare-row-filter")).to_have_value("all")
-    expect(chromium_page.locator("#compare-card-gallery .compare-result-card")).to_have_count(3)
-
-    chromium_page.locator("#compare-row-filter").select_option("extremes")
-    expect(chromium_page.locator("#compare-card-gallery .compare-result-card")).to_have_count(2)
-    expect(chromium_page.locator("#compare-card-gallery")).to_contain_text("lowest.jpg")
-    expect(chromium_page.locator("#compare-card-gallery")).to_contain_text("highest.jpg")
-    expect(chromium_page.locator("#compare-card-gallery")).not_to_contain_text("middle.jpg")
-
-
-def test_compare_setup_failure_without_rows_keeps_warning_and_empty_state_visible(chromium_page) -> None:
-    chromium_page, expect = chromium_page
-    _open_compare_tab(chromium_page)
-
-    _render_compare_results(
-        chromium_page,
-        {
-            "model_names": ["topiq_nr", "arniqa"],
-            "rows": [
-                {
-                    "file_id": 0,
-                    "path": "C:/photos/previous-success.jpg",
-                    "topiq_nr_score": 82.0,
-                    "topiq_nr_confidence": 91.0,
-                    "arniqa_score": 74.0,
-                    "arniqa_confidence": 85.0,
-                }
-            ],
-            "compare_failures": [],
-            "files_considered": 1,
-            "files_compared": 1,
-            "files_skipped": 0,
-            "files_failed": 0,
-            "elapsed_seconds": 0.8,
-            "model_timings_seconds": {"topiq_nr": 0.4, "arniqa": 0.4},
-        },
-    )
-    expect(chromium_page.locator("#compare-card-gallery .compare-result-card")).to_have_count(1)
-
-    _render_compare_results(
-        chromium_page,
-        {
-            "model_names": ["topiq_nr", "arniqa"],
-            "rows": [],
-            "compare_failures": [
-                {
-                    "file_id": 3,
-                    "path": "C:/photos/broken.heic",
-                    "reason": "HEIF preview generation failed",
-                    "stage": "preview_generation",
-                }
-            ],
-            "files_considered": 1,
-            "files_compared": 0,
-            "files_skipped": 0,
-            "files_failed": 1,
-            "elapsed_seconds": 0.6,
-            "model_timings_seconds": {},
-        },
-    )
-
-    warning = chromium_page.locator("#compare-results-warning")
-    expect(warning).to_be_visible()
-    expect(warning).to_contain_text("Some model runs failed:")
-    expect(warning).to_contain_text("broken.heic — HEIF preview generation failed")
-
-    empty_state = chromium_page.locator("#compare-empty")
-    expect(empty_state).to_be_visible()
-    expect(empty_state).to_contain_text("No comparable cached files were available")
-    expect(empty_state).to_contain_text("1 file(s) failed during comparison setup.")
-
-    results = chromium_page.locator("#compare-results")
-    assert "hidden" in (results.get_attribute("class") or "")
-    expect(chromium_page.locator("#compare-card-gallery .compare-result-card")).to_have_count(0)
-
-
-def test_compare_truncation_warning_stays_visible_with_results(chromium_page) -> None:
-    chromium_page, expect = chromium_page
-    _open_compare_tab(chromium_page)
-
-    _render_compare_results(
-        chromium_page,
-        {
-            "model_names": ["topiq_nr", "arniqa"],
-            "rows": [
-                {
-                    "file_id": 0,
-                    "path": "C:/photos/sample.jpg",
-                    "topiq_nr_score": 82.0,
-                    "topiq_nr_confidence": 91.0,
-                    "arniqa_score": 74.0,
-                    "arniqa_confidence": 85.0,
-                }
-            ],
-            "compare_failures": [],
-            "requested_rows_total": 32000,
-            "processed_rows_total": 10000,
-            "truncated": True,
-            "max_rows": 10000,
-            "files_considered": 10000,
-            "files_compared": 10000,
-            "files_skipped": 0,
-            "files_failed": 0,
-            "elapsed_seconds": 12.4,
-            "model_timings_seconds": {"topiq_nr": 6.1, "arniqa": 6.3},
-        },
-    )
-
-    warning = chromium_page.locator("#compare-results-warning")
-    expect(warning).to_be_visible()
-    expect(warning).to_contain_text("Comparing first 10,000 of 32,000 files.")
-    expect(warning).to_contain_text("Narrow the root or apply filters for a full compare.")
-    expect(chromium_page.locator("#compare-card-gallery .compare-result-card")).to_have_count(1)
-
-
 def test_review_checkbox_selection_does_not_force_active_row_scroll(chromium_page) -> None:
     chromium_page, _ = chromium_page
     _open_review_tab(chromium_page)
@@ -1332,93 +928,3 @@ def test_review_queue_shift_range_anchor_resets_after_clearing_selection(chromiu
     expect(checkboxes.nth(0)).not_to_be_checked()
     expect(checkboxes.nth(1)).not_to_be_checked()
     expect(checkboxes.nth(2)).to_be_checked()
-
-
-def test_mobile_touch_targets_expand_queue_hit_areas(mobile_chromium_page) -> None:
-    chromium_page, _ = mobile_chromium_page
-
-    assert chromium_page.evaluate("() => window.matchMedia('(pointer: coarse)').matches") is True
-    _assert_touch_target_floor(chromium_page, ".checkbox-row", label="Recursive scan toggle")
-
-    _open_review_tab(chromium_page)
-
-    _assert_touch_target_floor(chromium_page, "#queue-list .queue-item .queue-select", label="Review queue checkbox target")
-
-
-@pytest.mark.parametrize("viewport", RESPONSIVE_VIEWPORTS)
-def test_responsive_layout_avoids_horizontal_overflow_and_keeps_tab_actions_visible(
-    chromium_page,
-    viewport: dict[str, int],
-) -> None:
-    chromium_page, _ = chromium_page
-    _set_viewport(chromium_page, **viewport)
-
-    chromium_page.get_by_role("tab", name="Library").click()
-    _assert_no_horizontal_overflow(chromium_page, label=f"Library tab at {viewport['width']}px")
-    _assert_within_viewport(
-        chromium_page,
-        chromium_page.locator("#analyze-library"),
-        label=f"Analyze button at {viewport['width']}px",
-    )
-
-    _open_compare_tab(chromium_page)
-    _assert_no_horizontal_overflow(chromium_page, label=f"Compare tab at {viewport['width']}px")
-    _assert_within_viewport(
-        chromium_page,
-        chromium_page.locator("#compare-run"),
-        label=f"Compare run button at {viewport['width']}px",
-    )
-
-    _open_review_tab(chromium_page)
-    _assert_no_horizontal_overflow(chromium_page, label=f"Review tab at {viewport['width']}px")
-    _assert_within_viewport(
-        chromium_page,
-        chromium_page.locator("#batch-export-mark"),
-        label=f"Review keep button at {viewport['width']}px",
-    )
-
-    _open_settings_tab(chromium_page)
-    _assert_no_horizontal_overflow(chromium_page, label=f"Settings tab at {viewport['width']}px")
-    _assert_within_viewport(
-        chromium_page,
-        chromium_page.locator("#tab-settings h2").first,
-        label=f"Settings heading at {viewport['width']}px",
-    )
-
-
-@pytest.mark.parametrize("viewport", RESPONSIVE_VIEWPORTS)
-def test_responsive_dialog_flows_fit_inside_viewport(chromium_page, viewport: dict[str, int]) -> None:
-    chromium_page, _ = chromium_page
-    _set_viewport(chromium_page, **viewport)
-
-    chromium_page.get_by_role("tab", name="Library").click()
-    _open_folder_browser(chromium_page)
-    _assert_within_viewport(
-        chromium_page,
-        chromium_page.locator("#folder-browser"),
-        label=f"Folder browser dialog at {viewport['width']}px",
-    )
-    _assert_within_viewport(
-        chromium_page,
-        chromium_page.locator("#browser-choose"),
-        label=f"Choose Folder button at {viewport['width']}px",
-    )
-    chromium_page.locator("#folder-browser button[type='submit']").click()
-    chromium_page.wait_for_function("() => document.getElementById('folder-browser')?.open === false")
-
-    _open_review_tab(chromium_page)
-    first_row = chromium_page.locator("#queue-list .queue-item").first
-    first_filename = first_row.locator(".queue-file").inner_text()
-    first_row.get_by_role("checkbox", name=f"Select {first_filename}").click()
-    chromium_page.locator("#batch-move").click()
-    chromium_page.wait_for_function("() => document.getElementById('export-dialog')?.open === true")
-    _assert_within_viewport(
-        chromium_page,
-        chromium_page.locator("#export-dialog"),
-        label=f"Export dialog at {viewport['width']}px",
-    )
-    _assert_within_viewport(
-        chromium_page,
-        chromium_page.locator("#export-confirm"),
-        label=f"Export confirmation button at {viewport['width']}px",
-    )

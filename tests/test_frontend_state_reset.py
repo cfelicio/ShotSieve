@@ -48,20 +48,20 @@ def test_reset_everything_clears_persisted_ui_state(frontend_server: str) -> Non
 
 def test_ui_state_is_scoped_to_database_marker(frontend_server: str) -> None:
     state_body = urlopen(f"{frontend_server}/app-state.js").read().decode("utf-8")
-    app_body = urlopen(f"{frontend_server}/app.js").read().decode("utf-8")
+    controller_body = urlopen(f"{frontend_server}/app-controller.js").read().decode("utf-8")
 
     assert "function currentDatabaseMarker()" in state_body
     assert "documentRef.body?.dataset?.databasePath" in state_body
     assert "if (!savedDatabase || savedDatabase !== expectedDatabase)" in state_body
     assert "database: currentDatabaseMarker()," in state_body
-    assert "document.body.dataset.databasePath = options.database || \"\";" in app_body
+    assert "document.body.dataset.databasePath = options.database || \"\";" in controller_body
 
 
 def test_analyze_library_resets_review_pagination_before_loading_results(frontend_server: str) -> None:
     workflows_body = urlopen(f"{frontend_server}/app-workflows.js").read().decode("utf-8")
 
     analyze_index = workflows_body.index("async function analyzeLibrary()")
-    analyze_block = workflows_body[analyze_index : analyze_index + 900]
+    analyze_block = workflows_body[analyze_index : analyze_index + 1600]
 
     assert "state.page = 0;" in analyze_block
     assert "await loadQueue();" in analyze_block
@@ -84,17 +84,17 @@ def test_analyze_library_resets_review_filters_to_analyzed_root(frontend_server:
     assert 'rootFilter.value = root;' in helper_block
 
     analyze_index = workflows_body.index("async function analyzeLibrary()")
-    analyze_block = workflows_body[analyze_index : analyze_index + 1100]
+    analyze_block = workflows_body[analyze_index : analyze_index + 1600]
     assert "const reviewRoot = syncReviewRoot(root) || root;" in analyze_block
     assert "resetReviewFiltersForAnalyze(reviewRoot);" in analyze_block
     assert analyze_block.index("resetReviewFiltersForAnalyze(reviewRoot);") < analyze_block.index("await loadQueue();")
 
 
 def test_load_queue_keeps_query_available_after_page_clamp_retry(frontend_server: str) -> None:
-    app_body = urlopen(f"{frontend_server}/app.js").read().decode("utf-8")
+    grid_body = urlopen(f"{frontend_server}/app-grid.js").read().decode("utf-8")
 
-    load_queue_index = app_body.index("async function loadQueue()")
-    load_queue_block = app_body[load_queue_index : load_queue_index + 1800]
+    load_queue_index = grid_body.index("async function loadQueue()")
+    load_queue_block = grid_body[load_queue_index : load_queue_index + 1800]
 
     assert "let query = null;" in load_queue_block
     assert "query = currentQuery();" in load_queue_block
@@ -102,10 +102,10 @@ def test_load_queue_keeps_query_available_after_page_clamp_retry(frontend_server
 
 
 def test_review_save_refreshes_rejected_actions_pagination(frontend_server: str) -> None:
-    app_body = urlopen(f"{frontend_server}/app.js").read().decode("utf-8")
+    grid_body = urlopen(f"{frontend_server}/app-grid.js").read().decode("utf-8")
     workflows_body = urlopen(f"{frontend_server}/app-workflows.js").read().decode("utf-8")
 
-    assert "renderPagination," in app_body
+    assert "renderPagination" in grid_body
 
     save_index = workflows_body.index("async function saveReview(payload)")
     save_block = workflows_body[save_index : save_index + 900]

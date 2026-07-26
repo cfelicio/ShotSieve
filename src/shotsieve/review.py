@@ -1,39 +1,83 @@
 from __future__ import annotations
 
-from pathlib import Path
-from typing import Iterable, Sequence
 from concurrent.futures import ThreadPoolExecutor
-from typing import Callable
+from pathlib import Path
+from typing import Iterable
 
-from shotsieve.config import RAW_CAMERA_EXTENSIONS
-from shotsieve.db import escape_like, infer_preview_cache_roots, normalize_resolved_path, preview_cache_root_is_claimed, roots_path_filter
+from shotsieve.db import normalize_resolved_path
 from shotsieve.performance import log_duration, monotonic_seconds
-from shotsieve.preview import clear_preview_cache_dir, delete_managed_preview_file
 
+from shotsieve.review_filters import (
+    SORT_ORDERS,
+    VALID_DECISION_STATES,
+    _build_after_id_filter,
+    _build_file_filters,
+    _build_format_filters,
+    _build_issue_filters,
+    _build_metadata_status_filters,
+    _build_resolution_filters,
+    _build_review_browser_where,
+    _build_review_state_filters,
+    _build_score_filters,
+    _build_size_filters,
+    _compile_where_clause,
+)
+from shotsieve.review_cache import (
+    _PRUNE_MISSING_CACHE_BATCH_SIZE,
+    _allow_legacy_preview_path_fallback,
+    _is_within_dir,
+    _resolve_ready_preview_path,
+    _resolve_source_path_within_roots,
+    _trusted_delete_roots,
+    clear_cache_scope,
+    delete_files,
+    media_path_for_file,
+    normalize_file_ids,
+    prune_missing_cache_entries,
+    remove_files_from_cache,
+)
 
-VALID_DECISION_STATES = {"pending", "delete", "export"}
-
-
-_PRUNE_MISSING_CACHE_BATCH_SIZE = 5000
-
-
-SORT_ORDERS = {
-    "score_asc": "scores.overall_score ASC, files.id ASC",
-    "score_desc": "scores.overall_score DESC, scores.file_id ASC",
-    "learned_asc": "scores.learned_score_normalized ASC, scores.overall_score ASC, scores.file_id ASC",
-    "learned_desc": "scores.learned_score_normalized DESC, files.id ASC",
-    "date_asc": "files.capture_time ASC, files.id ASC",
-    "date_desc": "files.capture_time DESC, files.id ASC",
-    "recent": "files.last_scan_time DESC, files.id DESC",
-    "path": "files.path ASC",
-    "resolution_asc": "(files.width * files.height) ASC, files.id ASC",
-    "resolution_desc": "(files.width * files.height) DESC, files.id ASC",
-    "size_asc": "files.size_bytes ASC, files.id ASC",
-    "size_desc": "files.size_bytes DESC, files.id ASC",
-    "format": "files.format ASC, files.id ASC",
-    "width": "files.width ASC, files.id ASC",
-    "height": "files.height ASC, files.id ASC",
-}
+__all__ = [
+    "SORT_ORDERS",
+    "ThreadPoolExecutor",
+    "VALID_DECISION_STATES",
+    "_PRUNE_MISSING_CACHE_BATCH_SIZE",
+    "_allow_legacy_preview_path_fallback",
+    "_build_after_id_filter",
+    "_build_file_filters",
+    "_build_format_filters",
+    "_build_issue_filters",
+    "_build_metadata_status_filters",
+    "_build_resolution_filters",
+    "_build_review_browser_where",
+    "_build_review_state_filters",
+    "_build_score_filters",
+    "_build_size_filters",
+    "_compile_where_clause",
+    "_is_within_dir",
+    "_resolve_ready_preview_path",
+    "_resolve_source_path_within_roots",
+    "_review_summary",
+    "_trusted_delete_roots",
+    "clear_cache_scope",
+    "count_review_files",
+    "delete_files",
+    "get_review_file_detail",
+    "list_analysis_diagnostics",
+    "list_review_browser_file_ids",
+    "list_review_files",
+    "list_review_state_file_ids",
+    "list_roots",
+    "list_scan_runs",
+    "media_path_for_file",
+    "normalize_file_ids",
+    "prune_missing_cache_entries",
+    "remove_files_from_cache",
+    "review_overview",
+    "review_selection_revision",
+    "update_review_state",
+    "update_review_state_batch",
+]
 
 
 def _review_summary(connection, *, root: str | None = None) -> dict[str, int]:
@@ -175,271 +219,6 @@ def list_analysis_diagnostics(
         })
 
     return {"total": int(total_row["row_count"] or 0), "items": items}
-
-
-
-def _build_file_filters(
-    *,
-    root: str | None = None,
-    query: str | None = None,
-) -> tuple[list[str], list[object]]:
-    path_query = query.casefold() if query else None
-    conditions: list[str] = []
-    params: list[object] = []
-
-    if root:
-        roots = [Path(p).expanduser().resolve() for p in root.split("|") if p.strip()]
-        if roots:
-            root_clause, root_params = roots_path_filter("files.path_key", roots)
-            conditions.append(root_clause)
-            params.extend(root_params)
-
-    if path_query:
-        conditions.append("unicode_casefold(files.path) LIKE ? ESCAPE '\\'")
-        params.append(f"%{escape_like(path_query)}%")
-
-    return conditions, params
-
-
-def _build_format_filters(*, formats: list[str] | None = None) -> tuple[list[str], list[object]]:
-    if not formats:
-        return [], []
-    
-    target_formats: set[str] = set()
-    include_other = False
-    
-    for f in formats:
-        f = f.strip().lower()
-        if not f:
-            continue
-        if f == "jpeg":
-            target_formats.update({"jpg", "jpeg"})
-        elif f == "png":
-            target_formats.add("png")
-        elif f == "tiff":
-            target_formats.update({"tif", "tiff"})
-        elif f in ("heif", "heic", "heif/heic"):
-            target_formats.update({"heic", "heif", "hif"})
-        elif f == "raw":
-            target_formats.update({ext.lstrip(".") for ext in RAW_CAMERA_EXTENSIONS})
-        elif f == "other":
-            include_other = True
-        else:
-            target_formats.add(f.lstrip("."))
-            
-    conditions: list[str] = []
-    params: list[object] = []
-    
-    sub_conditions: list[str] = []
-    if target_formats:
-        placeholders = ", ".join("?" for _ in target_formats)
-        sub_conditions.append(f"files.format IN ({placeholders})")
-        params.extend(target_formats)
-        
-    if include_other:
-        standard_sets = {"jpg", "jpeg", "png", "tif", "tiff", "heic", "heif", "hif"}
-        standard_sets.update({ext.lstrip(".") for ext in RAW_CAMERA_EXTENSIONS})
-        placeholders = ", ".join("?" for _ in standard_sets)
-        sub_conditions.append(f"files.format NOT IN ({placeholders}) OR files.format IS NULL")
-        params.extend(standard_sets)
-        
-    if sub_conditions:
-        conditions.append("(" + " OR ".join(sub_conditions) + ")")
-        
-    return conditions, params
-
-
-def _build_resolution_filters(
-    *,
-    min_mp: float | None = None,
-    max_mp: float | None = None,
-    min_width: int | None = None,
-    max_width: int | None = None,
-    min_height: int | None = None,
-    max_height: int | None = None,
-    min_edge: int | None = None,
-    max_edge: int | None = None,
-) -> tuple[list[str], list[object]]:
-    conditions: list[str] = []
-    params: list[object] = []
-    
-    if min_mp is not None:
-        conditions.append("files.width IS NOT NULL AND files.height IS NOT NULL AND (files.width * files.height) >= ?")
-        params.append(int(min_mp * 1_000_000))
-        
-    if max_mp is not None:
-        conditions.append("files.width IS NOT NULL AND files.height IS NOT NULL AND (files.width * files.height) <= ?")
-        params.append(int(max_mp * 1_000_000))
-        
-    if min_width is not None:
-        conditions.append("files.width IS NOT NULL AND files.width >= ?")
-        params.append(min_width)
-        
-    if max_width is not None:
-        conditions.append("files.width IS NOT NULL AND files.width <= ?")
-        params.append(max_width)
-        
-    if min_height is not None:
-        conditions.append("files.height IS NOT NULL AND files.height >= ?")
-        params.append(min_height)
-        
-    if max_height is not None:
-        conditions.append("files.height IS NOT NULL AND files.height <= ?")
-        params.append(max_height)
-    
-    if min_edge is not None:
-        conditions.append("files.width IS NOT NULL AND files.height IS NOT NULL AND (CASE WHEN files.width > files.height THEN files.width ELSE files.height END) >= ?")
-        params.append(min_edge)
-
-    if max_edge is not None:
-        conditions.append("files.width IS NOT NULL AND files.height IS NOT NULL AND (CASE WHEN files.width > files.height THEN files.width ELSE files.height END) <= ?")
-        params.append(max_edge)
-        
-    return conditions, params
-
-
-def _build_size_filters(
-    *,
-    min_size: int | None = None,
-    max_size: int | None = None,
-) -> tuple[list[str], list[object]]:
-    conditions: list[str] = []
-    params: list[object] = []
-    
-    if min_size is not None:
-        conditions.append("files.size_bytes IS NOT NULL AND files.size_bytes >= ?")
-        params.append(min_size)
-        
-    if max_size is not None:
-        conditions.append("files.size_bytes IS NOT NULL AND files.size_bytes <= ?")
-        params.append(max_size)
-        
-    return conditions, params
-
-
-def _build_metadata_status_filters(*, metadata: str = "all") -> tuple[list[str], list[object]]:
-    conditions: list[str] = []
-    
-    if metadata not in {"all", "valid", "unknown"}:
-        raise ValueError("metadata must be one of: all, valid, unknown")
-        
-    if metadata == "unknown":
-        conditions.append("(files.width IS NULL OR files.height IS NULL OR files.size_bytes IS NULL OR files.format IS NULL)")
-    elif metadata == "valid":
-        conditions.append("(files.width IS NOT NULL AND files.height IS NOT NULL AND files.size_bytes IS NOT NULL AND files.format IS NOT NULL)")
-        
-    return conditions, []
-
-
-
-def _build_score_filters(
-    *,
-    require_scored: bool,
-    min_score: float | None = None,
-    max_score: float | None = None,
-) -> tuple[list[str], list[object]]:
-    conditions: list[str] = []
-    params: list[object] = []
-
-    if require_scored:
-        conditions.append("scores.overall_score IS NOT NULL")
-
-    if min_score is not None:
-        conditions.append("scores.overall_score >= ?")
-        params.append(min_score)
-
-    if max_score is not None:
-        conditions.append("scores.overall_score <= ?")
-        params.append(max_score)
-
-    return conditions, params
-
-
-def _build_review_state_filters(*, marked: str = "all") -> tuple[list[str], list[object]]:
-    conditions: list[str] = []
-    params: list[object] = []
-
-    if marked not in {"all", "delete", "export", "none"}:
-        raise ValueError("marked must be one of: all, delete, export, none")
-
-    if marked == "delete":
-        conditions.append("COALESCE(review_state.delete_marked, 0) = 1")
-    elif marked == "export":
-        conditions.append("COALESCE(review_state.export_marked, 0) = 1")
-    elif marked == "none":
-        conditions.append("COALESCE(review_state.delete_marked, 0) = 0")
-        conditions.append("COALESCE(review_state.export_marked, 0) = 0")
-
-    return conditions, params
-
-
-def _build_issue_filters(*, issues: str = "all") -> tuple[list[str], list[object]]:
-    conditions: list[str] = []
-    params: list[object] = []
-
-    if issues not in {"all", "issues"}:
-        raise ValueError("issues must be one of: all, issues")
-
-    if issues == "issues":
-        conditions.append("COALESCE(TRIM(files.last_error), '') <> ''")
-
-    return conditions, params
-
-
-def _compile_where_clause(*filter_groups: tuple[list[str], list[object]]) -> tuple[str, list[object]]:
-    conditions: list[str] = []
-    params: list[object] = []
-    for group_conditions, group_params in filter_groups:
-        conditions.extend(group_conditions)
-        params.extend(group_params)
-
-    where_clause = "WHERE " + " AND ".join(conditions) if conditions else ""
-    return where_clause, params
-
-
-def _build_after_id_filter(*, after_id: int | None = None) -> tuple[list[str], list[object]]:
-    if after_id is None or after_id <= 0:
-        return [], []
-    return ["files.id > ?"], [after_id]
-
-
-def _build_review_browser_where(
-    *,
-    root: str | None = None,
-    marked: str = "all",
-    issues: str = "all",
-    query: str | None = None,
-    min_score: float | None = None,
-    max_score: float | None = None,
-    formats: list[str] | None = None,
-    min_mp: float | None = None,
-    max_mp: float | None = None,
-    min_width: int | None = None,
-    max_width: int | None = None,
-    min_height: int | None = None,
-    max_height: int | None = None,
-    min_edge: int | None = None,
-    max_edge: int | None = None,
-    min_size: int | None = None,
-    max_size: int | None = None,
-    metadata: str = "all",
-) -> tuple[str, list[object]]:
-    """Build the score-backed WHERE clause for the review browser queue."""
-    return _compile_where_clause(
-        _build_file_filters(root=root, query=query),
-        _build_score_filters(require_scored=True, min_score=min_score, max_score=max_score),
-        _build_review_state_filters(marked=marked),
-        _build_issue_filters(issues=issues),
-        _build_format_filters(formats=formats),
-        _build_resolution_filters(
-            min_mp=min_mp, max_mp=max_mp,
-            min_width=min_width, max_width=max_width,
-            min_height=min_height, max_height=max_height,
-            min_edge=min_edge, max_edge=max_edge,
-        ),
-        _build_size_filters(min_size=min_size, max_size=max_size),
-        _build_metadata_status_filters(metadata=metadata),
-    )
 
 
 def count_review_files(
@@ -635,7 +414,7 @@ def list_review_files(
     sql_parts = [
         """
         SELECT files.id, files.path, files.format, files.preview_status, files.preview_path,
-             files.width, files.height, files.size_bytes, files.capture_time, files.last_error,
+               files.width, files.height, files.size_bytes, files.capture_time, files.last_error,
                scores.overall_score,
                scores.learned_backend, scores.learned_score_normalized, scores.learned_confidence,
                COALESCE(review_state.decision_state, 'pending') AS decision_state,
@@ -896,325 +675,3 @@ def update_review_state_batch(
     )
 
     return len(normalized_ids)
-
-
-def remove_files_from_cache(
-    connection,
-    *,
-    file_ids: Iterable[int],
-    preview_cache_root: Path | None = None,
-) -> int:
-    normalized_ids = normalize_file_ids(file_ids)
-    allow_preview_path_fallback = _allow_legacy_preview_path_fallback(connection, preview_cache_root)
-    rows = connection.execute(
-        f"SELECT path, preview_path FROM files WHERE id IN ({','.join('?' for _ in normalized_ids)})",
-        tuple(normalized_ids),
-    ).fetchall()
-
-    for row in rows:
-        delete_managed_preview_file(
-            row["preview_path"],
-            source_path=row["path"],
-            preview_cache_root=preview_cache_root,
-            allow_path_parent_fallback=allow_preview_path_fallback,
-            suppress_errors=True,
-        )
-
-    connection.executemany(
-        "DELETE FROM files WHERE id = ?",
-        [(file_id,) for file_id in normalized_ids],
-    )
-    return len(normalized_ids)
-
-
-def prune_missing_cache_entries(connection, *, preview_cache_root: Path | None = None) -> int:
-    """Remove cached file entries whose source files no longer exist on disk.
-
-    THREAD-SAFETY NOTE: The ThreadPoolExecutor is used ONLY for filesystem
-    existence checks (Path.exists). All database operations must happen on the
-    calling thread. Do NOT add connection.execute() calls inside the executor
-    - SQLite connections are not safe to share across threads.
-    """
-    allow_preview_path_fallback = _allow_legacy_preview_path_fallback(connection, preview_cache_root)
-    removed_count = 0
-    last_seen_id = 0
-
-    def check_exists(row):
-        return row if not Path(row["path"]).exists() else None
-
-    with ThreadPoolExecutor(max_workers=16) as executor:
-        while True:
-            rows = connection.execute(
-                """
-                SELECT id, path, preview_path
-                FROM files
-                WHERE id > ?
-                ORDER BY id ASC
-                LIMIT ?
-                """,
-                (last_seen_id, _PRUNE_MISSING_CACHE_BATCH_SIZE),
-            ).fetchall()
-            if not rows:
-                break
-
-            last_seen_id = rows[-1]["id"]
-            missing_rows = list(filter(None, executor.map(check_exists, rows)))
-            if not missing_rows:
-                continue
-
-            for row in missing_rows:
-                delete_managed_preview_file(
-                    row["preview_path"],
-                    source_path=row["path"],
-                    preview_cache_root=preview_cache_root,
-                    allow_path_parent_fallback=allow_preview_path_fallback,
-                    suppress_errors=True,
-                )
-
-            connection.executemany(
-                "DELETE FROM files WHERE id = ?",
-                [(row["id"],) for row in missing_rows],
-            )
-            removed_count += len(missing_rows)
-
-    return removed_count
-
-
-def clear_cache_scope(
-    connection,
-    *,
-    scope: str,
-    preview_cache_root: Path | None = None,
-    progress_callback: Callable[[int, int, str], None] | None = None,
-    cancel_check: Callable[[], None] | None = None,
-) -> dict[str, int]:
-    def emit_progress(processed: int, total: int, phase: str = "clearing_cache") -> None:
-        if progress_callback is not None:
-            progress_callback(processed, total, phase)
-
-    if scope == "scores":
-        emit_progress(0, 1)
-        if cancel_check is not None:
-            cancel_check()
-        removed = connection.execute("SELECT COUNT(*) AS count FROM scores").fetchone()["count"]
-        connection.execute("DELETE FROM scores")
-        emit_progress(1, 1)
-        return {"files": 0, "scores": removed, "review": 0, "scan_runs": 0}
-
-    if scope == "review":
-        emit_progress(0, 1)
-        if cancel_check is not None:
-            cancel_check()
-        removed = connection.execute("SELECT COUNT(*) AS count FROM review_state").fetchone()["count"]
-        connection.execute("DELETE FROM review_state")
-        emit_progress(1, 1)
-        return {"files": 0, "scores": 0, "review": removed, "scan_runs": 0}
-
-    if scope == "all":
-        allow_preview_path_fallback = _allow_legacy_preview_path_fallback(connection, preview_cache_root)
-        review_count = connection.execute("SELECT COUNT(*) AS count FROM review_state").fetchone()["count"]
-        score_count = connection.execute("SELECT COUNT(*) AS count FROM scores").fetchone()["count"]
-        file_count = connection.execute("SELECT COUNT(*) AS count FROM files").fetchone()["count"]
-        scan_run_count = connection.execute("SELECT COUNT(*) AS count FROM scan_runs").fetchone()["count"]
-        preview_rows = connection.execute(
-            "SELECT path, preview_path FROM files WHERE preview_path IS NOT NULL"
-        ).fetchall()
-        total_steps = max(1, len(preview_rows) + 1)
-
-        emit_progress(0, total_steps)
-
-        for index, row in enumerate(preview_rows, start=1):
-            if cancel_check is not None:
-                cancel_check()
-            delete_managed_preview_file(
-                row["preview_path"],
-                source_path=row["path"],
-                preview_cache_root=preview_cache_root,
-                allow_path_parent_fallback=allow_preview_path_fallback,
-                suppress_errors=True,
-            )
-            emit_progress(index, total_steps)
-
-        cleanup_roots = []
-        if preview_cache_root is not None:
-            cleanup_roots.append(preview_cache_root.expanduser().resolve())
-        cleanup_roots.extend(infer_preview_cache_roots(connection))
-
-        for cleanup_root in dict.fromkeys(cleanup_roots):
-            if cancel_check is not None:
-                cancel_check()
-            if preview_cache_root_is_claimed(cleanup_root):
-                clear_preview_cache_dir(cleanup_root, suppress_errors=True)
-
-        if cancel_check is not None:
-            cancel_check()
-        connection.execute("DELETE FROM review_state")
-        connection.execute("DELETE FROM scores")
-        connection.execute("DELETE FROM files")
-        connection.execute("DELETE FROM scan_runs")
-        emit_progress(total_steps, total_steps)
-        return {"files": file_count, "scores": score_count, "review": review_count, "scan_runs": scan_run_count}
-
-    raise ValueError("scope must be one of: scores, review, all")
-
-
-def delete_files(
-    connection,
-    *,
-    file_ids: Iterable[int],
-    delete_from_disk: bool,
-    preview_cache_root: Path | None = None,
-    progress_callback: Callable[[int, int], None] | None = None,
-    cancel_check: Callable[[], None] | None = None,
-) -> dict[str, object]:
-    normalized_ids = normalize_file_ids(file_ids)
-    allow_preview_path_fallback = _allow_legacy_preview_path_fallback(connection, preview_cache_root)
-    trusted_roots = _trusted_delete_roots(connection) if delete_from_disk else ()
-    rows = connection.execute(
-        f"SELECT id, path, path_key, preview_path FROM files WHERE id IN ({','.join('?' for _ in normalized_ids)})",
-        tuple(normalized_ids),
-    ).fetchall()
-
-    if len(rows) != len(normalized_ids):
-        raise ValueError("One or more file_ids do not exist in the cache")
-
-    deleted_ids: list[int] = []
-    failed: list[dict[str, object]] = []
-    total_files = len(rows)
-
-    if progress_callback is not None:
-        progress_callback(0, total_files)
-
-    for index, row in enumerate(rows, start=1):
-        if cancel_check is not None:
-            cancel_check()
-        try:
-            if delete_from_disk:
-                resolved_source_path = _resolve_source_path_within_roots(
-                    row["path"],
-                    row["path_key"],
-                    trusted_roots,
-                )
-                delete_managed_preview_file(
-                    row["preview_path"],
-                    source_path=resolved_source_path,
-                    preview_cache_root=preview_cache_root,
-                    allow_path_parent_fallback=allow_preview_path_fallback,
-                )
-
-                resolved_source_path.unlink(missing_ok=True)
-
-            connection.execute("DELETE FROM files WHERE id = ?", (row["id"],))
-            deleted_ids.append(row["id"])
-        except (OSError, ValueError) as exc:
-            failed.append({"id": row["id"], "path": row["path"], "error": str(exc)})
-        finally:
-            if progress_callback is not None:
-                progress_callback(index, total_files)
-
-    return {
-        "deleted_ids": deleted_ids,
-        "deleted_count": len(deleted_ids),
-        "failed": failed,
-        "failed_count": len(failed),
-        "delete_from_disk": delete_from_disk,
-    }
-
-
-def normalize_file_ids(file_ids: Iterable[int]) -> list[int]:
-    normalized = sorted({int(file_id) for file_id in file_ids})
-    if not normalized:
-        raise ValueError("At least one file_id is required")
-    if any(file_id <= 0 for file_id in normalized):
-        raise ValueError("file_ids must all be positive integers")
-    return normalized
-
-
-def _allow_legacy_preview_path_fallback(connection, preview_cache_root: Path | None) -> bool:
-    if preview_cache_root is None:
-        return False
-    return len(infer_preview_cache_roots(connection)) > 1
-
-
-def _trusted_delete_roots(connection) -> tuple[Path, ...]:
-    rows = connection.execute(
-        """
-        SELECT DISTINCT root_path
-        FROM scan_runs
-        WHERE COALESCE(TRIM(root_path), '') != ''
-        ORDER BY root_path ASC
-        """
-    ).fetchall()
-    roots: list[Path] = []
-    for row in rows:
-        try:
-            roots.append(Path(row["root_path"]).expanduser().resolve())
-        except OSError:
-            continue
-    return tuple(dict.fromkeys(roots))
-
-
-def _resolve_source_path_within_roots(
-    path_value: str | Path,
-    expected_path_key: str,
-    trusted_roots: Sequence[Path],
-) -> Path:
-    resolved_path = Path(path_value).expanduser().resolve()
-    if not trusted_roots:
-        raise OSError(
-            f"Refusing to delete file outside tracked scan roots: {resolved_path}"
-        )
-
-    resolved_path_key = normalize_resolved_path(resolved_path)
-    if resolved_path_key != expected_path_key:
-        raise OSError(
-            f"Refusing to delete file with mismatched path key: {resolved_path}"
-        )
-
-    for root in trusted_roots:
-        if _is_within_dir(resolved_path, root):
-            return resolved_path
-
-    raise OSError(f"Refusing to delete file outside tracked scan roots: {resolved_path}")
-
-
-def _is_within_dir(path: Path, candidate_dir: Path) -> bool:
-    try:
-        path.relative_to(candidate_dir)
-        return True
-    except ValueError:
-        return False
-
-
-def _resolve_ready_preview_path(raw_preview_path: str | None, preview_status: str | None) -> Path | None:
-    if not raw_preview_path or preview_status != "ready":
-        return None
-    preview_path = Path(raw_preview_path)
-    return preview_path if preview_path.exists() else None
-
-
-def media_path_for_file(connection, *, file_id: int, variant: str) -> Path | None:
-    row = connection.execute(
-        "SELECT path, preview_path, preview_status FROM files WHERE id = ?",
-        (file_id,),
-    ).fetchone()
-    if row is None:
-        return None
-
-    source_path = Path(row["path"])
-    preview_path = _resolve_ready_preview_path(row["preview_path"], row["preview_status"])
-
-    # /api/media/source must return the original file path when available.
-    if variant == "source":
-        return source_path if source_path.exists() else None
-
-    # /api/media/preview prefers generated previews whenever available.
-    if preview_path is not None:
-        return preview_path
-
-    if not source_path.exists():
-        return None
-
-    # Generated preview is preferred for browser-fragile formats, but the
-    # source is a deterministic last-resort fallback for any format.
-    return source_path

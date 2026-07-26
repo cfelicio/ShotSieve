@@ -106,7 +106,12 @@ class TestStaticAssetHeaders:
             urlopen(f"{base_url}/app-busy.js").read().decode("utf-8"),
             urlopen(f"{base_url}/app-review.js").read().decode("utf-8"),
             urlopen(f"{base_url}/app-workflow-polling.js").read().decode("utf-8"),
+            urlopen(f"{base_url}/app-workflow-compare.js").read().decode("utf-8"),
+            urlopen(f"{base_url}/app-workflow-export.js").read().decode("utf-8"),
+            urlopen(f"{base_url}/app-workflow-library.js").read().decode("utf-8"),
             urlopen(f"{base_url}/app-workflows.js").read().decode("utf-8"),
+            urlopen(f"{base_url}/app-grid.js").read().decode("utf-8"),
+            urlopen(f"{base_url}/app-controller.js").read().decode("utf-8"),
             urlopen(f"{base_url}/app-events.js").read().decode("utf-8"),
         ]
         return "\n".join(parts)
@@ -116,6 +121,7 @@ class TestStaticAssetHeaders:
         parts = [
             urlopen(f"{base_url}/styles.css").read().decode("utf-8"),
             urlopen(f"{base_url}/styles-layout.css").read().decode("utf-8"),
+            urlopen(f"{base_url}/styles-workstation.css").read().decode("utf-8"),
             urlopen(f"{base_url}/styles-polish.css").read().decode("utf-8"),
         ]
         return "\n".join(parts)
@@ -625,7 +631,7 @@ class TestStaticAssetHeaders:
 
     def test_static_split_css_files_include_content_length(self, test_server):
         base_url, _, _ = test_server
-        for route in ("/styles-layout.css", "/styles-polish.css"):
+        for route in ("/styles-layout.css", "/styles-workstation.css", "/styles-polish.css"):
             response = urlopen(f"{base_url}{route}")
             assert response.headers.get("Content-Length") is not None
             assert int(response.headers["Content-Length"]) > 0
@@ -700,12 +706,12 @@ class TestStaticAssetHeaders:
     def test_static_js_uses_state_catalog_module_and_direct_model_utility_calls(self, test_server):
         base_url, _, _ = test_server
         body = self._combined_js(base_url)
-        app_body = urlopen(f"{base_url}/app.js").read().decode("utf-8")
+        controller_body = urlopen(f"{base_url}/app-controller.js").read().decode("utf-8")
 
         assert 'const DEFAULT_MODEL_CATALOG = ["topiq_nr", "clipiqa", "qalign"]' in body
         assert 'const HIDDEN_MODEL_NAMES = ["arniqa", "arniqa-spaq"]' in body
-        assert "availableLearnedModelsUtil(options, DEFAULT_MODEL_CATALOG, HIDDEN_MODEL_NAMES)" in app_body
-        assert "function availableLearnedModels(options)" not in app_body
+        assert "availableLearnedModelsUtil(options, stateModule.DEFAULT_MODEL_CATALOG, stateModule.HIDDEN_MODEL_NAMES)" in controller_body
+        assert "function availableLearnedModels(options)" not in controller_body
         assert "advanced-reset-defaults" not in body
         assert "applyRecommendedDefaults" not in body
         assert "applyCompareTabVisibility" not in body
@@ -724,7 +730,7 @@ class TestStaticAssetHeaders:
     def test_static_js_uses_backend_default_raw_preview_mode_without_selector(self, test_server):
         base_url, _, _ = test_server
         state_body = urlopen(f"{base_url}/app-state.js").read().decode("utf-8")
-        app_body = urlopen(f"{base_url}/app.js").read().decode("utf-8")
+        controller_body = urlopen(f"{base_url}/app-controller.js").read().decode("utf-8")
         workflows_body = urlopen(f"{base_url}/app-workflows.js").read().decode("utf-8")
         events_body = urlopen(f"{base_url}/app-events.js").read().decode("utf-8")
 
@@ -734,8 +740,8 @@ class TestStaticAssetHeaders:
         assert 'preview-mode-select' not in events_body
         assert 'const reviewRoot = syncReviewRoot(root) || root;' in workflows_body
         assert 'rootFilter.add(new Option(root, root, true, true));' in workflows_body
-        assert 'replace(/^(?:\\.\\/|~\\/)+/, "")' in app_body
-        assert 'rootFilter.add(new Option(previous, previous, false, true));' in app_body
+        assert 'replace(/^(?:\\.\\/|~\\/)+/, "")' in controller_body
+        assert 'rootFilter.add(new Option(previous, previous, false, true));' in controller_body
 
     def test_static_js_scan_uses_async_job_polling_routes(self, test_server):
         base_url, _, _ = test_server
@@ -764,7 +770,7 @@ class TestStaticAssetHeaders:
 
     def test_static_js_uses_review_state_route_for_marked_batch_actions(self, test_server):
         base_url, _, _ = test_server
-        body = urlopen(f"{base_url}/app-workflows.js").read().decode("utf-8")
+        body = urlopen(f"{base_url}/app-workflow-export.js").read().decode("utf-8")
         assert "/api/review/file-ids" in body
 
     def test_static_js_cancel_button_disables_and_shows_cancelling_state(self, test_server):
@@ -776,21 +782,21 @@ class TestStaticAssetHeaders:
 
     def test_static_js_bulk_actions_use_filter_backed_selection_for_all_matching(self, test_server):
         base_url, _, _ = test_server
-        app_body = urlopen(f"{base_url}/app.js").read().decode("utf-8")
-        workflows_body = urlopen(f"{base_url}/app-workflows.js").read().decode("utf-8")
+        grid_body = urlopen(f"{base_url}/app-grid.js").read().decode("utf-8")
+        export_body = urlopen(f"{base_url}/app-workflow-export.js").read().decode("utf-8")
 
-        assert "bulkSelection" in app_body
-        assert "selection:" in workflows_body
-        assert "allIds.forEach((id) => state.selectedIds.add(id));" not in app_body
+        assert "bulkSelection" in grid_body
+        assert "selection:" in export_body
+        assert "allIds.forEach((id) => state.selectedIds.add(id));" not in grid_body
 
     def test_static_js_bulk_actions_require_effective_selected_count(self, test_server):
         base_url, _, _ = test_server
         events_body = urlopen(f"{base_url}/app-events.js").read().decode("utf-8")
         review_body = urlopen(f"{base_url}/app-review.js").read().decode("utf-8")
-        workflows_body = urlopen(f"{base_url}/app-workflows.js").read().decode("utf-8")
+        export_body = urlopen(f"{base_url}/app-workflow-export.js").read().decode("utf-8")
 
         assert "Math.max(0, Number(state.bulkSelection.count || 0) - excludedCount)" in events_body
-        assert "Math.max(0, Number(state.bulkSelection.count || 0) - excludedIds.length)" in workflows_body
+        assert "Math.max(0, Number(state.bulkSelection.count || 0) - excludedIds.length)" in export_body
         assert 'return "No photo selected";' in review_body
 
     def test_static_js_analyze_uses_fast_metadata_scan_before_scoring(self, test_server):

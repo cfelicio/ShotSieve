@@ -274,6 +274,7 @@ class TestRouteHandlingAsync:
                 preview_dir=tmp_path / "previews",
             )
             file_ids = [row["id"] for row in connection.execute("SELECT id FROM files ORDER BY id ASC").fetchall()]
+            current_rev = web_module.review_selection_revision(connection, scope="review-browser", marked="all")
 
         port = find_free_port()
         server = ThreadingHTTPServer(("127.0.0.1", port), build_handler(db_path))
@@ -282,7 +283,13 @@ class TestRouteHandlingAsync:
         try:
             start_req = Request(
                 f"http://127.0.0.1:{port}/api/files/delete/start",
-                data=json.dumps({"file_ids": file_ids, "delete_from_disk": True, "count": len(file_ids)}).encode("utf-8"),
+                data=json.dumps({
+                    "file_ids": file_ids,
+                    "delete_from_disk": True,
+                    "count": len(file_ids),
+                    "selection_revision": current_rev,
+                    "page_selection": {"scope": "review-browser", "marked": "all"},
+                }).encode("utf-8"),
                 headers={"Content-Type": "application/json"},
                 method="POST",
             )

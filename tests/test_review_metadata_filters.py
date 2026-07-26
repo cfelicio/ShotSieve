@@ -1,7 +1,6 @@
 import json
 import sqlite3
 import urllib.request
-from pathlib import Path
 
 def test_metadata_filtering_and_sorting(test_server) -> None:
     base_url, db_path, tmp_path = test_server

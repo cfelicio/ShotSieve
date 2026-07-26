@@ -4,7 +4,7 @@ import logging
 from dataclasses import dataclass, field
 from pathlib import Path
 import time
-from typing import Callable, Protocol, runtime_checkable
+from typing import Callable, Protocol, Sequence, runtime_checkable
 
 from shotsieve.config import ALL_PREVIEWABLE_EXTENSIONS, DEFAULT_RAW_PREVIEW_MODE, PIL_ANALYSIS_EXTENSIONS, PREVIEW_PRIORITY_EXTENSIONS
 from shotsieve.db import roots_path_filter, set_preview_cache_root
@@ -856,7 +856,6 @@ def count_score_rows(connection, *, raw_root: str | Sequence[str] | Sequence[Pat
     total = int(row["row_count"] or 0)
     log_duration("scoring.count_rows", started_at, scope="root" if raw_root else "catalog", total=total)
     return total
-
 
 
 def delete_score_row(connection, *, file_id: int) -> None:

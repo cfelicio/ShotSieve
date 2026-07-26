@@ -160,10 +160,7 @@ textarea {
 .detail-toolbar,
 .dialog-toolbar,
 .panel-topline,
-.panel-meta,
-.status-pill-row,
-.badge-row,
-.chip-list {
+.badge-row {
   display: flex;
   gap: var(--space-2);
   align-items: center;
@@ -262,35 +259,20 @@ h2 {
   letter-spacing: 0.18em;
 }
 
-.hero-copy,
-.helper-copy,
 .muted,
 .detail-path,
-.queue-path,
 .detail-scoreline {
   color: var(--ink-caption);
   line-height: 1.55;
 }
 
-.hero-copy {
-  max-width: 62ch;
-}
-
 .summary-strip,
 .runtime-cards,
 .settings-layout,
-.run-layout,
-.filter-grid,
-.score-grid,
-.button-grid,
 .shortcut-list,
-.config-list,
 .browser-list,
 .form-grid,
-.detail-grid,
-.detail-sidebar,
-.queue-title-row,
-.chip-editor {
+.detail-grid {
   display: grid;
   gap: var(--space-2);
 }
@@ -301,11 +283,9 @@ h2 {
 }
 
 .panel,
-.summary-card,
 .queue-item,
 .score-card,
 .runtime-card,
-.config-row,
 .browser-item,
 .chip,
 .status-pill,
@@ -315,9 +295,7 @@ h2 {
 }
 
 .panel,
-.summary-card,
 .runtime-card,
-.config-row,
 .browser-item,
 .chip,
 .batch-bar,
@@ -335,48 +313,11 @@ h2 {
     var(--steel-board);
 }
 
-.summary-card {
-  min-height: 132px;
-  padding: var(--space-3);
-  position: relative;
-  overflow: hidden;
-}
-
-.summary-card::before {
-  content: "";
-  position: absolute;
-  inset: 0 0 auto;
-  height: 3px;
-  background: linear-gradient(90deg, var(--cobalt-glow), transparent 72%);
-}
-
-.summary-card strong,
 .score-card strong,
 .queue-score,
-.config-row dd,
 .runtime-card strong {
   font-family: "Cascadia Mono", "Consolas", monospace;
   font-variant-numeric: tabular-nums;
-}
-
-.summary-card strong {
-  display: block;
-  margin-top: var(--space-2);
-  font-size: 2rem;
-}
-
-.summary-card .secondary {
-  display: block;
-  margin-top: var(--space-1);
-  color: var(--ink-faint);
-  font-size: 0.82rem;
-}
-
-.tabbar {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: var(--space-2);
-  margin-bottom: var(--space-3);
 }
 
 button,
@@ -663,32 +604,8 @@ button[data-busy-lock="true"]:disabled {
   flex-wrap: wrap;
 }
 
-.queue-sheet {
-  color: var(--cobalt-glow);
-  font-size: 0.74rem;
-  letter-spacing: 0.16em;
-  text-transform: uppercase;
-}
-
-.queue-file {
-  font-size: 1.02rem;
-  font-weight: 600;
-}
-
-.queue-score {
-  color: var(--cobalt-glow);
-  font-size: 1rem;
-}
-
-.queue-path,
-.detail-path,
-.config-row dd {
+.detail-path {
   word-break: break-word;
-}
-
-.queue-metric-row {
-  color: var(--ink-faint);
-  font-size: 0.8rem;
 }
 
 .badge,
@@ -700,10 +617,6 @@ button[data-busy-lock="true"]:disabled {
   background: var(--glass-surface);
   color: var(--ink-caption);
   font-size: 0.76rem;
-}
-
-.badge.score-badge {
-  color: var(--cobalt-glow);
 }
 
 .badge.badge-reject {
@@ -804,34 +717,7 @@ button[data-busy-lock="true"]:disabled {
   transition: cursor 0.15s;
 }
 
-.detail-sidebar {
-  margin-top: var(--space-2);
-}
 
-.detail-scoreline {
-  margin-top: 6px;
-  display: inline-flex;
-  align-items: center;
-  padding: 6px 10px;
-  border-radius: var(--radius-chip);
-  border: 1px solid var(--blue-line);
-  background: var(--cobalt-wash);
-  color: var(--cobalt-glow);
-  font-family: "Cascadia Mono", "Consolas", monospace;
-}
-
-.detail-issues {
-  display: inline-flex;
-  align-items: center;
-  margin: 8px 0 0;
-  padding: 6px 10px;
-  border-radius: var(--radius-chip);
-  border: 1px solid var(--edge-whisper);
-  background: var(--glass-surface);
-  color: var(--ink-caption);
-  font-size: 0.82rem;
-  line-height: 1.4;
-}
 
 .detail-issues-note {
   margin-top: 8px;
@@ -861,12 +747,7 @@ button[data-busy-lock="true"]:disabled {
   letter-spacing: -0.02em;
 }
 
-.detail-meta-line {
-  font-size: 13px;
-  color: var(--ink-caption);
-  font-family: "Cascadia Mono", "Consolas", monospace;
-  margin: 0;
-}
+
 
 .export-form {
   display: grid;
@@ -991,11 +872,7 @@ img.lazy-thumb {
   text-transform: uppercase;
 }
 
-.advanced-filters-toggle-row {
-  display: flex;
-  justify-content: flex-end;
-  margin-top: var(--space-1);
-}
+
 
 .advanced-filters-panel {
   background: var(--control-well);

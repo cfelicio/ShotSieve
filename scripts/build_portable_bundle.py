@@ -67,7 +67,7 @@ def default_launcher_name(target: ReleaseTarget) -> str:
     return "ShotSieve.exe" if target.platform == "windows" else "ShotSieve"
 
 
-def _next_available_staging_path(preferred_path: Path) -> Path:
+def _next_available_fallback_path(preferred_path: Path) -> Path:
     candidate = preferred_path.with_name(f"{preferred_path.name}-rebuilt")
     index = 2
 
@@ -78,7 +78,7 @@ def _next_available_staging_path(preferred_path: Path) -> Path:
     return candidate
 
 
-def _prepare_staged_bundle_path(preferred_path: Path) -> Path:
+def _prepare_clean_directory_path(preferred_path: Path, *, warning_prefix: str) -> Path:
     if not preferred_path.exists():
         return preferred_path
 
@@ -86,16 +86,19 @@ def _prepare_staged_bundle_path(preferred_path: Path) -> Path:
         shutil.rmtree(preferred_path)
         return preferred_path
     except PermissionError as exc:
-        fallback_path = _next_available_staging_path(preferred_path)
+        fallback_path = _next_available_fallback_path(preferred_path)
         print(
             (
-                f"Warning: could not remove existing staged bundle '{preferred_path}' because a file is in use; "
-                f"writing the fresh bundle to '{fallback_path}' instead. "
-                f"Close any running ShotSieve instance to replace the original folder in place. ({exc})"
+                f"Warning: could not remove existing {warning_prefix} '{preferred_path}' because a file is in use; "
+                f"writing to '{fallback_path}' instead. Close any running ShotSieve instance to replace the original folder in place. ({exc})"
             ),
             file=sys.stderr,
         )
         return fallback_path
+
+
+def _prepare_staged_bundle_path(preferred_path: Path) -> Path:
+    return _prepare_clean_directory_path(preferred_path, warning_prefix="staged bundle")
 
 
 def build_bundle(target: ReleaseTarget, *, project_root: Path, dist_root: Path, build_root: Path) -> BundlePlan:
@@ -109,10 +112,18 @@ def build_bundle(target: ReleaseTarget, *, project_root: Path, dist_root: Path, 
     if not spec_path.exists():
         raise SystemExit(f"Expected PyInstaller spec file '{spec_path}' for target '{target.id}'")
 
+    pyinstaller_dist_root = _prepare_clean_directory_path(
+        pyinstaller_dist_root,
+        warning_prefix="PyInstaller dist directory",
+    )
+    pyinstaller_work_root = _prepare_clean_directory_path(
+        pyinstaller_work_root,
+        warning_prefix="PyInstaller work directory",
+    )
     for cleanup_path in (pyinstaller_dist_root, pyinstaller_work_root):
-        if cleanup_path.exists():
-            shutil.rmtree(cleanup_path)
         cleanup_path.mkdir(parents=True, exist_ok=True)
+    plan["pyinstallerDistRoot"] = str(pyinstaller_dist_root)
+    plan["pyinstallerWorkRoot"] = str(pyinstaller_work_root)
     dist_root.mkdir(parents=True, exist_ok=True)
 
     subprocess.run(

@@ -3,7 +3,6 @@ from datetime import UTC, datetime
 import fnmatch
 import os
 from pathlib import Path
-import time
 from typing import Callable, Iterable, Sequence
 
 from shotsieve.config import DEFAULT_RAW_PREVIEW_MODE
@@ -862,20 +861,15 @@ def _is_within_claimed_preview_root(path: Path, claimed_preview_roots: set[Path]
     return False
 
 
-
-
-
 def check_overlapping_roots(roots: Sequence[Path]) -> list[tuple[Path, Path]]:
     """Return list of overlapping root pairs (parent, child)."""
     resolved_paths = sorted([r.expanduser().resolve() for r in roots], key=lambda p: len(p.parts))
     overlaps = []
     for i, path in enumerate(resolved_paths):
-        for other in resolved_paths[i+1:]:
+        for other in resolved_paths[i + 1:]:
             try:
                 other.relative_to(path)
                 overlaps.append((path, other))
             except ValueError:
                 pass
     return overlaps
-
-

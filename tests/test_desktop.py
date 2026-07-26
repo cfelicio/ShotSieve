@@ -120,6 +120,8 @@ def test_main_uses_custom_data_dir(monkeypatch: pytest.MonkeyPatch, tmp_path: Pa
         })
 
     monkeypatch.setattr(desktop_module, "serve_review_ui", fake_serve_review_ui)
+    monkeypatch.setattr(desktop_module, "maybe_prepare_cuda_torch_runtime", lambda data_dir: False)
+    monkeypatch.setattr(desktop_module, "_call_prepare_learned_iqa_runtime", lambda data_dir, assume_install_consent=False: None)
     monkeypatch.setattr(
         sys,
         "argv",
