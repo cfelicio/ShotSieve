@@ -52,18 +52,19 @@ def test_discover_files_pruning(tmp_path: Path) -> None:
     assert "c.jpg" not in paths
 
 
-def test_check_overlapping_roots() -> None:
-    roots = [
-        Path("C:/photos"),
-        Path("C:/photos/vacation"),
-        Path("D:/other"),
-        Path("C:/photos/vacation/2026"),
-    ]
+def test_check_overlapping_roots(tmp_path: Path) -> None:
+    root1 = tmp_path / "photos"
+    root2 = tmp_path / "photos" / "vacation"
+    root3 = tmp_path / "other"
+    root4 = tmp_path / "photos" / "vacation" / "2026"
+
+    roots = [root1, root2, root3, root4]
     overlaps = check_overlapping_roots(roots)
-    
-    assert len(overlaps) >= 2
-    paths = {(str(parent), str(child)) for parent, child in overlaps}
-    
-    assert (str(Path("C:/photos")), str(Path("C:/photos/vacation"))) in paths
-    assert (str(Path("C:/photos")), str(Path("C:/photos/vacation/2026"))) in paths
-    assert (str(Path("C:/photos/vacation")), str(Path("C:/photos/vacation/2026"))) in paths
+
+    assert len(overlaps) == 3
+    paths = {(parent.resolve(), child.resolve()) for parent, child in overlaps}
+
+    assert (root1.resolve(), root2.resolve()) in paths
+    assert (root1.resolve(), root4.resolve()) in paths
+    assert (root2.resolve(), root4.resolve()) in paths
+
