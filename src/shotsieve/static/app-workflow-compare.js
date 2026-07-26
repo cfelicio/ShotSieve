@@ -454,8 +454,9 @@
         return;
       }
 
-      const selected = new Set(comparisonDefaults(options, persisted, allowedModels));
-      target.innerHTML = allowedModels.map((modelName) => `
+      const modelsToRender = Array.isArray(allowedModels) && allowedModels.length ? allowedModels : (options?.learned_models?.length ? options.learned_models : ["topiq_nr", "clipiqa"]);
+      const selected = new Set(comparisonDefaults(options, persisted, modelsToRender));
+      target.innerHTML = modelsToRender.map((modelName) => `
         <label class="compare-model-card ${selected.has(modelName) ? "selected" : ""}">
           <div class="compare-model-card-head">
             <input type="checkbox" value="${escapeHtml(modelName)}" ${selected.has(modelName) ? "checked" : ""}>

@@ -142,13 +142,15 @@ const gridController = window.ShotSieveGrid.createGridController({
   openOriginalFile: async () => {},
 });
 
+const workflowsHolder = {};
+
 const controller = window.ShotSieveController.createController({
   state,
   uiStore,
   appUtils,
   stateModule,
   api: { fetchJson, postJson },
-  workflows: {},
+  workflows: workflowsHolder,
   grid: gridController,
   notifications: { addLogEntry, showToast },
 });
@@ -210,6 +212,7 @@ const workflows = workflowsModule.createWorkflows({
     setTab: controller.setTab,
   },
 });
+Object.assign(workflowsHolder, workflows);
 
 const {
   renderComparisonSummary,

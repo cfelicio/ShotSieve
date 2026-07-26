@@ -33,9 +33,9 @@
       ...deps,
       pollingModule: {
         ...jobPollers,
-        createResultFetcher: pollingModule.createResultFetcher,
-        createStatusFetcher: pollingModule.createStatusFetcher,
-        pollJob: pollingModule.pollJob,
+        createResultFetcher: jobPollers.createResultFetcher,
+        createStatusFetcher: jobPollers.createStatusFetcher,
+        pollJob: jobPollers.pollJob,
         pollScanJob: jobPollers.pollScanJob,
         pollScoreJob: jobPollers.pollScoreJob,
       },
@@ -49,7 +49,7 @@
       pollingModule: {
         ...jobPollers,
         pollCompareJob: jobPollers.pollCompareJob,
-        pipelineOverallPercent: pollingModule.pipelineOverallPercent,
+        pipelineOverallPercent: jobPollers.pipelineOverallPercent || pollingModule?.pipelineOverallPercent,
       },
       workflowLibrary,
     };
@@ -92,15 +92,17 @@
       const filterMode = String(deps.state.compareRowFilter || "all");
       if (filterMode === "all") return rows;
       if (filterMode === "extremes") {
-        return workflowCompare.renderComparisonResults();
+        return workflowCompare.filterComparisonRows(rows, modelNames);
       }
-      return workflowCompare.renderComparisonResults();
+      return workflowCompare.filterComparisonRows(rows, modelNames);
     }
 
     function comparisonTruncationWarningText(comparison) {
       if (!comparison || !comparison.truncated) return null;
-      const processedRowsText = "0";
-      const requestedRowsText = "0";
+      const processedRows = Number(comparison.processed_rows_total || comparison.files_considered || 0);
+      const requestedRows = Number(comparison.requested_rows_total || processedRows || 0);
+      const processedRowsText = Math.max(0, Math.trunc(processedRows)).toLocaleString();
+      const requestedRowsText = Math.max(0, Math.trunc(requestedRows)).toLocaleString();
       return `Comparing first ${processedRowsText} of ${requestedRowsText} files. Narrow the root or apply filters for a full compare.`;
     }
 
@@ -205,7 +207,6 @@
       ...workflowCompare,
       ...workflowExport,
       ...workflowLibrary,
-      comparisonFailureText,
       resetReviewFiltersForAnalyze,
       analyzeLibrary,
       saveReview,

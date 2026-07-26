@@ -241,6 +241,12 @@
         panel.classList.toggle("active", isActive);
         panel.hidden = !isActive;
       });
+
+      if (tab === "compare" && workflows?.renderComparisonModelOptions && state.options) {
+        const persisted = loadUiState();
+        const scoringModes = availableLearnedModelsUtil(state.options, stateModule.DEFAULT_MODEL_CATALOG, stateModule.HIDDEN_MODEL_NAMES);
+        workflows.renderComparisonModelOptions(state.options, scoringModes, persisted);
+      }
     }
 
     function openOverlay(overlayId) {
