@@ -40,6 +40,7 @@ def runtime_pack_release_targets() -> tuple[ReleaseTarget, ...]:
             archiveName="ShotSieve-windows-cpu-x64.zip",
             buildProfile="runtime-pack",
             specPath="shotsieve.spec",
+            constraintsFile="scripts/release-constraints-torch.txt",
         ),
         ReleaseTarget(
             id="windows-nvidia",
@@ -54,6 +55,7 @@ def runtime_pack_release_targets() -> tuple[ReleaseTarget, ...]:
             archiveName="ShotSieve-windows-nvidia-x64.zip",
             buildProfile="runtime-pack",
             specPath="shotsieve.spec",
+            constraintsFile="scripts/release-constraints-torch.txt",
         ),
         ReleaseTarget(
             id="windows-dml",
@@ -83,6 +85,7 @@ def runtime_pack_release_targets() -> tuple[ReleaseTarget, ...]:
             archiveName="ShotSieve-linux-cpu-x64.tar.gz",
             buildProfile="runtime-pack",
             specPath="shotsieve.spec",
+            constraintsFile="scripts/release-constraints-torch.txt",
         ),
         ReleaseTarget(
             id="linux-nvidia",
@@ -97,6 +100,7 @@ def runtime_pack_release_targets() -> tuple[ReleaseTarget, ...]:
             archiveName="ShotSieve-linux-nvidia-x64.tar.gz",
             buildProfile="runtime-pack",
             specPath="shotsieve.spec",
+            constraintsFile="scripts/release-constraints-torch.txt",
         ),
         ReleaseTarget(
             id="macos-cpu",
@@ -111,6 +115,7 @@ def runtime_pack_release_targets() -> tuple[ReleaseTarget, ...]:
             archiveName="ShotSieve-macos-cpu-arm64.tar.gz",
             buildProfile="runtime-pack",
             specPath="shotsieve.spec",
+            constraintsFile="scripts/release-constraints-torch.txt",
         ),
         ReleaseTarget(
             id="macos-mps",
@@ -125,6 +130,7 @@ def runtime_pack_release_targets() -> tuple[ReleaseTarget, ...]:
             archiveName="ShotSieve-macos-mps-arm64.tar.gz",
             buildProfile="runtime-pack",
             specPath="shotsieve.spec",
+            constraintsFile="scripts/release-constraints-torch.txt",
         ),
     )
 

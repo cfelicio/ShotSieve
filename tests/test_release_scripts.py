@@ -15,6 +15,7 @@ import pytest
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 SCRIPT_PATH = PROJECT_ROOT / "scripts" / "build_windows_releases.ps1"
+CI_WORKFLOW_PATH = PROJECT_ROOT / ".github" / "workflows" / "ci.yml"
 GITHUB_RELEASE_SCRIPT_PATH = PROJECT_ROOT / "scripts" / "create_github_release.ps1"
 PREPARE_RELEASE_SCRIPT_PATH = PROJECT_ROOT / "scripts" / "prepare_release.ps1"
 MATRIX_SCRIPT_PATH = PROJECT_ROOT / "scripts" / "release_target_matrix.py"
@@ -74,6 +75,26 @@ def test_windows_release_script_defines_all_runtime_targets() -> None:
     assert 'Where-Object { $_.id -like "windows-*" }' in script_text
 
 
+def test_ci_runs_on_main_and_has_python_314_core_coverage() -> None:
+    workflow_text = CI_WORKFLOW_PATH.read_text(encoding="utf-8")
+
+    assert "  push:" in workflow_text
+    assert "      - main" in workflow_text
+    assert "core-python-314:" in workflow_text
+    assert 'python-version: "3.14"' in workflow_text
+    assert 'python -m pytest -q -m "not browser"' in workflow_text
+
+
+def test_ci_builds_and_smokes_a_wheel_outside_the_checkout() -> None:
+    workflow_text = CI_WORKFLOW_PATH.read_text(encoding="utf-8")
+
+    assert "wheel-smoke:" in workflow_text
+    assert "python -m build --wheel" in workflow_text
+    assert 'python -m venv "$wheel_venv"' in workflow_text
+    assert 'files(\'shotsieve\').joinpath(\'static/index.html\')' in workflow_text
+    assert 'shotsieve-desktop" --help' in workflow_text
+
+
 def test_windows_release_script_validates_target_arguments() -> None:
     completed = subprocess.run(
         [
@@ -101,7 +122,7 @@ def test_integrated_release_script_installs_target_runtime_dependencies() -> Non
 
     assert "function Install-TorchVariant" in script_text
     assert "--index-url https://download.pytorch.org/whl/cpu" in script_text
-    assert "--index-url https://download.pytorch.org/whl/cu126" not in script_text
+    assert "--index-url https://download.pytorch.org/whl/cu126" in script_text
     assert "function Install-TargetDependencies" in script_text
     assert "-c $ConstraintsFile" in script_text
     assert "pip install -e \".[" in script_text
@@ -134,6 +155,14 @@ def test_integrated_release_script_uses_stable_directml_runtime_path_without_tor
     assert "torchvision==0.21.*" not in script_text
 
 
+def test_integrated_release_script_installs_pinned_cuda_runtime_for_torchless_bundles() -> None:
+    script_text = SCRIPT_PATH.read_text(encoding="utf-8")
+
+    assert "Installing the pinned CUDA Torch/Torchvision pair" in script_text
+    assert "--index-url https://download.pytorch.org/whl/cu126" in script_text
+    assert '"cuda"' in script_text
+
+
 def test_integrated_release_script_forces_torch_variant_reinstall_between_targets() -> None:
     script_text = SCRIPT_PATH.read_text(encoding="utf-8")
 
@@ -148,6 +177,7 @@ def test_integrated_release_script_installs_dependencies_before_each_target_buil
     assert "New-WindowsTargetBundle -PythonCommand $targetPythonCommand" in script_text
     assert "Build-WindowsTarget -PythonCommand $targetPythonCommand" not in script_text
     assert "Creating isolated build environment" in script_text
+    assert "$PythonCommand -m pip check" in script_text
 
 
 def test_integrated_release_script_recreates_broken_target_virtualenv(tmp_path: Path) -> None:
@@ -450,6 +480,12 @@ def test_tier1_release_matrix_covers_all_runtime_pack_targets() -> None:
     assert targets["macos-mps"]["runsOn"] == "macos-latest"
     assert targets["windows-dml"]["extras"] == ["format-loaders", "learned-iqa-directml", "windows-build"]
     assert targets["windows-dml"]["constraintsFile"] == "scripts/release-constraints-windows-dml.txt"
+    assert targets["windows-cpu"]["constraintsFile"] == "scripts/release-constraints-torch.txt"
+    assert targets["windows-nvidia"]["constraintsFile"] == "scripts/release-constraints-torch.txt"
+    assert targets["linux-cpu"]["constraintsFile"] == "scripts/release-constraints-torch.txt"
+    assert targets["linux-nvidia"]["constraintsFile"] == "scripts/release-constraints-torch.txt"
+    assert targets["macos-cpu"]["constraintsFile"] == "scripts/release-constraints-torch.txt"
+    assert targets["macos-mps"]["constraintsFile"] == "scripts/release-constraints-torch.txt"
     assert targets["linux-nvidia"]["torchVariant"] == "cuda"
     assert targets["macos-mps"]["runtime"] == "mps"
     assert _string_value(targets["windows-cpu"]["archiveName"]).endswith(".zip")

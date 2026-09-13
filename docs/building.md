@@ -87,9 +87,13 @@ Score and Compare job failures reuse the same diagnostic schema as Prepare. Thei
 
 `--model-cache-dir ROOT` sets default `HF_HOME=ROOT/huggingface`, `HF_HUB_CACHE=ROOT/huggingface/hub`, and `TORCH_HOME=ROOT/torch` before learned-IQA runtime preparation. Explicit environment values win, including Hub endpoints, proxy/certificate, and offline settings, so the resulting cache paths may be split. For an offline portable setup, prepare the selected model into the intended compatible cache tree, shut down the app, copy that tree with the app-data readiness record, and validate it in a fresh offline process. ShotSieve does not migrate or remove caches automatically.
 
-For a Windows DirectML sidecar, the embedded installer resolves the pinned Torch/Torchvision/DirectML trio in one install step. Release builds use `scripts/release-constraints-windows-dml.txt` in addition to the common build constraints; CPU, CUDA, and macOS targets do not inherit those DirectML pins.
+The release and sidecar paths use the tested learned-IQA package set `pyiqa==0.1.16`, `timm==1.0.28`, `huggingface-hub==1.24.0`, `transformers==5.14.1`, and `openai-clip==1.0.1`. CPU, CUDA, and Apple MPS targets use `torch==2.13.0` with `torchvision==0.28.0`; the CUDA path selects the cu126 index, while CPU selects the PyTorch CPU index. The corresponding target constraint file is `scripts/release-constraints-torch.txt`.
+
+For a Windows DirectML sidecar, the embedded installer resolves the pinned Torch/Torchvision/DirectML trio in one install step. Release builds use `scripts/release-constraints-windows-dml.txt` in addition to the common build constraints; the DirectML target remains on Python 3.11-3.12 and does not inherit the non-DirectML Torch pair. Local Windows release builds and CI run `pip check` after resolving the target environment.
 
 Pull requests run the offline test workflow in `.github/workflows/ci.yml`; it sets the learned-model offline flags so an accidental model download fails rather than silently reaching the Hub. The separate `.github/workflows/model-smoke.yml` workflow is manual/weekly and prepares TOPIQ and CLIPIQA in fresh isolated caches, then repeats the CPU check in a new process with socket access disabled. It does not upload caches or generated images.
+
+Each model-smoke invocation records resolved model dependency versions. On failure it writes a sanitized JSON diagnostic containing only model/runtime/cache context and redacted causes; the workflow uploads those JSON reports for troubleshooting and never uploads model caches, weights, or generated images.
 
 ## Scan and catalog safety
 
@@ -131,6 +135,8 @@ python -m playwright install chromium
 ```
 
 For a quick manual visual QA pass, use [accessibility-checklist.md](./accessibility-checklist.md).
+
+CI runs the offline suite for pull requests and direct pushes to `main`. It also runs a Python 3.14 core suite without browser or accelerator claims, and builds a wheel into a clean virtual environment outside the checkout. Browser tests are marked separately: local environments may skip them when Chromium is unavailable, but CI treats a missing Playwright install or Chromium launch failure as a test failure.
 
 ## Performance measurement
 

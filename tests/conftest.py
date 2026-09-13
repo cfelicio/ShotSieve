@@ -1,6 +1,7 @@
 """Shared fixtures and helpers for web handler tests."""
 from __future__ import annotations
 
+import os
 import socket
 import threading
 from pathlib import Path
@@ -9,6 +10,50 @@ import pytest
 from PIL import Image
 
 from shotsieve.web import build_review_server
+
+
+BROWSER_FIXTURE_NAMES = frozenset(
+    {
+        "chromium_page",
+        "mobile_chromium_page",
+        "large_chromium_page",
+        "scoped_chromium_page",
+    }
+)
+
+
+def _running_in_ci() -> bool:
+    return os.environ.get("CI", "").strip().casefold() in {"1", "true", "yes", "on"}
+
+
+def _load_playwright():
+    try:
+        from playwright import sync_api
+    except ImportError as exc:
+        if _running_in_ci():
+            pytest.fail(f"Playwright is unavailable in CI: {exc}", pytrace=False)
+        pytest.skip(f"Playwright is unavailable locally: {exc}")
+    return sync_api
+
+
+def _launch_chromium(runner):
+    try:
+        return runner.chromium.launch(headless=True)
+    except Exception as exc:  # pragma: no cover - environment-dependent launch path
+        if _running_in_ci():
+            pytest.fail(f"Chromium launch failed in CI: {exc}", pytrace=False)
+        pytest.skip(f"Playwright browser unavailable locally: {exc}")
+
+
+def pytest_configure(config):
+    config.addinivalue_line("markers", "browser: requires a locally launchable Chromium browser")
+
+
+def pytest_collection_modifyitems(items):
+    browser_marker = pytest.mark.browser
+    for item in items:
+        if BROWSER_FIXTURE_NAMES.intersection(item.fixturenames):
+            item.add_marker(browser_marker)
 
 
 def _make_server(db_path: Path, port: int):
@@ -203,14 +248,11 @@ def frontend_large_server(tmp_path: Path):
 
 @pytest.fixture()
 def chromium_page(frontend_server: str):
-    playwright = pytest.importorskip("playwright.sync_api")
+    playwright = _load_playwright()
     expect = playwright.expect
 
     with playwright.sync_playwright() as runner:
-        try:
-            browser = runner.chromium.launch(headless=True)
-        except Exception as exc:  # pragma: no cover - environment-dependent skip path
-            pytest.skip(f"Playwright browser unavailable: {exc}")
+        browser = _launch_chromium(runner)
 
         try:
             page = browser.new_page()
@@ -224,14 +266,11 @@ def chromium_page(frontend_server: str):
 
 @pytest.fixture()
 def mobile_chromium_page(frontend_server: str):
-    playwright = pytest.importorskip("playwright.sync_api")
+    playwright = _load_playwright()
     expect = playwright.expect
 
     with playwright.sync_playwright() as runner:
-        try:
-            browser = runner.chromium.launch(headless=True)
-        except Exception as exc:  # pragma: no cover - environment-dependent skip path
-            pytest.skip(f"Playwright browser unavailable: {exc}")
+        browser = _launch_chromium(runner)
 
         context = None
         try:
@@ -249,14 +288,11 @@ def mobile_chromium_page(frontend_server: str):
 
 @pytest.fixture()
 def large_chromium_page(frontend_large_server: str):
-    playwright = pytest.importorskip("playwright.sync_api")
+    playwright = _load_playwright()
     expect = playwright.expect
 
     with playwright.sync_playwright() as runner:
-        try:
-            browser = runner.chromium.launch(headless=True)
-        except Exception as exc:  # pragma: no cover - environment-dependent skip path
-            pytest.skip(f"Playwright browser unavailable: {exc}")
+        browser = _launch_chromium(runner)
 
         try:
             page = browser.new_page()
@@ -276,7 +312,7 @@ def scoped_chromium_page(tmp_path: Path):
     from shotsieve.scoring import score_files
     from shotsieve.web import build_review_server
 
-    playwright = pytest.importorskip("playwright.sync_api")
+    playwright = _load_playwright()
     expect = playwright.expect
     db_path = tmp_path / "data" / "shotsieve.db"
     preview_dir = tmp_path / "previews"
@@ -315,10 +351,7 @@ def scoped_chromium_page(tmp_path: Path):
     thread.start()
     try:
         with playwright.sync_playwright() as runner:
-            try:
-                browser = runner.chromium.launch(headless=True)
-            except Exception as exc:  # pragma: no cover - environment-dependent skip path
-                pytest.skip(f"Playwright browser unavailable: {exc}")
+            browser = _launch_chromium(runner)
 
             try:
                 page = browser.new_page()

@@ -2,6 +2,9 @@ name: ci
 
 on:
   pull_request:
+  push:
+    branches:
+      - main
   workflow_dispatch:
 
 concurrency:
@@ -58,3 +61,62 @@ jobs:
 
       - name: Run offline test suite
         run: python -m pytest -q
+
+  core-python-314:
+    name: core-python-3.14
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+          cache: pip
+
+      - name: Install core test dependencies
+        run: |
+          python -m pip install --upgrade pip setuptools wheel
+          python -m pip install -e .[test]
+
+      - name: Check installed requirements
+        run: python -m pip check
+
+      - name: Run focused static checks
+        run: python -m ruff check --select F,E9 src tests
+
+      - name: Run core test suite without accelerator or browser claims
+        run: python -m pytest -q -m "not browser"
+
+  wheel-smoke:
+    name: wheel-smoke
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install wheel builder
+        run: python -m pip install --upgrade pip build
+
+      - name: Build wheel
+        run: python -m build --wheel --outdir dist
+
+      - name: Install and smoke wheel outside checkout
+        shell: bash
+        run: |
+          wheel_venv="$RUNNER_TEMP/shotsieve-wheel-venv"
+          python -m venv "$wheel_venv"
+          "$wheel_venv/bin/python" -m pip install --upgrade pip
+          "$wheel_venv/bin/python" -m pip install dist/*.whl
+          "$wheel_venv/bin/python" -m pip check
+          "$wheel_venv/bin/python" -c "from importlib.resources import files; assert files('shotsieve').joinpath('static/index.html').is_file()"
+          "$wheel_venv/bin/shotsieve-desktop" --help

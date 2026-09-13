@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from collections.abc import Callable
 import contextlib
 import importlib
 import io
@@ -9,23 +8,21 @@ import pkgutil
 import sys
 import traceback
 import warnings
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
 from shotsieve import runtime_support
-
+from shotsieve.dependency_constraints import (
+    COMMON_MODEL_REQUIREMENTS,
+    DIRECTML_TORCH_REQUIREMENTS,
+    NON_DIRECTML_TORCH_REQUIREMENTS,
+)
 
 DEFAULT_TORCH_AUTO_INSTALL_ENV = "SHOTSIEVE_BOOTSTRAP_AUTO_INSTALL_TORCH"
 DEFAULT_TORCH_SITE_PACKAGES_DIRNAME = "site-packages"
 DISTUTILS_REPLACEMENT_WARNING_PATTERN = r"Setuptools is replacing distutils\..*"
 PIP_UNEXPECTED_IMPORT_WARNING_PATTERN = r"DEPRECATION: Unexpected import of '.*' after pip install started\..*"
-DIRECTML_TORCH_REQUIREMENTS = (
-    "torch==2.4.1",
-    "torchvision==0.19.1",
-    "torch-directml==0.2.5.dev240914",
-)
-
-
 def _battr(name: str, fallback: Any) -> Any:
     mod = sys.modules.get("shotsieve.bootstrap")
     if mod is not None and hasattr(mod, name):
@@ -120,7 +117,7 @@ def _torch_install_index_args(runtime: str) -> list[str]:
 def _torch_packages_for_runtime(runtime: str) -> tuple[str, ...]:
     if runtime.casefold() == "directml":
         return DIRECTML_TORCH_REQUIREMENTS
-    return ("torch", "torchvision")
+    return NON_DIRECTML_TORCH_REQUIREMENTS
 
 
 def _patch_distlib_finder_for_frozen() -> None:
@@ -402,7 +399,7 @@ def install_torch_sidecar(
 
 def _learned_iqa_packages_for_runtime(runtime: str) -> list[str]:
     packages = [
-        "pyiqa",
+        *COMMON_MODEL_REQUIREMENTS,
         "opencv-python-headless",
         "pyyaml",
         "sympy",
@@ -476,7 +473,7 @@ def _install_learned_iqa_sidecar_with_embedded_pip(
             "--upgrade",
             "--no-cache-dir",
         ]
-        if package_name == "pyiqa":
+        if package_name.split("==", 1)[0] == "pyiqa":
             install_args.append("--no-deps")
 
         install_args.extend(

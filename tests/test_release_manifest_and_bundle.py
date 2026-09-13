@@ -101,6 +101,15 @@ def test_release_constraints_file_exists_with_required_pins() -> None:
     assert "pip<26" in constraints_text
     assert "setuptools<81" in constraints_text
     assert "pyinstaller>=6.19,<7" in constraints_text
+    assert "pyiqa==0.1.16" in constraints_text
+    assert "timm==1.0.28" in constraints_text
+    assert "huggingface-hub==1.24.0" in constraints_text
+    assert "transformers==5.14.1" in constraints_text
+    assert "openai-clip==1.0.1" in constraints_text
+
+    torch_constraints = (PROJECT_ROOT / "scripts" / "release-constraints-torch.txt").read_text(encoding="utf-8")
+    assert "torch==2.13.0" in torch_constraints
+    assert "torchvision==0.28.0" in torch_constraints
 
     dml_constraints = (PROJECT_ROOT / "scripts" / "release-constraints-windows-dml.txt").read_text(encoding="utf-8")
     assert "torch==2.4.1" in dml_constraints

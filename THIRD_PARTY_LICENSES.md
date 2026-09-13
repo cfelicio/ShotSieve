@@ -14,7 +14,11 @@ The entries below identify the current supported product boundary. They are
 not a blanket permission for every upstream asset: package code, checkpoint
 files, and any base model can have different terms. The exact package versions
 used by a release must be taken from that release's target constraints and
-audited before publication.
+audited before publication. The current tested model integration selection is
+`pyiqa==0.1.16`, `timm==1.0.28`, `huggingface-hub==1.24.0`,
+`transformers==5.14.1`, and `openai-clip==1.0.1`; non-DirectML targets use
+`torch==2.13.0` and `torchvision==0.28.0`, while the Windows DirectML target
+uses its separate `scripts/release-constraints-windows-dml.txt` trio.
 
 ---
 

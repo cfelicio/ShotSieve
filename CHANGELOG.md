@@ -34,6 +34,9 @@ All notable changes to this project will be documented in this file.
 - Added selected-model preparation with CPU validation, atomic readiness records, cache-path/version invalidation, sanitized failure diagnostics, and retained cancellation state.
 - Reused sanitized model diagnostics across preparation, scoring, and comparison jobs, including model/runtime/cache-volume context, offline and recovery classification, orphaned-preparation recovery, and retained API reports when readiness persistence fails.
 - Added the optional `--model-cache-dir` startup setting; explicit Hugging Face/Torch cache environment settings remain authoritative.
+- Aligned model smoke, release-target, and sidecar installs on the tested learned-IQA dependency stack, with separate non-DirectML Torch and Windows DirectML constraint files plus release-time `pip check` validation.
+- Model smoke now records resolved dependency versions and retains sanitized JSON failure reports without uploading caches, weights, or generated images.
+- CI now runs on direct `main` pushes, adds a Python 3.14 core suite, smoke-tests an installed wheel outside the checkout, and fails browser coverage when Chromium cannot launch in CI while preserving local skips.
 - Pinned the optional learned-IQA integration to `pyiqa==0.1.16` and documented separate package, checkpoint, cache, and retired-model licensing boundaries.
 - Added offline pull-request CI and a separate weekly/manual two-model smoke workflow; the latter validates a fresh cache in a new network-disabled process without publishing weights or photos.
 

@@ -166,6 +166,11 @@ jobs:
         run: |
           python -m pip install torch torchvision -c ${{ env.RELEASE_CONSTRAINTS }} -c ${{ matrix.constraintsFile }}
 
+      - name: Install pinned CUDA Torch runtime
+        if: matrix.torchVariant == 'cuda'
+        run: |
+          python -m pip install torch torchvision --index-url https://download.pytorch.org/whl/cu126 --trusted-host download.pytorch.org -c ${{ env.RELEASE_CONSTRAINTS }} -c ${{ matrix.constraintsFile }}
+
       - name: Install pinned DirectML Torch runtime
         if: matrix.torchVariant == 'directml'
         run: |
@@ -175,6 +180,9 @@ jobs:
         run: |
           python -m pip install -e ".[${{ join(matrix.extras, ',') }}]" -c ${{ env.RELEASE_CONSTRAINTS }} -c ${{ matrix.constraintsFile }}
           python -m pip install pyinstaller -c ${{ env.RELEASE_CONSTRAINTS }} -c ${{ matrix.constraintsFile }}
+
+      - name: Check resolved release requirements
+        run: python -m pip check
 
       - name: Build portable bundle
         env:

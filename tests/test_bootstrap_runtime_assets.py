@@ -337,7 +337,7 @@ def test_embedded_install_learned_iqa_sidecar_installs_pyiqa_without_deps(
     )
 
     assert installed is True
-    pyiqa_args = next(args for args in captured_args if "pyiqa" in args)
+    pyiqa_args = next(args for args in captured_args if any(arg.startswith("pyiqa==") for arg in args))
     assert "--no-deps" in pyiqa_args
 
 

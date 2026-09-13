@@ -30,8 +30,10 @@ jobs:
 
       - name: Install learned-IQA runtime
         run: |
-          python -m pip install --upgrade pip setuptools wheel
-          python -m pip install -e ".[learned-iqa]"
+          python -m pip install --upgrade pip setuptools wheel -c scripts/release-constraints.txt -c scripts/release-constraints-torch.txt
+          python -m pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu --trusted-host download.pytorch.org -c scripts/release-constraints.txt -c scripts/release-constraints-torch.txt
+          python -m pip install -e ".[learned-iqa]" -c scripts/release-constraints.txt -c scripts/release-constraints-torch.txt
+          python -m pip check
 
       - name: Prepare model into a fresh isolated cache
         env:
@@ -41,7 +43,8 @@ jobs:
           python scripts/model_smoke.py \
             --model "$SMOKE_MODEL" \
             --cache-dir "$RUNNER_TEMP/shotsieve-cache/$SMOKE_MODEL" \
-            --data-dir "$RUNNER_TEMP/shotsieve-data/$SMOKE_MODEL"
+            --data-dir "$RUNNER_TEMP/shotsieve-data/$SMOKE_MODEL" \
+            --report-path "$RUNNER_TEMP/shotsieve-model-smoke/$SMOKE_MODEL-online.json"
 
       - name: Re-open and score one generated image with network disabled
         env:
@@ -52,4 +55,14 @@ jobs:
             --model "$SMOKE_MODEL" \
             --cache-dir "$RUNNER_TEMP/shotsieve-cache/$SMOKE_MODEL" \
             --data-dir "$RUNNER_TEMP/shotsieve-data/$SMOKE_MODEL" \
-            --offline
+            --offline \
+            --report-path "$RUNNER_TEMP/shotsieve-model-smoke/$SMOKE_MODEL-offline.json"
+
+      - name: Upload sanitized model smoke reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: model-smoke-${{ matrix.model }}-reports
+          path: ${{ runner.temp }}/shotsieve-model-smoke/*.json
+          if-no-files-found: ignore
+          retention-days: 14

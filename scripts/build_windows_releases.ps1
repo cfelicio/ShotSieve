@@ -153,7 +153,8 @@ function Install-TorchVariant {
             break
         }
         "cuda" {
-            Write-Host "Skipping explicit CUDA Torch preinstall for torchless runtime-pack target..."
+            Write-Host "Installing the pinned CUDA Torch/Torchvision pair for torchless runtime-pack target..."
+            & $PythonCommand -m pip install --upgrade --force-reinstall --no-cache-dir torch torchvision --index-url https://download.pytorch.org/whl/cu126 --trusted-host download.pytorch.org @constraintArgs
             break
         }
         "directml" {
@@ -216,6 +217,12 @@ function Install-TargetDependencies {
     }
 
     Install-PyInstallerIfMissing -PythonCommand $PythonCommand -ConstraintsFile $targetConstraintsFile -AdditionalConstraintsFile $additionalConstraintsFile
+
+    Write-Host "Checking resolved requirements for '$($Target.id)'..."
+    & $PythonCommand -m pip check
+    if ($LASTEXITCODE -ne 0) {
+        throw "Resolved requirements are inconsistent for target '$($Target.id)'."
+    }
 }
 
 function Get-WindowsTargets {
