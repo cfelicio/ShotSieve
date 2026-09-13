@@ -1,16 +1,22 @@
 from __future__ import annotations
 
 import sqlite3
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+import warnings
 
 import numpy as np
 from PIL import Image
+import pytest
 
 from shotsieve import preview as preview_module
 from shotsieve import scanner as scanner_module
+from shotsieve import learned_iqa_preprocessing as preprocessing_module
 from shotsieve.db import connect, initialize_database
 from shotsieve.image_conversion import (
     IMAGE_CONVERSION_VERSION,
+    ImageDecodeLimitError,
+    MAX_DECODE_PIXELS,
     TRANSPARENCY_MATTE,
     prepare_image_for_rgb,
 )
@@ -212,3 +218,101 @@ def test_database_migrates_conversion_cache_columns(tmp_path: Path) -> None:
 
     assert "preview_conversion_version" in file_columns
     assert "image_conversion_version" in score_columns
+
+
+def test_generate_preview_rejects_oversized_source_before_conversion(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    source_path = tmp_path / "oversized.jpg"
+    source_path.write_bytes(b"header-only fixture")
+
+    class HeaderOnlyImage:
+        size = (MAX_DECODE_PIXELS + 1, 1)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def getexif(self):
+            return {}
+
+    monkeypatch.setattr(preview_module.Image, "open", lambda _path: HeaderOnlyImage())
+    monkeypatch.setattr(
+        preview_module.ImageOps,
+        "exif_transpose",
+        lambda _image: pytest.fail("oversized source should not be converted"),
+    )
+
+    result = preview_module.generate_preview(source_path, tmp_path / "previews")
+
+    assert result.status == "failed"
+    assert result.path is None
+    assert result.error_text is not None
+    assert "safe decode budget" in result.error_text
+
+
+def test_learned_preprocessing_rejects_oversized_source_before_conversion(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    source_path = tmp_path / "oversized.jpg"
+    source_path.write_bytes(b"header-only fixture")
+
+    class HeaderOnlyImage:
+        size = (MAX_DECODE_PIXELS + 1, 1)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    monkeypatch.setattr(preprocessing_module.Image, "open", lambda _path: HeaderOnlyImage())
+    monkeypatch.setattr(
+        preprocessing_module,
+        "prepare_image_for_rgb",
+        lambda _image: pytest.fail("oversized source should not be converted"),
+    )
+
+    with pytest.raises(ImageDecodeLimitError, match="safe decode budget"):
+        preprocessing_module._load_single_image(source_path, image_size=2)
+
+
+def test_concurrent_image_warnings_are_attributed_to_the_opening_file(
+    monkeypatch,
+    caplog,
+) -> None:
+    source_paths = [Path("first.jpg"), Path("second.jpg")]
+
+    class WarningImage:
+        size = (2, 2)
+
+        def __init__(self, source_path: Path) -> None:
+            self.source_path = source_path
+
+        def __enter__(self):
+            warnings.warn(
+                f"decoder warning for {self.source_path.name}",
+                RuntimeWarning,
+            )
+            return Image.new("RGB", self.size, color="black")
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    monkeypatch.setattr(
+        preprocessing_module.Image,
+        "open",
+        lambda path: WarningImage(Path(path)),
+    )
+
+    caplog.set_level("WARNING", logger="shotsieve.learned_iqa_preprocessing")
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        list(executor.map(lambda path: preprocessing_module._load_single_image(path, 2), source_paths))
+
+    warning_messages = [record.getMessage() for record in caplog.records]
+    assert sum("first.jpg" in message for message in warning_messages) == 1
+    assert sum("second.jpg" in message for message in warning_messages) == 1

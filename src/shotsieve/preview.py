@@ -20,7 +20,11 @@ from shotsieve.config import (
     RAW_CAMERA_EXTENSIONS,
 )
 from shotsieve.db import normalize_resolved_path
-from shotsieve.image_conversion import prepare_image_for_rgb
+from shotsieve.image_conversion import (
+    enforce_decode_budget,
+    open_image_with_warnings,
+    prepare_image_for_rgb,
+)
 
 try:
     from pillow_heif import register_heif_opener
@@ -58,6 +62,13 @@ def _format_nonfatal_issue(source_path: Path, stderr_text: str) -> str | None:
     return f"{source_path.name}: {' | '.join(issue_lines)}"
 
 
+def _format_decoder_issues(source_path: Path, *issue_texts: str | None) -> str | None:
+    return _format_nonfatal_issue(
+        source_path,
+        "\n".join(issue for issue in issue_texts if issue),
+    )
+
+
 def _combine_failure_error_text(exc: Exception, issue_text: str | None) -> str:
     failure_text = str(exc).strip() or exc.__class__.__name__
     if issue_text:
@@ -73,8 +84,12 @@ def _emit_nonfatal_issue(issue_text: str | None) -> None:
 @contextmanager
 def _captured_stderr(stderr_buffer: io.StringIO):
     if threading.active_count() > 1:
-        with redirect_stderr(stderr_buffer):
-            yield
+        # Redirecting sys.stderr in a worker thread changes it for every
+        # thread in this process. Let concurrent decoder output reach the
+        # normal process sink rather than attributing another file's warning
+        # to this result. Python warnings from image header inspection are
+        # collected by open_image_with_warnings instead.
+        yield
         return
 
     with _STDERR_CAPTURE_LOCK:
@@ -161,9 +176,12 @@ def generate_preview(
     preview_path, stale_preview_paths = preview_output_paths(source_path, preview_dir)
 
     stderr_buffer = io.StringIO()
+    header_warning: str | None = None
     try:
         with _captured_stderr(stderr_buffer):
-            with Image.open(source_path) as image:
+            with open_image_with_warnings(source_path) as (image, header_warning):
+                source_width, source_height = image.size
+                enforce_decode_budget(source_path, source_width, source_height)
                 image = ImageOps.exif_transpose(image)
                 capture_time = extract_capture_time(image)
                 width, height = image.size
@@ -173,7 +191,7 @@ def generate_preview(
                 image.save(preview_path, format="JPEG", quality=85, optimize=False)
                 cleanup_stale_preview_paths(stale_preview_paths)
     except (OSError, UnidentifiedImageError, ValueError) as exc:
-        issue_text = _format_nonfatal_issue(source_path, stderr_buffer.getvalue())
+        issue_text = _format_decoder_issues(source_path, header_warning, stderr_buffer.getvalue())
         return PreviewResult(
             path=None,
             status="failed",
@@ -183,7 +201,7 @@ def generate_preview(
             error_text=_combine_failure_error_text(exc, issue_text),
         )
 
-    issue_text = _format_nonfatal_issue(source_path, stderr_buffer.getvalue())
+    issue_text = _format_decoder_issues(source_path, header_warning, stderr_buffer.getvalue())
     _emit_nonfatal_issue(issue_text)
 
     return PreviewResult(
@@ -240,11 +258,19 @@ def generate_raw_preview(
                     raw_preview_mode=raw_preview_mode,
                     raw_width=raw_width,
                     raw_height=raw_height,
+                    source_path=source_path,
                 )
                 if result is not None:
                     cleanup_stale_preview_paths(stale_preview_paths)
-                    result.error_text = _format_nonfatal_issue(source_path, stderr_buffer.getvalue())
+                    result.error_text = _format_decoder_issues(
+                        source_path,
+                        result.error_text,
+                        stderr_buffer.getvalue(),
+                    )
                     return result
+
+                if raw_width and raw_height:
+                    enforce_decode_budget(source_path, int(raw_width), int(raw_height))
 
                 # Slow fallback: full Bayer demosaicing for RAW files without thumbnails.
                 # Keep rawpy's auto-brightening disabled so monochrome / high-key RAWs
@@ -252,7 +278,7 @@ def generate_raw_preview(
                 # and downstream learned-IQA scoring.
                 rgb = raw_image.postprocess(use_camera_wb=True, no_auto_bright=True)
     except (OSError, ValueError, RuntimeError) as exc:
-        issue_text = _format_nonfatal_issue(source_path, stderr_buffer.getvalue())
+        issue_text = _format_decoder_issues(source_path, stderr_buffer.getvalue())
         return PreviewResult(
             path=None,
             status="failed",
@@ -262,7 +288,20 @@ def generate_raw_preview(
             error_text=_combine_failure_error_text(exc, issue_text),
         )
 
-    image = prepare_image_for_rgb(Image.fromarray(rgb), apply_exif_orientation=False)
+    try:
+        decoded_image = Image.fromarray(rgb)
+        enforce_decode_budget(source_path, *decoded_image.size)
+        image = prepare_image_for_rgb(decoded_image, apply_exif_orientation=False)
+    except (OSError, ValueError, RuntimeError) as exc:
+        issue_text = _format_decoder_issues(source_path, stderr_buffer.getvalue())
+        return PreviewResult(
+            path=None,
+            status="failed",
+            width=None,
+            height=None,
+            capture_time=None,
+            error_text=_combine_failure_error_text(exc, issue_text),
+        )
     width, height = image.size
     if raw_width and raw_height:
         width, height = raw_width, raw_height
@@ -270,7 +309,7 @@ def generate_raw_preview(
     image.save(preview_path, format="JPEG", quality=85, optimize=False)
     cleanup_stale_preview_paths(stale_preview_paths)
 
-    issue_text = _format_nonfatal_issue(source_path, stderr_buffer.getvalue())
+    issue_text = _format_decoder_issues(source_path, stderr_buffer.getvalue())
     _emit_nonfatal_issue(issue_text)
 
     return PreviewResult(
@@ -290,6 +329,7 @@ def _try_extract_raw_thumbnail(
     raw_preview_mode: str = DEFAULT_RAW_PREVIEW_MODE,
     raw_width: int | None = None,
     raw_height: int | None = None,
+    source_path: Path | None = None,
 ) -> PreviewResult | None:
     """Try to extract the embedded JPEG thumbnail from a RAW file.
 
@@ -311,19 +351,23 @@ def _try_extract_raw_thumbnail(
     if thumb.format == jpeg_format:
         # Inspect the embedded JPEG before trusting it as our preview source.
         try:
-            with Image.open(io.BytesIO(thumb.data)) as image:
+            with open_image_with_warnings(
+                io.BytesIO(thumb.data),
+                diagnostic_path=source_path,
+            ) as (image, header_warning):
                 width, height = image.size
                 if not _raw_thumbnail_is_acceptable(width, height, raw_preview_mode=raw_preview_mode):
                     return None
                 capture_time = extract_capture_time(image)
                 # Resize if the embedded thumbnail exceeds our preview size.
                 if width > MAX_PREVIEW_SIZE[0] or height > MAX_PREVIEW_SIZE[1]:
+                    enforce_decode_budget(source_path or Path("<RAW thumbnail>"), width, height)
                     image = prepare_image_for_rgb(image)
                     image.thumbnail(MAX_PREVIEW_SIZE, Image.Resampling.LANCZOS)
                     image.save(preview_path, format="JPEG", quality=85, optimize=False)
                 else:
                     preview_path.write_bytes(thumb.data)
-        except (OSError, UnidentifiedImageError):
+        except (OSError, UnidentifiedImageError, ValueError):
             # Thumbnail was written but unreadable — treat as failed extraction.
             return None
 
@@ -335,12 +379,20 @@ def _try_extract_raw_thumbnail(
             width=final_w,
             height=final_h,
             capture_time=capture_time,
+            error_text=header_warning,
         )
 
     if thumb.format == bitmap_format:
         # Bitmap thumbnail — decode via PIL and save as JPEG.
-        image = prepare_image_for_rgb(Image.fromarray(thumb.data), apply_exif_orientation=False)
-        width, height = image.size
+        try:
+            image = Image.fromarray(thumb.data)
+            width, height = image.size
+            enforce_decode_budget(source_path or Path("<RAW thumbnail>"), width, height)
+            image = prepare_image_for_rgb(image, apply_exif_orientation=False)
+        except (OSError, TypeError, ValueError):
+            # Malformed bitmap thumbnails should not prevent rawpy's full
+            # demosaic fallback from producing a usable preview.
+            return None
         if not _raw_thumbnail_is_acceptable(width, height, raw_preview_mode=raw_preview_mode):
             return None
         image.thumbnail(MAX_PREVIEW_SIZE, Image.Resampling.LANCZOS)

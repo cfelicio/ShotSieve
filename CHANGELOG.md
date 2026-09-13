@@ -41,6 +41,7 @@ All notable changes to this project will be documented in this file.
 - CI now runs on direct `main` pushes, adds a Python 3.14 core suite, smoke-tests an installed wheel outside the checkout, and fails browser coverage when Chromium cannot launch in CI while preserving local skips.
 - Pinned the optional learned-IQA integration to `pyiqa==0.1.16` and documented separate package, checkpoint, cache, and retired-model licensing boundaries.
 - Added offline pull-request CI and a separate weekly/manual two-model smoke workflow; the latter validates a fresh cache in a new network-disabled process without publishing weights or photos.
+- Added a fixed 40-million-pixel decode budget for exceptional preview and direct learned-IQA source fallbacks, with per-file resource-limit diagnostics and file-attributed header warnings. Ready previews and usable RAW embedded thumbnails remain preferred, and corrupt RAW thumbnails can still fall back to bounded demosaicing.
 
 ### Fixed
 

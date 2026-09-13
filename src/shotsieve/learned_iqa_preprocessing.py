@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import functools
+import logging
 import math
 from pathlib import Path
 from typing import Sequence
@@ -8,7 +9,14 @@ from typing import Sequence
 import numpy as np
 from PIL import Image
 
-from shotsieve.image_conversion import prepare_image_for_rgb
+from shotsieve.image_conversion import (
+    enforce_decode_budget,
+    open_image_with_warnings,
+    prepare_image_for_rgb,
+)
+
+
+log = logging.getLogger(__name__)
 
 
 def _is_cuda_tensor_device(tensor_device: object | None) -> bool:
@@ -24,10 +32,16 @@ def _is_cuda_tensor_device(tensor_device: object | None) -> bool:
 
 def _load_single_image(path: Path, image_size: int) -> np.ndarray:
     """Load and preprocess a single image for model inference."""
-    with Image.open(path) as image:
+    with open_image_with_warnings(path) as (image, header_warning):
+        width, height = image.size
+        if header_warning:
+            log.warning("Image decoder warning for %s: %s", path, header_warning)
+        enforce_decode_budget(path, width, height)
         image = prepare_image_for_rgb(image)
         image = image.resize((image_size, image_size), Image.Resampling.BICUBIC)
-        return np.asarray(image, dtype=np.float32) / 255.0
+        result = np.asarray(image, dtype=np.float32) / 255.0
+
+    return result
 
 
 def _arrays_to_tensor(arrays: list[np.ndarray], *, torch_module, tensor_device=None, use_channels_last: bool = False):

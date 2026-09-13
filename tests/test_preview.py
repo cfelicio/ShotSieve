@@ -7,6 +7,7 @@ from types import SimpleNamespace
 import pytest
 
 from shotsieve import preview as preview_module
+from shotsieve.image_conversion import MAX_DECODE_PIXELS
 
 
 class _FakeFuture:
@@ -516,6 +517,94 @@ def test_generate_raw_preview_high_quality_mode_skips_embedded_thumbnail(
     assert result.status == "ready"
     assert result.path is not None
     assert calls == {"extract_thumb": 0, "postprocess": 1}
+
+
+def test_generate_raw_preview_uses_demosaic_when_embedded_thumbnail_is_corrupt(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    source_path = tmp_path / "corrupt-thumbnail.nef"
+    preview_dir = tmp_path / "previews"
+    source_path.write_bytes(b"fake-raw")
+    rendered_image = preview_module.Image.new("RGB", (1200, 800), color="blue")
+    calls = {"postprocess": 0}
+
+    class FakeRawImage:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def extract_thumb(self):
+            return SimpleNamespace(format="jpeg", data=b"corrupt embedded jpeg")
+
+        def postprocess(self, **_kwargs):
+            calls["postprocess"] += 1
+            return "rendered-array"
+
+    monkeypatch.setattr(
+        preview_module,
+        "rawpy",
+        SimpleNamespace(
+            imread=lambda _path: FakeRawImage(),
+            ThumbFormat=SimpleNamespace(JPEG="jpeg", BITMAP="bitmap"),
+        ),
+    )
+    monkeypatch.setattr(preview_module.Image, "fromarray", lambda _array: rendered_image.copy())
+
+    result = preview_module.generate_raw_preview(source_path, preview_dir)
+
+    assert result.status == "ready"
+    assert calls["postprocess"] == 1
+
+
+def test_generate_raw_preview_rejects_oversized_demosaic_before_postprocess(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    source_path = tmp_path / "oversized.nef"
+    preview_dir = tmp_path / "previews"
+    source_path.write_bytes(b"fake-raw")
+    postprocess_calls = 0
+
+    class FakeRawImage:
+        sizes = SimpleNamespace(
+            iwidth=MAX_DECODE_PIXELS + 1,
+            iheight=1,
+            width=MAX_DECODE_PIXELS + 1,
+            height=1,
+        )
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def extract_thumb(self):
+            raise ValueError("corrupt embedded thumbnail")
+
+        def postprocess(self, **_kwargs):
+            nonlocal postprocess_calls
+            postprocess_calls += 1
+            raise AssertionError("oversized RAW should not be demosaiced")
+
+    monkeypatch.setattr(
+        preview_module,
+        "rawpy",
+        SimpleNamespace(
+            imread=lambda _path: FakeRawImage(),
+            ThumbFormat=SimpleNamespace(JPEG="jpeg", BITMAP="bitmap"),
+        ),
+    )
+
+    result = preview_module.generate_raw_preview(source_path, preview_dir)
+
+    assert result.status == "failed"
+    assert result.error_text is not None
+    assert "safe decode budget" in result.error_text
+    assert postprocess_calls == 0
 
 
 @pytest.mark.parametrize(

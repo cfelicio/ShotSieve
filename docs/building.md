@@ -117,6 +117,8 @@ Preview and original-media endpoints use URLs keyed by catalog file ID, but eith
 
 Preview generation and learned-IQA preprocessing share the versioned image conversion helper. Both apply EXIF orientation, normalize palette/alpha data through RGBA, composite transparency onto a white matte, and preserve high-bit grayscale midtones. The preview and score cache records include the conversion version; legacy or changed-version records are regenerated or rescored automatically without clearing review decisions.
 
+Exceptional fallback inputs are checked from their header dimensions before conversion and are refused above the fixed 40-million-pixel decode budget. This protects preview and direct learned-IQA source paths from full-image allocation that a later thumbnail resize cannot undo. A ready bounded preview is still preferred, RAW embedded thumbnails are tried before full demosaicing, and corrupt thumbnails fall back to demosaicing when the sensor dimensions are within budget. Header warnings are captured per file for diagnostics; concurrent worker stderr is not globally redirected.
+
 ## Testing and verification
 
 Run the automated suite with:
