@@ -861,6 +861,16 @@ class TestStaticAssetHeaders:
         body = urlopen(f"{base_url}/index.html").read().decode("utf-8")
         assert 'id="runtime-model-warning"' in body
 
+    def test_static_html_exposes_explicit_ai_support_install_action(self, test_server):
+        base_url, _, _ = test_server
+        body = urlopen(f"{base_url}/index.html").read().decode("utf-8")
+        js_body = self._combined_js(base_url)
+
+        assert 'id="install-ai-support"' in body
+        assert "Install / Repair AI support" in body
+        assert "/api/ai-support/install/start" in js_body
+        assert "SHOTSIEVE_BOOTSTRAP_AUTO_INSTALL" not in body
+
     def test_static_settings_expose_analysis_diagnostics(self, test_server):
         base_url, _, _ = test_server
         html_body = urlopen(f"{base_url}/index.html").read().decode("utf-8")

@@ -70,14 +70,16 @@ Release manifests are generated from the exact built archives with `scripts/gene
 
 This check covers archives acquired by the bootstrap path. An explicitly supplied or colocated executable in a frozen bundle is a separate trust boundary and is accepted as supplied; the bootstrap does not hash that executable. Verify the containing bundle through its distribution channel when using that path.
 
-On startup, `shotsieve-desktop` may attempt sidecar installation or repair for missing learned-IQA dependencies and CUDA PyTorch runtimes. Current controls:
+Optional AI runtime packages are not downloaded during an ordinary noninteractive `shotsieve-desktop` launch. ShotSieve still opens the catalog and Review UI when learned-IQA support is missing or broken. In Settings, **Install / Repair AI support** runs the existing sidecar installer as an explicit, cancellable best-effort job; it reports the selected target, runtime sidecar path, model cache paths, failure details, and restart guidance. This runtime installation is separate from **Prepare selected model**, which may download model weights and performs the existing first-use CPU validation.
+
+Startup automation remains available when explicitly configured:
 
 - `SHOTSIEVE_BOOTSTRAP_AUTO_INSTALL_TORCH=1` to auto-install CUDA-sidecar PyTorch without prompting
-- `SHOTSIEVE_BOOTSTRAP_AUTO_INSTALL_TORCH=0` to skip the CUDA-sidecar install prompt
+- `SHOTSIEVE_BOOTSTRAP_AUTO_INSTALL_TORCH=0` to skip the CUDA-sidecar install step
 - `SHOTSIEVE_BOOTSTRAP_AUTO_INSTALL_LEARNED_IQA=1` to auto-install learned-IQA dependencies without prompting
-- `SHOTSIEVE_BOOTSTRAP_AUTO_INSTALL_LEARNED_IQA=0` to skip learned-IQA auto-install
+- `SHOTSIEVE_BOOTSTRAP_AUTO_INSTALL_LEARNED_IQA=0` to skip the learned-IQA install step
 
-Portable and frozen builds prefer the bundled pip-based installer paths from `shotsieve.bootstrap`; if that installer is unavailable, ShotSieve keeps running but learned backends may stay disabled.
+Interactive console launches may still ask for consent when neither automation setting is present. Portable and frozen builds prefer the bundled pip-based installer paths from `shotsieve.bootstrap`; if that installer is unavailable or declined, ShotSieve keeps running but learned backends may stay disabled. Cancelling an explicit installation takes effect between runtime install steps; restart ShotSieve if newly installed native packages are not usable in the current process.
 
 The supported learned-model catalog is `topiq_nr` and `clipiqa`, with TOPIQ as the default. PyIQA discovery is not an allowlist: if the two product models are not discoverable or cannot initialize, Settings shows an unavailable/empty model state. Older stored model names remain displayable by their raw name, but retired names cannot be selected for new scoring or comparison runs. No process-wide `torch.load` override is used.
 

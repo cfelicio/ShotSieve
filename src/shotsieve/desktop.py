@@ -13,7 +13,7 @@ from pathlib import Path
 from shotsieve import runtime_support
 from shotsieve.bootstrap import install_learned_iqa_sidecar, install_torch_sidecar, sidecar_site_packages_dir
 from shotsieve.learned_iqa import invalidate_hw_cache
-from shotsieve.model_assets import apply_model_cache_dir, recover_orphaned_preparation
+from shotsieve.model_assets import apply_model_cache_dir, effective_cache_paths, recover_orphaned_preparation
 from shotsieve.web import serve_review_ui
 
 
@@ -249,11 +249,12 @@ def maybe_prepare_learned_iqa_runtime(
     *,
     target_id: str | None = None,
     assume_install_consent: bool = False,
+    force_install: bool = False,
     input_func=input,
     output_func=print,
-) -> None:
+) -> bool:
     if _runtime_has_learned_iqa():
-        return
+        return True
 
     resolved_target_id = target_id or runtime_target_id_from_executable_name() or _fallback_runtime_target_id()
     runtime_root = (data_dir / "runtime").resolve()
@@ -263,9 +264,10 @@ def maybe_prepare_learned_iqa_runtime(
     if sidecar_has_pyiqa:
         _prepend_runtime_pythonpath(site_packages)
         if _runtime_has_learned_iqa():
-            return
+            return True
 
-    auto_install = _parse_env_bool(os.environ.get(LEARNED_IQA_AUTO_INSTALL_ENV))
+    configured_install = _parse_env_bool(os.environ.get(LEARNED_IQA_AUTO_INSTALL_ENV))
+    auto_install = True if force_install else configured_install
     if auto_install is None:
         if assume_install_consent:
             output_func(
@@ -275,11 +277,17 @@ def maybe_prepare_learned_iqa_runtime(
         elif not _is_interactive_console():
             if sidecar_has_pyiqa:
                 output_func(
-                    "Learned IQA sidecar exists but is unavailable in this session; attempting repair installation..."
+                    "Learned IQA sidecar exists but is unavailable in this session; skipping automatic repair. "
+                    "Use Install/Repair AI support in Settings or set "
+                    f"{LEARNED_IQA_AUTO_INSTALL_ENV}=1."
                 )
             else:
-                output_func("Learned IQA dependencies were not detected. Attempting automatic runtime installation...")
-            auto_install = True
+                output_func(
+                    "Learned IQA dependencies were not detected. Skipping automatic installation. "
+                    "Use Install/Repair AI support in Settings or set "
+                    f"{LEARNED_IQA_AUTO_INSTALL_ENV}=1."
+                )
+            auto_install = False
         else:
             prompt = (
                 "Learned IQA sidecar is present but unavailable. Repair installation now? [y/N]: "
@@ -297,7 +305,7 @@ def maybe_prepare_learned_iqa_runtime(
                 output_func(f"Learned IQA pip log: {site_packages / 'pip-install.log'}")
         else:
             output_func("Continuing without learned IQA dependency installation.")
-        return
+        return False
 
     output_func("Installing learned IQA runtime dependencies. This may take a few minutes...")
     installed = install_learned_iqa_sidecar(
@@ -319,9 +327,21 @@ def maybe_prepare_learned_iqa_runtime(
                 output_func(f"Learned IQA runtime diagnostic: {diagnostic}")
             output_func(f"Learned IQA sidecar path: {site_packages}")
             output_func(f"Learned IQA pip log: {site_packages / 'pip-install.log'}")
+            return False
+
+        return True
+
+    return False
 
 
-def maybe_prepare_cuda_torch_runtime(data_dir: Path, *, target_id: str | None = None, input_func=input, output_func=print) -> bool:
+def maybe_prepare_cuda_torch_runtime(
+    data_dir: Path,
+    *,
+    target_id: str | None = None,
+    force_install: bool = False,
+    input_func=input,
+    output_func=print,
+) -> bool:
     resolved_target_id = _resolve_cuda_runtime_target_id(target_id or runtime_target_id_from_executable_name())
     if resolved_target_id is None:
         return False
@@ -337,17 +357,23 @@ def maybe_prepare_cuda_torch_runtime(data_dir: Path, *, target_id: str | None = 
         if _sidecar_torch_has_usable_cuda(site_packages):
             return False
 
-    auto_install = _parse_env_bool(os.environ.get(TORCH_AUTO_INSTALL_ENV))
+    configured_install = _parse_env_bool(os.environ.get(TORCH_AUTO_INSTALL_ENV))
+    auto_install = True if force_install else configured_install
     if auto_install is None:
         if not _is_interactive_console():
             if sidecar_has_torch:
                 output_func(
                     "Runtime PyTorch is already installed but CUDA is unavailable in this session; "
-                    "attempting repair installation..."
+                    "skipping automatic repair. Use Install/Repair AI support in Settings or set "
+                    f"{TORCH_AUTO_INSTALL_ENV}=1."
                 )
             else:
-                output_func("PyTorch was not detected for this CUDA runtime. Attempting automatic runtime installation...")
-            auto_install = True
+                output_func(
+                    "PyTorch was not detected for this CUDA runtime. Skipping automatic installation. "
+                    "Use Install/Repair AI support in Settings or set "
+                    f"{TORCH_AUTO_INSTALL_ENV}=1."
+                )
+            auto_install = False
         else:
             prompt = (
                 "Runtime PyTorch was found but CUDA is unavailable. Repair runtime installation now? [y/N]: "
@@ -382,6 +408,119 @@ def maybe_prepare_cuda_torch_runtime(data_dir: Path, *, target_id: str | None = 
         return True
 
     return False
+
+
+def describe_ai_support(data_dir: Path, *, target_id: str | None = None) -> dict[str, object]:
+    """Return local-only optional AI support status for the Settings UI."""
+    resolved_target_id = target_id or runtime_target_id_from_executable_name() or _fallback_runtime_target_id()
+    runtime_root = (data_dir / "runtime").resolve()
+    site_packages = sidecar_site_packages_dir(runtime_root, resolved_target_id)
+    is_cuda = target_is_cuda_runtime(resolved_target_id)
+    torch_available = runtime_bundle_has_usable_cuda_torch() if is_cuda else False
+    return {
+        "target_id": resolved_target_id,
+        "runtime": _runtime_name_from_target_id(resolved_target_id),
+        "runtime_root": str(runtime_root),
+        "site_packages": str(site_packages),
+        "model_cache_paths": effective_cache_paths(),
+        "pyiqa_available": _runtime_has_learned_iqa(),
+        "sidecar_pyiqa": _path_has_pyiqa(site_packages),
+        "torch_required": is_cuda,
+        "torch_available": torch_available,
+        "sidecar_torch": _path_has_torch(site_packages),
+    }
+
+
+def install_ai_support(
+    data_dir: Path,
+    *,
+    target_id: str | None = None,
+    progress_callback=None,
+    cancel_check=None,
+    output_func=lambda _message: None,
+) -> dict[str, object]:
+    """Explicitly install or repair the optional runtime sidecars.
+
+    This is the consented path used by the Settings action. It does not download
+    model weights; those remain the separate selected-model preparation step.
+    """
+    resolved_target_id = target_id or runtime_target_id_from_executable_name() or _fallback_runtime_target_id()
+    runtime_root = (data_dir / "runtime").resolve()
+    site_packages = sidecar_site_packages_dir(runtime_root, resolved_target_id)
+    torch_attempted = target_is_cuda_runtime(resolved_target_id)
+    phase_count = 3 if torch_attempted else 2
+
+    def publish(phase: str, processed: int) -> None:
+        if progress_callback is None:
+            return
+        try:
+            progress_callback({
+                "phase": phase,
+                "files_processed": processed,
+                "files_total": phase_count,
+            })
+        except Exception:
+            return
+
+    def check_cancelled() -> None:
+        if cancel_check is not None:
+            cancel_check()
+
+    def emit(message: str) -> None:
+        output_func(message)
+
+    torch_available = False
+    if torch_attempted:
+        publish("installing_torch", 0)
+        emit("Installing or repairing the CUDA PyTorch runtime...")
+        maybe_prepare_cuda_torch_runtime(
+            data_dir,
+            target_id=resolved_target_id,
+            force_install=True,
+            output_func=emit,
+        )
+        check_cancelled()
+        torch_available = runtime_bundle_has_usable_cuda_torch(force_reload=True)
+        publish("checking_ai_support", 1)
+
+    publish("installing_learned_iqa", 1 if torch_attempted else 0)
+    emit("Installing or repairing the learned-IQA runtime dependencies...")
+    learned_available = maybe_prepare_learned_iqa_runtime(
+        data_dir,
+        target_id=resolved_target_id,
+        force_install=True,
+        output_func=emit,
+    )
+    check_cancelled()
+    publish("checking_ai_support", phase_count - 1)
+    learned_available = bool(learned_available and _runtime_has_learned_iqa())
+    publish("complete", phase_count)
+
+    warnings: list[str] = []
+    if torch_attempted and not torch_available:
+        warnings.append(
+            "CUDA PyTorch is still unavailable; learned scoring can use CPU after restart or an explicit CPU selection."
+        )
+    outcome = "completed" if learned_available else "failed"
+    result: dict[str, object] = {
+        "action": "install_ai_support",
+        "outcome": outcome,
+        "target_id": resolved_target_id,
+        "runtime": _runtime_name_from_target_id(resolved_target_id),
+        "runtime_root": str(runtime_root),
+        "site_packages": str(site_packages),
+        "model_cache_paths": effective_cache_paths(),
+        "learned_iqa_available": learned_available,
+        "torch_required": torch_attempted,
+        "torch_available": torch_available,
+        "warnings": warnings,
+        "restart_guidance": "Restart ShotSieve if the newly installed runtime is not available in this session.",
+        "weights_guidance": "Model weights are separate. Use Prepare selected model for first-use downloads and CPU validation.",
+        "recovery_action": "Retry Install/Repair AI support. Check the sidecar pip-install.log if it fails again.",
+    }
+    if outcome == "failed":
+        result["error"] = "Learned-IQA runtime is still unavailable after installation."
+    return result
 
 
 def build_parser() -> argparse.ArgumentParser:

@@ -38,6 +38,8 @@
       const labels = {
         deleting_files: "Deleting files",
         exporting_files: "Exporting files",
+        installing_ai_support: "Installing AI support",
+        checking_ai_support: "Checking AI support",
         moving_files: "Moving files",
         clearing_cache: "Clearing cache",
       };
@@ -476,6 +478,30 @@
         }
         await refreshWorkspace();
       }
+    }
+
+    async function installAiSupport() {
+      setBusyPhaseProgress({ percent: null, phaseIndex: 1, phaseCount: 3, phaseLabel: "Installing AI support" });
+      setBusyProgress(0);
+      setBusyMessage("Installing optional AI runtime support. This may take a few minutes...");
+      const result = await runTrackedOperation({
+        startPath: "/api/ai-support/install/start",
+        payload: {},
+        fallbackLabel: "AI support installation",
+        failureMessage: "AI support installation failed.",
+      });
+      const outcome = String(result?.outcome || "").toLowerCase();
+      if (outcome === "completed") {
+        showToast("AI support is installed. Prepare a selected model for first-use weights.");
+        addLogEntry("AI support installed", result?.restart_guidance || "Restart if the runtime is not available in this session.");
+      } else {
+        const detail = result?.error_report?.cause || result?.error || "AI support installation did not complete.";
+        const recovery = result?.recovery_action || "Retry Install / Repair AI support.";
+        showToast(`${detail} ${recovery}`, "error");
+        addLogEntry("AI support installation failed", `${detail} ${recovery}`);
+      }
+      await refreshWorkspace();
+      return result;
     }
 
     async function analyzeLibrary() {
@@ -923,6 +949,7 @@
       runScan,
       runScore,
       prepareSelectedModel,
+      installAiSupport,
       analyzeLibrary,
       renderLibraryRoots,
       downloadDecisionCsv,

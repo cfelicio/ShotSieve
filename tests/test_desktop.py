@@ -214,7 +214,7 @@ def test_maybe_prepare_cuda_torch_runtime_invalidates_hardware_cache_after_succe
     assert invalidations == ["torch"]
 
 
-def test_maybe_prepare_cuda_torch_runtime_non_interactive_defaults_to_auto_install(
+def test_maybe_prepare_cuda_torch_runtime_non_interactive_skips_install_without_consent(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -241,10 +241,69 @@ def test_maybe_prepare_cuda_torch_runtime_non_interactive_defaults_to_auto_insta
     messages: list[str] = []
     desktop_module.maybe_prepare_cuda_torch_runtime(data_dir, output_func=messages.append)
 
-    assert len(calls) == 1
-    assert calls[0][0] == "cuda"
-    assert calls[0][2] is False
-    assert any("PyTorch" in message for message in messages)
+    assert calls == []
+    assert any("skipping automatic installation" in message.casefold() for message in messages)
+
+
+def test_maybe_prepare_learned_iqa_runtime_non_interactive_skips_install_without_consent(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    data_dir = tmp_path / "data"
+    data_dir.mkdir(parents=True)
+
+    monkeypatch.delenv("SHOTSIEVE_BOOTSTRAP_AUTO_INSTALL_LEARNED_IQA", raising=False)
+    monkeypatch.setattr(desktop_module, "_runtime_has_learned_iqa", lambda: False)
+    monkeypatch.setattr(desktop_module, "_is_interactive_console", lambda: False)
+
+    install_calls: list[Path] = []
+    monkeypatch.setattr(
+        desktop_module,
+        "install_learned_iqa_sidecar",
+        lambda *, runtime, site_packages, output_func=print, force_reinstall=False: install_calls.append(site_packages) or False,
+    )
+
+    messages: list[str] = []
+    result = desktop_module.maybe_prepare_learned_iqa_runtime(data_dir, output_func=messages.append)
+
+    assert result is False
+    assert install_calls == []
+    assert any("skipping automatic installation" in message.casefold() for message in messages)
+
+
+def test_install_ai_support_is_explicit_and_reports_runtime_paths(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    data_dir = tmp_path / "data"
+    data_dir.mkdir(parents=True)
+    monkeypatch.setenv("SHOTSIEVE_BOOTSTRAP_AUTO_INSTALL_TORCH", "0")
+    monkeypatch.setenv("SHOTSIEVE_BOOTSTRAP_AUTO_INSTALL_LEARNED_IQA", "0")
+    monkeypatch.setattr(desktop_module, "runtime_target_id_from_executable_name", lambda system_name=None: "windows-nvidia")
+    monkeypatch.setattr(desktop_module, "runtime_bundle_has_usable_cuda_torch", lambda force_reload=False: True)
+    monkeypatch.setattr(desktop_module, "_runtime_has_learned_iqa", lambda: True)
+
+    calls: list[tuple[str, bool]] = []
+
+    def fake_prepare_cuda(data_dir, *, target_id=None, force_install=False, input_func=input, output_func=print):
+        calls.append(("torch", force_install))
+        return True
+
+    def fake_prepare_learned(data_dir, *, target_id=None, assume_install_consent=False, force_install=False, input_func=input, output_func=print):
+        calls.append(("learned", force_install))
+        return True
+
+    monkeypatch.setattr(desktop_module, "maybe_prepare_cuda_torch_runtime", fake_prepare_cuda)
+    monkeypatch.setattr(desktop_module, "maybe_prepare_learned_iqa_runtime", fake_prepare_learned)
+
+    progress: list[dict[str, object]] = []
+    result = desktop_module.install_ai_support(data_dir, progress_callback=progress.append)
+
+    assert result["outcome"] == "completed"
+    assert calls == [("torch", True), ("learned", True)]
+    assert result["target_id"] == "windows-nvidia"
+    assert str(data_dir / "runtime") in str(result["runtime_root"])
+    assert progress[-1]["phase"] == "complete"
 
 
 def test_runtime_pythonpath_updates_prepend_sidecar_path(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -457,7 +516,7 @@ def test_sidecar_cuda_probe_uses_runtime_import_check(
     assert desktop_module._sidecar_torch_has_usable_cuda(site_packages) is True
 
 
-def test_maybe_prepare_cuda_torch_runtime_attempts_repair_install_when_sidecar_exists_but_unusable(
+def test_maybe_prepare_cuda_torch_runtime_repairs_sidecar_when_explicitly_requested(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -494,13 +553,13 @@ def test_maybe_prepare_cuda_torch_runtime_attempts_repair_install_when_sidecar_e
     monkeypatch.setattr(desktop_module, "install_torch_sidecar", fake_install_torch_sidecar)
 
     messages: list[str] = []
-    desktop_module.maybe_prepare_cuda_torch_runtime(data_dir, output_func=messages.append)
+    desktop_module.maybe_prepare_cuda_torch_runtime(data_dir, force_install=True, output_func=messages.append)
 
     assert check_calls == [False]
     assert len(install_calls) == 1
     assert install_calls[0][0] == "cuda"
     assert install_calls[0][2] is True
-    assert any("attempting repair installation" in message.casefold() for message in messages)
+    assert any("installing pytorch runtime" in message.casefold() for message in messages)
 
 
 def test_maybe_prepare_cuda_torch_runtime_skips_reinstall_when_explicitly_disabled(

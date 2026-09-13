@@ -197,6 +197,54 @@ class TestWebRoutesJobsIntegration:
         assert payload["runtime_targets"] == ["auto", "cpu", "cuda", "xpu", "directml", "mps"]
         assert payload["learned"]["model_preparation"]["state"] == "not_checked"
 
+    def test_ai_support_installation_uses_operation_job_and_retains_summary(self, test_server, monkeypatch):
+        base_url, db_path, _ = test_server
+        from shotsieve import desktop as desktop_module
+
+        captured: dict[str, object] = {}
+
+        def fake_install(data_dir, *, progress_callback, cancel_check):
+            captured["data_dir"] = data_dir
+            progress_callback({"phase": "installing_learned_iqa", "files_processed": 1, "files_total": 2})
+            cancel_check()
+            return {
+                "action": "install_ai_support",
+                "outcome": "completed",
+                "target_id": "windows-cpu",
+                "runtime_root": str(data_dir / "runtime"),
+                "site_packages": str(data_dir / "runtime" / "site-packages" / "windows-cpu"),
+                "learned_iqa_available": True,
+                "torch_required": False,
+                "torch_available": False,
+                "warnings": [],
+                "restart_guidance": "Restart if needed.",
+                "weights_guidance": "Prepare a model separately.",
+            }
+
+        monkeypatch.setattr(desktop_module, "install_ai_support", fake_install)
+        response = urlopen(Request(
+            f"{base_url}/api/ai-support/install/start",
+            data=b"{}",
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        ))
+        start_payload = json.loads(response.read().decode("utf-8"))
+        job_id = start_payload["job_id"]
+
+        terminal = None
+        deadline = time.time() + 3
+        while time.time() < deadline:
+            terminal = json.loads(urlopen(f"{base_url}/api/operations/status?job_id={job_id}").read().decode("utf-8"))
+            if terminal["status"] != "running":
+                break
+            time.sleep(0.05)
+
+        assert terminal is not None
+        assert terminal["status"] == "completed"
+        result = json.loads(urlopen(f"{base_url}/api/operations/result?job_id={job_id}").read().decode("utf-8"))
+        assert result["outcome"] == "completed"
+        assert captured["data_dir"] == db_path.parent
+
     def test_model_preparation_job_reports_success_and_retains_readiness_record(self, test_server, monkeypatch):
         base_url, db_path, _ = test_server
         from shotsieve import model_assets, web as web_module

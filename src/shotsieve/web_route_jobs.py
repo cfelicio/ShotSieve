@@ -115,6 +115,11 @@ def _handle_analysis_post_routes(handler: Any, context: WebRouteContext, parsed:
         routes.start_model_prepare_job(handler, context, payload)
         return True
 
+    if parsed.path == "/api/ai-support/install/start":
+        payload = deps.read_json_body(handler, max_body_size=context.max_request_body_size)
+        routes.start_ai_support_install_job(handler, context, payload)
+        return True
+
     if parsed.path in {"/api/score-estimate", "/api/compare-estimate"}:
         routes._send_rows_total_estimate(handler, context)
         return True
@@ -642,6 +647,114 @@ def _model_prepare_progress(record: dict[str, object]) -> dict[str, object]:
         "percent": phase_percent,
         "processed_counts": record.get("processed_counts") or {},
     }
+
+
+def start_ai_support_install_job(handler: Any, context: WebRouteContext, payload: dict[str, object]) -> None:
+    _ = payload
+    deps = cast(WebRouteDependencies, context.dependencies)
+    routes = _get_web_routes()
+    registry = routes._require_registry(context.operation_registry, label="AI support installation")
+    install_fn = getattr(deps, "install_ai_support", None)
+    if not callable(install_fn):
+        raise RuntimeError("AI support installation is unavailable")
+    if not routes.try_acquire_operation_lock(handler, context):
+        return
+
+    job_id = registry.create(initial_progress=routes._progress_payload(
+        "installing_ai_support",
+        files_processed=0,
+        files_total=3,
+    ))
+
+    def run_job() -> None:
+        try:
+            def publish(record: dict[str, object]) -> None:
+                phase = str(record.get("phase") or "installing_ai_support")
+                processed = int(record.get("files_processed", 0) or 0)
+                total = int(record.get("files_total", 3) or 3)
+                registry.update_progress(
+                    job_id,
+                    routes._progress_payload(phase, files_processed=processed, files_total=total),
+                )
+
+            def cancel_check() -> None:
+                if registry.is_cancelled(job_id):
+                    raise InterruptedError("AI support installation was cancelled by user.")
+
+            result = install_fn(
+                context.db_path.parent,
+                progress_callback=publish,
+                cancel_check=cancel_check,
+            )
+            if not isinstance(result, dict):
+                raise TypeError("AI support installer returned an invalid result")
+            outcome = str(result.get("outcome") or "").casefold()
+            if outcome in {"failed", "cancelled"}:
+                if not isinstance(result.get("diagnostic"), dict):
+                    failure = _model_failure_summary(
+                        RuntimeError(
+                            str(
+                                result.get("error")
+                                or (
+                                    "AI support installation was cancelled."
+                                    if outcome == "cancelled"
+                                    else "AI support installation failed."
+                                )
+                            )
+                        ),
+                        model_name="optional-ai-support",
+                        requested_runtime="auto",
+                        phase="installing_ai_support",
+                    )
+                    result = {
+                        **result,
+                        "diagnostic": failure["diagnostic"],
+                        "error_report": failure["error_report"],
+                    }
+                registry.fail(
+                    job_id,
+                    error=str(
+                        result.get("error")
+                        or (
+                            "AI support installation was cancelled."
+                            if outcome == "cancelled"
+                            else "AI support installation failed."
+                        )
+                    ),
+                    summary=result,
+                )
+            else:
+                registry.complete(job_id, summary=result)
+        except InterruptedError as exc:
+            result = {
+                "action": "install_ai_support",
+                "outcome": "cancelled",
+                "error": str(exc),
+                "recovery_action": "Retry Install/Repair AI support to finish the runtime installation.",
+            }
+            registry.fail(job_id, error=str(exc), summary=result)
+        except Exception as exc:
+            failure = _model_failure_summary(
+                exc,
+                model_name="optional-ai-support",
+                requested_runtime="auto",
+                phase="installing_ai_support",
+            )
+            diagnostic = failure["diagnostic"]
+            result = {
+                "action": "install_ai_support",
+                "outcome": "failed",
+                "error": str(diagnostic.get("cause") or "AI support installation failed."),
+                "diagnostic": diagnostic,
+                "error_report": diagnostic,
+                "recovery_action": "Retry Install/Repair AI support. Check the sidecar pip-install.log if it fails again.",
+            }
+            registry.fail(job_id, error=str(result["error"]), summary=result)
+        finally:
+            context.operation_lock.release()
+
+    deps.thread_factory(target=run_job, daemon=True).start()
+    routes.send_json(handler, {"job_id": job_id, "status": "running"})
 
 
 def start_model_prepare_job(handler: Any, context: WebRouteContext, payload: dict[str, object]) -> None:

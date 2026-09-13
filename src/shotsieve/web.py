@@ -282,6 +282,16 @@ def build_handler(db_path: Path):
     def route_require_learned_runtime(*args, **kwargs):
         return _require_learned_runtime(*args, **kwargs)
 
+    def route_ai_support_status(data_dir: Path):
+        from shotsieve.desktop import describe_ai_support
+
+        return describe_ai_support(data_dir)
+
+    def route_install_ai_support(*args, **kwargs):
+        from shotsieve.desktop import install_ai_support
+
+        return install_ai_support(*args, **kwargs)
+
     def route_guess_media_type(name: str):
         return mimetypes.guess_type(name)
 
@@ -350,6 +360,7 @@ def build_handler(db_path: Path):
             build_options_payload=lambda path, *, resource_profile=None: build_options_payload(
                 path,
                 resource_profile=resource_profile,
+                ai_support_status=route_ai_support_status,
             ),
             filesystem_roots=lambda: filesystem_roots(),
             list_directory=lambda path: list_directory(path),
@@ -386,6 +397,7 @@ def build_handler(db_path: Path):
             default_batch_size=lambda: DEFAULT_BATCH_SIZE,
             thread_factory=lambda *args, **kwargs: threading.Thread(*args, **kwargs),
             prepare_model=lambda *args, **kwargs: prepare_model(*args, **kwargs),
+            install_ai_support=route_install_ai_support,
         ),
     )
 
@@ -515,7 +527,12 @@ def build_handler(db_path: Path):
     return ReviewHandler
 
 
-def build_options_payload(db_path: Path, *, resource_profile: str | None = None) -> dict[str, object]:
+def build_options_payload(
+    db_path: Path,
+    *,
+    resource_profile: str | None = None,
+    ai_support_status=None,
+) -> dict[str, object]:
     learned = available_learned_backends(resource_profile=resource_profile)
     learned["model_preparation"] = read_preparation_record(db_path.parent)
     capabilities = preview_capabilities()
@@ -528,6 +545,7 @@ def build_options_payload(db_path: Path, *, resource_profile: str | None = None)
         if isinstance(entry, dict) and entry.get("available") and entry.get("canonical_id")
     ] if isinstance(model_catalog, list) else list(runtime_curated_learned_models())
     runtime_targets_ui = ["auto", "cpu", "cuda", "xpu", "directml", "mps"]
+    ai_support = ai_support_status(db_path.parent) if callable(ai_support_status) else {}
     return {
         "database": str(db_path.resolve()),
         "preview_dir": str(preview_dir),
@@ -536,6 +554,7 @@ def build_options_payload(db_path: Path, *, resource_profile: str | None = None)
         "preview_modes": list(RAW_PREVIEW_MODES),
         "raw_preview_auto_min_long_edge": MIN_RAW_THUMBNAIL_LONG_EDGE,
         "learned": learned,
+        "ai_support": ai_support,
         "learned_models": learned_models,
         "default_scoring_mode": learned["default_model"],
         "runtime_targets": runtime_targets_ui,

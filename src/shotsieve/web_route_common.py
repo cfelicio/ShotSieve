@@ -124,6 +124,7 @@ class WebRouteDependencies:
     default_batch_size: Callable[[], int]
     thread_factory: Callable[..., Any]
     prepare_model: Callable[..., dict[str, object]] | None = None
+    install_ai_support: Callable[..., dict[str, object]] | None = None
 
 
 @dataclass(frozen=True)

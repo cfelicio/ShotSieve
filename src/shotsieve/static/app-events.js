@@ -17,6 +17,7 @@
       runScan,
       runScore,
       prepareSelectedModel,
+      installAiSupport,
       runModelComparison,
       renderComparisonResults,
       clearCache,
@@ -558,6 +559,10 @@
       document.getElementById("scan-library").addEventListener("click", () => withBusy("Scanning selected folder...", () => runScan(null, { generatePreviews: false })).catch(handleError));
       document.getElementById("score-library").addEventListener("click", () => withBusy("Scoring selected folder...", () => runScore()).catch(handleError));
       document.getElementById("prepare-model")?.addEventListener("click", () => withBusy("Preparing selected model...", () => prepareSelectedModel()).catch(handleError));
+      document.getElementById("install-ai-support")?.addEventListener("click", () => withBusy(
+        "Installing optional AI support...",
+        () => installAiSupport(),
+      ).catch(handleError));
       document.getElementById("compare-run").addEventListener("click", () => withBusy("Comparing learned models...", () => runModelComparison(), { operationType: "compare" }).catch(handleError));
       document.getElementById("compare-row-sort").addEventListener("change", (event) => {
         state.compareRowSort = event.target.value || "topiq_nr:desc";
