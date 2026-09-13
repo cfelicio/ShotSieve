@@ -46,14 +46,27 @@
     }
 
     function reviewSelectionSnapshotFromQuery(params, totalFiles) {
+      const numericParam = (name) => {
+        const value = params.get(name);
+        return value === null || value === "" ? null : Number(value);
+      };
+      const formatsParam = params.get("formats");
       const selection = {
         scope: "review-browser",
         marked: params.get("marked") || "all",
         issues: params.get("issues") || "all",
         root: params.get("root") || null,
         query: params.get("query") || null,
-        min_score: params.get("min_score") ? Number(params.get("min_score")) : null,
-        max_score: params.get("max_score") ? Number(params.get("max_score")) : null,
+        min_score: numericParam("min_score"),
+        max_score: numericParam("max_score"),
+        formats: formatsParam ? formatsParam.split(",").filter(Boolean) : null,
+        min_mp: numericParam("min_mp"),
+        max_mp: numericParam("max_mp"),
+        min_edge: numericParam("min_edge"),
+        max_edge: numericParam("max_edge"),
+        min_size: numericParam("min_size"),
+        max_size: numericParam("max_size"),
+        metadata: params.get("metadata") || "all",
       };
 
       return {

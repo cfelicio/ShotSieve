@@ -112,10 +112,13 @@ function addLogEntry(title, detail) {
 }
 
 const {
+  clearTrackedJob,
+  markTrackedJobUnknown,
   renderBusyState,
   setBusyMessage,
   setBusyPhaseProgress,
   setBusyProgress,
+  trackJob,
   withBusy,
 } = busyModule.createBusyController({
   state,
@@ -155,9 +158,12 @@ const workflows = workflowsModule.createWorkflows({
   state,
   api: { fetchJson, postJson },
   busy: {
+    clearTrackedJob,
+    markTrackedJobUnknown,
     setBusyMessage,
     setBusyPhaseProgress,
     setBusyProgress,
+    trackJob,
     withBusy,
   },
   compare: {
@@ -222,6 +228,7 @@ const {
   runScan,
   runScore,
   prepareSelectedModel,
+  checkTrackedJob,
   analyzeLibrary,
   clearCache,
   reviewMissingEntries,
@@ -275,6 +282,7 @@ const installEvents = eventsModule.createEvents({
   setTab: controller.setTab,
   openOverlay: controller.openOverlay,
   renderBusyState,
+  checkTrackedJob,
   selectAll: gridController.selectAll,
   selectNone: gridController.selectNone,
   selectAllMatching: gridController.selectAllMatching,

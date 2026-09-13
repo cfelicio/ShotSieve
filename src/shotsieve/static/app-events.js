@@ -34,6 +34,7 @@
       setTab,
       openOverlay,
       renderBusyState,
+      checkTrackedJob,
       selectAll,
       selectNone,
       selectAllMatching,
@@ -572,6 +573,14 @@
       document.getElementById("cancel-operation").addEventListener("click", requestOperationCancel);
 
       document.getElementById("compare-cancel-operation").addEventListener("click", requestOperationCancel);
+
+      document.getElementById("job-recovery-check-status")?.addEventListener("click", () => {
+        checkTrackedJob().then((result) => {
+          if (result?.model_names && result?.rows) {
+            renderComparisonResults();
+          }
+        }).catch(handleError);
+      });
 
       document.getElementById("refresh-analysis-diagnostics")?.addEventListener("click", () => {
         loadAnalysisDiagnostics().catch(handleError);

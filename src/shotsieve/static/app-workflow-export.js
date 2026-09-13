@@ -70,7 +70,7 @@
       return state.loadedReviewSelection?.selectionRevision || null;
     }
 
-    async function fetchReviewStateSelectionRevision(marked, root = null) {
+    async function fetchReviewStateSelectionRevision(marked, root = null, query = null) {
       const params = new URLSearchParams();
       params.set("marked", marked);
       params.set("limit", "1");
@@ -78,7 +78,36 @@
       if (root) {
         params.set("root", root);
       }
+      if (query) {
+        params.set("query", query);
+      }
       const data = await fetchJson(`/api/review/file-ids?${params.toString()}`);
+      return data.selection_revision || null;
+    }
+
+    async function fetchSelectionRevision(selection) {
+      const scope = String(selection?.scope || "review-browser");
+      if (scope === "review-state") {
+        return fetchReviewStateSelectionRevision(selection.marked, selection.root, selection.query);
+      }
+
+      const params = new URLSearchParams();
+      for (const name of [
+        "root", "marked", "issues", "query", "min_score", "max_score", "min_mp", "max_mp",
+        "min_width", "max_width", "min_height", "max_height", "min_edge", "max_edge", "min_size",
+        "max_size", "metadata",
+      ]) {
+        const value = selection?.[name];
+        if (value !== null && value !== undefined && value !== "") {
+          params.set(name, String(value));
+        }
+      }
+      if (Array.isArray(selection?.formats) && selection.formats.length) {
+        params.set("formats", selection.formats.join(","));
+      }
+      params.set("limit", "1");
+      params.set("offset", "0");
+      const data = await fetchJson(`/api/files?${params.toString()}`);
       return data.selection_revision || null;
     }
 
@@ -286,6 +315,122 @@
       return JSON.stringify(result || {}, null, 2);
     }
 
+    function operationItemId(item) {
+      const fileId = Number(item?.file_id || item?.id);
+      return Number.isInteger(fileId) && fileId > 0 ? fileId : null;
+    }
+
+    function mergeOperationResults(previous, next) {
+      if (!previous) {
+        return {
+          ...next,
+          items: operationItems(next).map((item) => ({ ...item })),
+          warnings: Array.isArray(next?.warnings) ? [...next.warnings] : [],
+        };
+      }
+      if (!next) {
+        return previous;
+      }
+
+      const itemsById = new Map();
+      const itemOrder = [];
+      for (const item of [...operationItems(previous), ...operationItems(next)]) {
+        const fileId = operationItemId(item);
+        if (fileId === null) {
+          continue;
+        }
+        if (!itemsById.has(fileId)) {
+          itemOrder.push(fileId);
+        }
+        itemsById.set(fileId, { ...item, file_id: fileId, id: fileId });
+      }
+      const items = itemOrder.map((fileId) => itemsById.get(fileId));
+      const warnings = [];
+      const warningKeys = new Set();
+      for (const warning of [...(previous.warnings || []), ...(next.warnings || [])]) {
+        const key = JSON.stringify(warning);
+        if (!warningKeys.has(key)) {
+          warningKeys.add(key);
+          warnings.push(warning);
+        }
+      }
+
+      const merged = { ...previous };
+      for (const [key, value] of Object.entries(next)) {
+        if (value !== undefined) {
+          merged[key] = value;
+        }
+      }
+      Object.assign(merged, {
+        items,
+        warnings,
+        deleted_ids: [...new Set([
+          ...(previous.deleted_ids || []),
+          ...(next.deleted_ids || []),
+        ].map(Number).filter((fileId) => Number.isInteger(fileId) && fileId > 0))],
+      });
+      if (items.length) {
+        merged.completed_count = items.filter((item) => item.outcome === "success").length;
+        merged.failed_count = items.filter((item) => item.outcome === "failed").length;
+        merged.partial_count = items.filter((item) => ["partial", "uncertain", "catalog_failed"].includes(item.outcome)).length;
+        merged.unprocessed_count = items.filter((item) => item.outcome === "unprocessed").length;
+        merged.failed = items.filter((item) => item.outcome !== "success");
+        merged.safe_retry_ids = items
+          .filter((item) => item.retry_safe)
+          .map((item) => operationItemId(item))
+          .filter((fileId) => fileId !== null);
+        merged.copied = items.filter((item) => item.outcome === "success" && item.action === "copy").length;
+        merged.moved = items.filter((item) => item.outcome === "success" && item.action === "move").length;
+        merged.deleted_count = merged.deleted_ids.length;
+      }
+      const unresolved = items.some((item) => item.outcome !== "success");
+      merged.cancelled = Boolean((next.cancelled || previous.cancelled) && unresolved);
+      if (next.job_status === "unknown" || next.outcome === "unknown"
+        || previous.job_status === "unknown" || previous.outcome === "unknown") {
+        merged.job_status = "unknown";
+        merged.outcome = "unknown";
+      } else if (merged.cancelled) {
+        merged.outcome = "cancelled";
+      } else if (merged.partial_count || merged.unprocessed_count) {
+        merged.outcome = "partial";
+      } else if (merged.failed_count) {
+        merged.outcome = merged.completed_count ? "partial" : "failed";
+      } else {
+        merged.outcome = items.length ? "success" : (next.outcome || previous.outcome || "noop");
+      }
+      return merged;
+    }
+
+    function appendRetryItems(result, fileIds, { action, outcome, error, retrySafe, stage }) {
+      if (!fileIds.length) {
+        return result;
+      }
+      const existing = new Set(operationItems(result).map(operationItemId).filter((fileId) => fileId !== null));
+      const appended = fileIds
+        .filter((fileId) => !existing.has(fileId))
+        .map((fileId) => ({
+          id: fileId,
+          file_id: fileId,
+          source: "",
+          path: "",
+          destination: null,
+          action,
+          requested_action: action,
+          outcome,
+          stage,
+          error_text: String(error || "Retry was not started."),
+          error: String(error || "Retry was not started."),
+          retry_safe: retrySafe,
+        }));
+      return mergeOperationResults(result, {
+        action,
+        items: appended,
+        outcome: outcome === "uncertain" ? "unknown" : "partial",
+        job_status: outcome === "uncertain" ? "unknown" : undefined,
+        fatal_error: outcome === "uncertain" ? String(error || "Job status is unknown.") : undefined,
+      });
+    }
+
     function presentOperationResult(result, request = null) {
       if (!result || typeof result !== "object") {
         return;
@@ -368,7 +513,10 @@
 
       const retryButton = document.getElementById("operation-result-retry");
       if (retryButton) {
-        retryButton.classList.toggle("hidden", !(Array.isArray(result.safe_retry_ids) && result.safe_retry_ids.length));
+        retryButton.classList.toggle(
+          "hidden",
+          Boolean(state.recoveryJob) || !(Array.isArray(result.safe_retry_ids) && result.safe_retry_ids.length),
+        );
       }
       const checkButton = document.getElementById("operation-result-check-status");
       if (checkButton) {
@@ -387,61 +535,152 @@
 
       const payload = { ...(request.payload || {}) };
       const originalSelection = payload.selection;
+      const pageSelection = payload.page_selection
+        ? { ...payload.page_selection }
+        : originalSelection
+          ? { ...originalSelection }
+          : null;
+      if (!pageSelection) {
+        throw new Error("The original review scope is unavailable. Refresh the results and select again.");
+      }
+      delete pageSelection.selection_revision;
+      delete pageSelection.exclude_file_ids;
       delete payload.selection;
       delete payload.exclude_file_ids;
-      delete payload.page_selection;
+      payload.page_selection = pageSelection;
       payload.file_ids = safeIds;
       payload.count = safeIds.length;
-      if (originalSelection?.scope === "review-state") {
-        payload.selection_revision = await fetchReviewStateSelectionRevision(originalSelection.marked, originalSelection.root);
-      } else {
-        payload.selection_revision = currentSelectionRevision();
-      }
-      if (!payload.selection_revision) {
-        throw new Error("The review selection changed. Refresh the results before retrying.");
-      }
       const mode = String(payload.mode || result.action || "").toLowerCase();
       if ((mode === "move" || mode === "delete") && !confirm(`Retry ${mode} for ${safeIds.length} file(s)?`)) {
         return;
       }
 
+      let aggregate = mergeOperationResults(null, result);
+      let currentChunkIds = [];
+      let currentChunkEnd = 0;
+      let retryStopped = false;
+
+      const stopBeforeChunk = (error) => {
+        const message = `Retry could not verify the current selection: ${String(error?.message || error)}`;
+        aggregate = appendRetryItems(
+          aggregate,
+          currentChunkIds,
+          { action: mode, outcome: "unprocessed", error: message, retrySafe: true, stage: "not_started" },
+        );
+        aggregate = appendRetryItems(
+          aggregate,
+          safeIds.slice(currentChunkEnd),
+          { action: mode, outcome: "unprocessed", error: message, retrySafe: true, stage: "not_started" },
+        );
+        aggregate.outcome = "partial";
+        aggregate.fatal_error = message;
+        state.latestOperationResult = aggregate;
+        presentOperationResult(aggregate, request);
+        retryStopped = true;
+      };
+
+      const finishRetry = async () => {
+        state.latestOperationResult = aggregate;
+        presentOperationResult(aggregate, {
+          ...request,
+          payload: { ...payload, file_ids: safeIds, count: safeIds.length },
+        });
+        await refreshWorkspace();
+      };
+
       await withBusy(`Retrying ${safeIds.length} file(s)...`, async () => {
-        const retryResults = [];
         for (let offset = 0; offset < safeIds.length; offset += 500) {
           const chunkIds = safeIds.slice(offset, offset + 500);
+          currentChunkIds = chunkIds;
+          currentChunkEnd = offset + chunkIds.length;
           const chunkPayload = { ...payload, file_ids: chunkIds, count: chunkIds.length };
-          if (originalSelection?.scope === "review-state") {
-            chunkPayload.selection_revision = await fetchReviewStateSelectionRevision(originalSelection.marked, originalSelection.root);
-          } else {
-            chunkPayload.selection_revision = currentSelectionRevision();
+          try {
+            chunkPayload.selection_revision = await fetchSelectionRevision(pageSelection);
+          } catch (error) {
+            stopBeforeChunk(error);
+            break;
           }
-          retryResults.push(await workflowLibrary.runTrackedOperation({
-            startPath: request.startPath,
-            payload: chunkPayload,
-            fallbackLabel: request.fallbackLabel,
-            failureMessage: request.failureMessage,
-          }));
+          if (!chunkPayload.selection_revision) {
+            stopBeforeChunk(new Error("the review selection changed or is still loading"));
+            break;
+          }
+          try {
+            const next = await workflowLibrary.runTrackedOperation({
+              startPath: request.startPath,
+              payload: chunkPayload,
+              fallbackLabel: request.fallbackLabel,
+              failureMessage: request.failureMessage,
+            });
+            if (next) {
+              aggregate = mergeOperationResults(aggregate, next);
+            }
+            if (next?.job_status === "failed" || ["cancelled", "unknown"].includes(String(next?.outcome || ""))) {
+              aggregate = appendRetryItems(
+                aggregate,
+                safeIds.slice(currentChunkEnd),
+                { action: mode, outcome: "unprocessed", error: next.fatal_error || next.job_error || "Retry stopped.", retrySafe: true, stage: "not_started" },
+              );
+              retryStopped = true;
+              break;
+            }
+          } catch (error) {
+            if (error?.name === "AbortError") {
+              throw error;
+            }
+            const unknown = state.latestOperationResult?.job_status === "unknown";
+            aggregate = unknown
+              ? mergeOperationResults(aggregate, state.latestOperationResult)
+              : appendRetryItems(
+                aggregate,
+                currentChunkIds,
+                { action: mode, outcome: "uncertain", error: error.message || error, retrySafe: false, stage: "status_unknown" },
+              );
+            aggregate = appendRetryItems(
+              aggregate,
+              safeIds.slice(currentChunkEnd),
+              { action: mode, outcome: "unprocessed", error: error.message || error, retrySafe: true, stage: "not_started" },
+            );
+            aggregate.job_status = "unknown";
+            aggregate.outcome = "unknown";
+            aggregate.fatal_error = String(error.message || error);
+            state.latestOperationResult = aggregate;
+            presentOperationResult(aggregate, request);
+            retryStopped = true;
+            return;
+          }
         }
-        const retryResult = retryResults.reduce((aggregate, next) => {
-          if (!aggregate) return { ...next };
-          aggregate.items = [...(aggregate.items || []), ...(next.items || [])];
-          aggregate.failed = [...(aggregate.failed || []), ...(next.failed || [])];
-          aggregate.warnings = [...(aggregate.warnings || []), ...(next.warnings || [])];
-          aggregate.safe_retry_ids = [...new Set([...(aggregate.safe_retry_ids || []), ...(next.safe_retry_ids || [])])];
-          for (const key of ["copied", "moved", "deleted_count", "completed_count", "failed_count", "partial_count", "unprocessed_count"]) {
-            aggregate[key] = Number(aggregate[key] || 0) + Number(next[key] || 0);
+        if (!retryStopped) {
+          await finishRetry();
+        } else if (state.recoveryJob?.kind !== "operation") {
+          await finishRetry();
+        }
+      }, {
+        operationType: "operation",
+        onCancelled: async ({ confirmed, result: cancelledResult }) => {
+          if (confirmed && cancelledResult) {
+            aggregate = mergeOperationResults(aggregate, cancelledResult);
+          } else {
+            aggregate = appendRetryItems(
+              aggregate,
+              currentChunkIds,
+              { action: mode, outcome: "uncertain", error: "Cancellation status is unknown.", retrySafe: false, stage: "status_unknown" },
+            );
+            aggregate.job_status = "unknown";
+            aggregate.outcome = "unknown";
+            aggregate.fatal_error = "Cancellation was requested, but the server has not confirmed a terminal state.";
           }
-          aggregate.outcome = [aggregate.outcome, next.outcome].includes("cancelled")
-            ? "cancelled"
-            : [aggregate.outcome, next.outcome].some((outcome) => ["partial", "failed", "unknown"].includes(outcome))
-              ? (aggregate.completed_count ? "partial" : "failed")
-              : "success";
-          return aggregate;
-        }, null);
-        const retainedRequest = { ...request, payload: { ...payload, file_ids: safeIds, count: safeIds.length } };
-        presentOperationResult(retryResult, retainedRequest);
-        await refreshWorkspace();
-      }, { operationType: "operation" });
+          aggregate = appendRetryItems(
+            aggregate,
+            safeIds.slice(currentChunkEnd),
+            { action: mode, outcome: "unprocessed", error: confirmed ? "Retry was cancelled." : "Cancellation status is unknown.", retrySafe: true, stage: "not_started" },
+          );
+          state.latestOperationResult = aggregate;
+          presentOperationResult(aggregate, request);
+          if (confirmed) {
+            await refreshWorkspace();
+          }
+        },
+      });
     }
 
     function installOperationResultEvents() {
@@ -680,6 +919,9 @@
       installRejectedActionEvents,
       presentOperationResult,
       operationTone,
+      mergeOperationResults,
+      retrySafeOperation,
+      fetchSelectionRevision,
       installOperationResultEvents,
     };
   }

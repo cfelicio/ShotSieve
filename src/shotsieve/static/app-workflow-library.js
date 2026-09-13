@@ -14,7 +14,14 @@
     } = deps;
 
     const { fetchJson, postJson } = api;
-    const { setBusyMessage, setBusyPhaseProgress, setBusyProgress } = busy;
+    const {
+      clearTrackedJob = () => {},
+      markTrackedJobUnknown = () => {},
+      setBusyMessage,
+      setBusyPhaseProgress,
+      setBusyProgress,
+      trackJob = () => {},
+    } = busy;
     const { currentResourceProfile, scoreBatchSize } = compare;
     const { escapeHtml, formatDuration } = formatting;
     const { addLogEntry, showToast } = notifications;
@@ -99,13 +106,25 @@
       state.operationProgressSignature = null;
       state.operationProgressChangedAt = Date.now();
       state.latestOperationRequest = { startPath, payload: { ...payload }, fallbackLabel, failureMessage };
+      trackJob({
+        kind: "operation",
+        jobId,
+        statusPath: "/api/operations/status",
+        resultPath: "/api/operations/result",
+        cancelPath: "/api/operations/cancel",
+        label: fallbackLabel,
+      });
 
       try {
-        return await pollOperationJob(jobId, { fallbackLabel, failureMessage });
+        const result = await pollOperationJob(jobId, { fallbackLabel, failureMessage });
+        clearTrackedJob(jobId);
+        return result;
       } catch (error) {
         if (error?.name !== "AbortError") {
+          markTrackedJobUnknown(error);
           state.operationStatusUnknown = true;
           const unknownResult = {
+            ...(state.latestOperationResult || {}),
             action: String(payload?.mode || "operation"),
             outcome: "unknown",
             job_status: "unknown",
@@ -118,7 +137,7 @@
         }
         throw error;
       } finally {
-        if (!state.abortController?.signal?.aborted && !state.operationStatusUnknown) {
+        if (!state.abortController?.signal?.aborted && !state.recoveryJob && !state.operationStatusUnknown) {
           state.operationJobId = null;
           state.operationStatusPath = null;
           state.operationCancelPath = null;
@@ -126,23 +145,63 @@
       }
     }
 
-    async function checkTrackedOperation() {
-      const jobId = state.operationJobId;
-      if (!jobId) {
-        throw new Error("No operation status is available to check.");
+    async function checkTrackedJob() {
+      const job = state.recoveryJob;
+      if (!job?.jobId) {
+        throw new Error("No unresolved job status is available to check.");
       }
-      const status = await fetchOperationJobStatus(jobId);
-      if (status?.status === "running") {
-        showToast("The operation is still running. Check again shortly.");
+      let status;
+      try {
+        status = await fetchJson(`${job.statusPath}?job_id=${encodeURIComponent(job.jobId)}`);
+      } catch (error) {
+        markTrackedJobUnknown(error);
+        throw error;
+      }
+      const statusValue = String(status?.status || "").toLowerCase();
+      if (statusValue === "running") {
+        showToast(`${job.label || "The operation"} is still running. Check again shortly.`);
         return null;
       }
-      const result = await fetchOperationJobResult(jobId);
-      state.latestOperationResult = result;
-      state.operationStatusUnknown = false;
-      state.operationJobId = null;
-      state.operationStatusPath = null;
-      state.operationCancelPath = null;
-      return result;
+      if (!["completed", "failed"].includes(statusValue)) {
+        const error = new Error(`The server returned an unrecognized job status: ${status?.status || "missing"}`);
+        markTrackedJobUnknown(error);
+        throw error;
+      }
+
+      let result = null;
+      const shouldFetchResult = job.kind === "operation"
+        || statusValue === "completed"
+        || job.kind === "preparation";
+      if (shouldFetchResult) {
+        try {
+          result = await fetchJson(`${job.resultPath}?job_id=${encodeURIComponent(job.jobId)}`);
+        } catch (error) {
+          markTrackedJobUnknown(error);
+          throw error;
+        }
+      }
+
+      clearTrackedJob(job.jobId);
+      if (job.kind === "operation" && result) {
+        state.latestOperationResult = result;
+      }
+      if (job.kind === "compare" && result) {
+        state.comparison = result;
+      }
+      await refreshWorkspace();
+      if (job.kind === "operation") {
+        return result;
+      }
+      return result || {
+        job_id: job.jobId,
+        job_status: statusValue,
+        job_error: status?.error || null,
+        progress: status?.progress || null,
+      };
+    }
+
+    async function checkTrackedOperation() {
+      return checkTrackedJob();
     }
 
     function resetReviewFiltersForAnalyze(root) {
@@ -219,11 +278,25 @@
       }
 
       state.scanJobId = scanJobId;
+      trackJob({
+        kind: "scan",
+        jobId: scanJobId,
+        statusPath: "/api/scan/status",
+        resultPath: "/api/scan/result",
+        cancelPath: "/api/scan/cancel",
+        label: "Scan",
+      });
       let result = null;
       try {
         result = await pollScanJob(scanJobId, { filesTotalRef, pipeline });
+        clearTrackedJob(scanJobId);
+      } catch (error) {
+        if (error?.name !== "AbortError") {
+          markTrackedJobUnknown(error);
+        }
+        throw error;
       } finally {
-        if (!state.abortController?.signal?.aborted) {
+        if (!state.abortController?.signal?.aborted && !state.recoveryJob) {
           state.scanJobId = null;
         }
       }
@@ -299,11 +372,25 @@
       }
 
       state.scoreJobId = scoreJobId;
+      trackJob({
+        kind: "score",
+        jobId: scoreJobId,
+        statusPath: "/api/score/status",
+        resultPath: "/api/score/result",
+        cancelPath: "/api/score/cancel",
+        label: "Scoring",
+      });
       let result = null;
       try {
         result = await pollScoreJob(scoreJobId, { rowsTotal, pipeline });
+        clearTrackedJob(scoreJobId);
+      } catch (error) {
+        if (error?.name !== "AbortError") {
+          markTrackedJobUnknown(error);
+        }
+        throw error;
       } finally {
-        if (!state.abortController?.signal?.aborted) {
+        if (!state.abortController?.signal?.aborted && !state.recoveryJob) {
           state.scoreJobId = null;
         }
       }
@@ -344,8 +431,17 @@
         throw new Error("Model preparation failed to start.");
       }
       state.modelPreparationJobId = jobId;
+      trackJob({
+        kind: "preparation",
+        jobId,
+        statusPath: "/api/models/prepare/status",
+        resultPath: "/api/models/prepare/result",
+        cancelPath: "/api/models/prepare/cancel",
+        label: "Model preparation",
+      });
       try {
         const result = await pollModelPreparationJob(jobId);
+        clearTrackedJob(jobId);
         if (result?.job_status === "failed" || ["failed", "runtime_unavailable"].includes(String(result?.state || ""))) {
           const detail = result?.error || result?.error_report?.cause || "Model preparation failed.";
           showToast(`Model preparation failed: ${detail}`, "error");
@@ -357,8 +453,13 @@
         showToast(`${model} is prepared and passed a CPU validation inference.`);
         addLogEntry("Model prepared", `${model} is ready for use.`);
         return result;
+      } catch (error) {
+        if (error?.name !== "AbortError") {
+          markTrackedJobUnknown(error);
+        }
+        throw error;
       } finally {
-        if (!state.abortController?.signal?.aborted) {
+        if (!state.abortController?.signal?.aborted && !state.recoveryJob) {
           state.modelPreparationJobId = null;
         }
         await refreshWorkspace();
@@ -804,6 +905,7 @@
 
     return {
       runTrackedOperation,
+      checkTrackedJob,
       checkTrackedOperation,
       resetReviewFiltersForAnalyze,
       runScan,

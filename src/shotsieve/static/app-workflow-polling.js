@@ -131,6 +131,11 @@
           throw new Error(status.error || failureMessage);
         }
 
+        const statusValue = String(status?.status || "").toLowerCase();
+        if (!["running", "completed", "failed"].includes(statusValue)) {
+          throw new Error(`The server returned an unrecognized job status: ${status?.status || "missing"}`);
+        }
+
         if (state.abortController?.signal?.aborted) {
           throw new DOMException("Aborted", "AbortError");
         }

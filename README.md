@@ -112,6 +112,8 @@ Copy, move, and delete operations keep the existing aggregate counts and now als
 
 The Library workspace retains the latest operation result until you dismiss or replace it. It shows action-specific completed, partial, failed, and unprocessed counts, a bounded list of paths/stages/details, and buttons to copy or download the complete JSON result. Successful selections are removed after a terminal result while failed and unprocessed files remain selected; only files marked safe by the operation contract can be retried. Rejected-file deletion uses the same tracked operation flow as selected deletion, copying, and moving.
 
+Retry keeps the original Review scope, obtains a matching selection revision for each 500-file chunk, and retains the combined result when a later chunk fails or is cancelled. If a job status or result cannot be confirmed, ShotSieve keeps the job recoverable, blocks new mutations, and provides **Check status**; once the job is terminal, the workspace is refreshed. Downloading the JSON result remains available after cancellation.
+
 Settings also provides **Download decisions CSV** for a selected library root. It exports every approved, rejected, or both marked decisions in that root—not just the current Review page—with `file_id`, `decision`, `source_path`, `library_root`, and `decision_updated_time` columns. The export is read-only, spreadsheet-friendly UTF-8, and formula-safe for text cells.
 
 ## Models and runtimes

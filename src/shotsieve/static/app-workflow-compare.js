@@ -13,7 +13,14 @@
     } = deps;
 
     const { postJson } = api;
-    const { setBusyMessage, setBusyPhaseProgress, setBusyProgress } = busy;
+    const {
+      clearTrackedJob = () => {},
+      markTrackedJobUnknown = () => {},
+      setBusyMessage,
+      setBusyPhaseProgress,
+      setBusyProgress,
+      trackJob = () => {},
+    } = busy;
     const {
       compareBatchSize,
       comparisonDefaults,
@@ -608,11 +615,25 @@
       }
 
       state.compareJobId = compareJobId;
+      trackJob({
+        kind: "compare",
+        jobId: compareJobId,
+        statusPath: "/api/compare-models/status",
+        resultPath: "/api/compare-models/result",
+        cancelPath: "/api/compare-models/cancel",
+        label: "Model comparison",
+      });
       let summary = null;
       try {
         summary = await pollCompareJob(compareJobId, { rowsTotal, pipeline: comparePipeline });
+        clearTrackedJob(compareJobId);
+      } catch (error) {
+        if (error?.name !== "AbortError") {
+          markTrackedJobUnknown(error);
+        }
+        throw error;
       } finally {
-        if (!state.abortController?.signal?.aborted) {
+        if (!state.abortController?.signal?.aborted && !state.recoveryJob) {
           state.compareJobId = null;
         }
       }

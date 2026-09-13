@@ -47,6 +47,8 @@
       operationStatusPath: null,
       operationCancelPath: null,
       operationStatusUnknown: false,
+      activeJob: null,
+      recoveryJob: null,
       latestOperationResult: null,
       latestOperationRequest: null,
       operationResultHandler: null,

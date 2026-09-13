@@ -3,6 +3,90 @@
     const { fetchJson, postJson } = api;
     const { addLogEntry, showToast } = notify;
 
+    function jobKindLabel(kind) {
+      const labels = {
+        compare: "Model comparison",
+        operation: "File operation",
+        preparation: "Model preparation",
+        scan: "Scan",
+        score: "Scoring",
+      };
+      return labels[String(kind || "").toLowerCase()] || "Operation";
+    }
+
+    function trackJob(job) {
+      if (!job?.jobId) {
+        return;
+      }
+      state.activeJob = { ...job };
+      state.recoveryJob = null;
+      if (job.kind === "operation") {
+        state.operationStatusUnknown = false;
+      }
+      renderBusyState();
+    }
+
+    function clearTrackedJob(jobId) {
+      if (!jobId) {
+        return;
+      }
+      const job = state.activeJob?.jobId === jobId
+        ? state.activeJob
+        : state.recoveryJob?.jobId === jobId
+          ? state.recoveryJob
+          : null;
+      if (!job) {
+        return;
+      }
+      state.activeJob = null;
+      state.recoveryJob = null;
+      if (job.kind === "operation") {
+        state.operationStatusUnknown = false;
+      }
+      if (state.compareJobId === jobId) state.compareJobId = null;
+      if (state.scoreJobId === jobId) state.scoreJobId = null;
+      if (state.scanJobId === jobId) state.scanJobId = null;
+      if (state.modelPreparationJobId === jobId) state.modelPreparationJobId = null;
+      if (state.operationJobId === jobId) {
+        state.operationJobId = null;
+        state.operationStatusPath = null;
+        state.operationCancelPath = null;
+      }
+      renderBusyState();
+    }
+
+    function markTrackedJobUnknown(error) {
+      const job = state.activeJob || state.recoveryJob;
+      if (!job?.jobId) {
+        return null;
+      }
+      const message = String(error?.message || error || "The latest job status could not be confirmed.");
+      state.recoveryJob = { ...job, status: "unknown", error: message };
+      state.activeJob = null;
+      if (job.kind === "operation") {
+        state.operationStatusUnknown = true;
+      }
+      renderBusyState();
+      return state.recoveryJob;
+    }
+
+    function renderRecoveryState() {
+      const panel = documentRef.getElementById("job-recovery-panel");
+      const messageNode = documentRef.getElementById("job-recovery-message");
+      if (!panel || !messageNode) {
+        return;
+      }
+      const job = state.recoveryJob;
+      const visible = Boolean(job?.jobId) && job.kind !== "operation";
+      panel.classList.toggle("hidden", !visible);
+      if (!visible) {
+        messageNode.textContent = "";
+        return;
+      }
+      const detail = job.error ? ` ${job.error}` : "";
+      messageNode.textContent = `${jobKindLabel(job.kind)} status is unresolved.${detail} Use Check status before starting another operation.`;
+    }
+
     function formatBusyStatusMessage(baseMessage) {
       const lines = [];
       const phaseCount = Number(state.busyPhaseCount || 0);
@@ -128,6 +212,7 @@
       });
 
       renderCompareBusyState();
+      renderRecoveryState();
     }
 
     function setBusy(isBusy, message = "", operationType = null) {
@@ -147,11 +232,12 @@
       } else {
         state.busyStartTime = null;
         state.abortController = null;
-        state.compareJobId = null;
-        state.scoreJobId = null;
-        state.scanJobId = null;
-        state.modelPreparationJobId = null;
-        if (!state.operationStatusUnknown) {
+        const recoveryJobId = state.recoveryJob?.jobId || null;
+        if (state.compareJobId !== recoveryJobId) state.compareJobId = null;
+        if (state.scoreJobId !== recoveryJobId) state.scoreJobId = null;
+        if (state.scanJobId !== recoveryJobId) state.scanJobId = null;
+        if (state.modelPreparationJobId !== recoveryJobId) state.modelPreparationJobId = null;
+        if (state.operationJobId !== recoveryJobId) {
           state.operationJobId = null;
           state.operationStatusPath = null;
           state.operationCancelPath = null;
@@ -215,9 +301,10 @@
             signal: state.controlAbortController?.signal,
           });
           const statusValue = String(status?.status || "").toLowerCase();
-          if (statusValue && statusValue !== "running") {
+          if (["completed", "failed", "cancelled"].includes(statusValue)) {
             return true;
           }
+          if (statusValue && statusValue !== "running") return false;
         } catch {
           // A failed status request is not proof that the worker stopped.
           continue;
@@ -229,47 +316,77 @@
 
     async function cancelServerJob(jobId, cancelPath, statusPath) {
       if (!jobId) {
-        return;
+        return true;
       }
-      await postJson(`${cancelPath}?job_id=${encodeURIComponent(jobId)}`, {
-        signal: state.controlAbortController?.signal,
-      }).catch(() => {});
+      if (!cancelPath || !statusPath) {
+        return false;
+      }
+      await postJson(
+        `${cancelPath}?job_id=${encodeURIComponent(jobId)}`,
+        {},
+        { signal: state.controlAbortController?.signal },
+      ).catch(() => {});
       return waitForJobToStop(statusPath, jobId).catch(() => false);
     }
 
     async function requestServerCancellation() {
+      const trackedJob = state.activeJob || state.recoveryJob;
       const operationJobId = state.operationJobId;
-      const results = await Promise.allSettled([
-        cancelServerJob(state.scanJobId, "/api/scan/cancel", "/api/scan/status"),
-        cancelServerJob(state.scoreJobId, "/api/score/cancel", "/api/score/status"),
-        cancelServerJob(state.compareJobId, "/api/compare-models/cancel", "/api/compare-models/status"),
-        cancelServerJob(state.modelPreparationJobId, "/api/models/prepare/cancel", "/api/models/prepare/status"),
-        cancelServerJob(state.operationJobId, state.operationCancelPath, state.operationStatusPath),
-      ]);
-      const operationResult = results[4];
-      const operationStopped = !operationJobId || (operationResult?.status === "fulfilled"
-        ? Boolean(operationResult.value)
-        : true);
-      let operationResultAvailable = !operationJobId;
-      if (operationJobId && operationStopped) {
+      const jobs = [
+        [state.scanJobId, "/api/scan/cancel", "/api/scan/status"],
+        [state.scoreJobId, "/api/score/cancel", "/api/score/status"],
+        [state.compareJobId, "/api/compare-models/cancel", "/api/compare-models/status"],
+        [state.modelPreparationJobId, "/api/models/prepare/cancel", "/api/models/prepare/status"],
+        [state.operationJobId, state.operationCancelPath, state.operationStatusPath],
+      ].filter(([jobId]) => jobId);
+      const results = await Promise.allSettled(jobs.map(([jobId, cancelPath, statusPath]) =>
+        cancelServerJob(jobId, cancelPath, statusPath)));
+      const allStopped = results.every((result) => result.status === "fulfilled" && result.value === true);
+      if (!allStopped) {
+        const recovery = markTrackedJobUnknown(new Error(
+          "Cancellation was requested, but the server has not confirmed a terminal state.",
+        ));
+        if (recovery?.kind === "operation") {
+          const unknownResult = {
+            ...(state.latestOperationResult || {}),
+            action: String(state.latestOperationRequest?.payload?.mode || "operation"),
+            outcome: "unknown",
+            job_status: "unknown",
+            fatal_error: recovery.error,
+          };
+          state.latestOperationResult = unknownResult;
+          if (typeof state.operationResultHandler === "function") {
+            state.operationResultHandler(unknownResult, state.latestOperationRequest);
+          }
+        }
+        return false;
+      }
+
+      if (trackedJob?.kind === "operation" && trackedJob.jobId === operationJobId) {
         try {
-          const result = await fetchJson(`/api/operations/result?job_id=${encodeURIComponent(operationJobId)}`, {
+          const result = await fetchJson(`${trackedJob.resultPath}?job_id=${encodeURIComponent(operationJobId)}`, {
             signal: state.controlAbortController?.signal,
           });
           state.latestOperationResult = result;
           if (typeof state.operationResultHandler === "function") {
             state.operationResultHandler(result, state.latestOperationRequest);
           }
-          operationResultAvailable = true;
-        } catch {
-          // The status is terminal, but the result endpoint may still be unavailable.
-          // Keep the cancellation message truthful and let the user check status.
+        } catch (error) {
+          markTrackedJobUnknown(error);
+          return false;
         }
       }
-      return operationStopped && operationResultAvailable;
+
+      if (trackedJob?.jobId) {
+        clearTrackedJob(trackedJob.jobId);
+      }
+      return true;
     }
 
     async function withBusy(message, task, options = {}) {
+      if (state.recoveryJob?.jobId) {
+        throw new Error(`${jobKindLabel(state.recoveryJob.kind)} status is unresolved. Use Check status before starting another operation.`);
+      }
       if (state.isBusy) {
         throw new Error("Another operation is already running. Please wait for it to finish.");
       }
@@ -284,10 +401,16 @@
           showToast("Cancellation requested. Stopping the current operation...", "error");
           addLogEntry("Cancelled", message);
           const cancellationConfirmed = await requestServerCancellation();
+          if (typeof options.onCancelled === "function") {
+            await options.onCancelled({
+              confirmed: cancellationConfirmed,
+              result: state.latestOperationResult,
+            });
+          }
           if (!cancellationConfirmed) {
-            state.operationStatusUnknown = Boolean(state.operationJobId);
-            if (state.operationJobId) {
+            if (state.operationJobId && !state.latestOperationResult?.fatal_error) {
               const unknownResult = {
+                ...(state.latestOperationResult || {}),
                 action: String(state.latestOperationRequest?.payload?.mode || "operation"),
                 outcome: "unknown",
                 job_status: "unknown",
@@ -310,11 +433,15 @@
 
     return {
       formatBusyStatusMessage,
+      clearTrackedJob,
+      markTrackedJobUnknown,
       renderBusyState,
+      renderRecoveryState,
       setBusy,
       setBusyMessage,
       setBusyPhaseProgress,
       setBusyProgress,
+      trackJob,
       withBusy,
     };
   }

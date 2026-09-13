@@ -24,6 +24,8 @@ All notable changes to this project will be documented in this file.
 - Scan jobs now retain durable failed/incomplete diagnostics and report per-root outcomes for multi-root jobs; earlier successful roots remain committed when a later root fails.
 - Copy, move, and delete operations now return shared per-file outcomes with stages, paths, OS errors, retry safety, partial/unprocessed counts, and separate cleanup warnings.
 - Added retained Library operation results with bounded path/stage details, full JSON download, safe retry, and status checking for uncertain jobs; successful IDs are removed while failed/unprocessed IDs remain selected.
+- Retry now preserves the original Review scope, refreshes its revision for every chunk, aggregates all file outcomes, and retains pending work when cancellation or a later failure stops the retry.
+- Scan, score, comparison, preparation, and file-operation jobs now retain unresolved identity after status loss, block new mutations until recovery, and refresh the workspace after terminal **Check status** recovery.
 - Rejected-file deletion now uses the tracked async operation flow, matching selected deletion and export/move behavior.
 - Added a read-only, root-scoped **Download decisions CSV** fallback for approved, rejected, or both decisions across the full matching result set.
 - Reduced new learned-IQA runs to the reviewed `topiq_nr` and `clipiqa` product catalog; disabled PyIQA names remain readable in historical results without being silently deleted.
