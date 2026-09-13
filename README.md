@@ -126,8 +126,9 @@ The supported in-app model catalog is intentionally small:
 
 - `topiq_nr` is the default model
 - `clipiqa` is a fast secondary option for quick comparisons
+- `qalign` is the large accelerator-backed option for CUDA and Apple MPS
 
-Q-Align, TReS, QualiCLIP, ARNIQA, and other PyIQA names are not supported for new scoring or comparison runs. Older stored scores remain readable and are shown using their saved raw model name; disabling a model does not delete those rows.
+TReS, QualiCLIP, ARNIQA, and other PyIQA names are not supported for new scoring or comparison runs. Q-Align is not available on CPU or DirectML. Older stored scores remain readable and are shown using their saved raw model name; disabling a model does not delete those rows.
 
 Runtime names you may see in settings or developer docs:
 
@@ -136,10 +137,12 @@ Runtime names you may see in settings or developer docs:
 - `xpu`: Intel accelerator path for source installs where the local PyTorch runtime exposes it
 - `directml`: Windows GPU acceleration through DirectML
 - `mps`: Apple Silicon GPU acceleration
+- `directml`: Windows GPU acceleration through DirectML
+- `mps`: Apple Silicon GPU acceleration
 
 The Settings model list is populated from runtime discovery. If discovery or initialization is unavailable, the list stays empty instead of claiming that a model is ready. Auto mode may fall back to CPU and reports the failed accelerator reason; an explicitly requested unavailable runtime fails with recovery guidance.
 
-The release and sidecar paths use the tested learned-IQA package set `pyiqa==0.1.16`, `timm==1.0.28`, `huggingface-hub==1.24.0`, `transformers==5.14.1`, and `openai-clip==1.0.1`. CPU, CUDA, and Apple MPS targets use `torch==2.13.0` with `torchvision==0.28.0`; the Windows DirectML target is constrained to Python 3.11–3.12 with `torch==2.4.1`, `torchvision==0.19.1`, and `torch-directml==0.2.5.dev240914`. DirectML is not installed through the generic latest-Torch path.
+The release and sidecar paths use the tested learned-IQA package set `pyiqa==0.1.16`, `timm==1.0.28`, `huggingface-hub==1.24.0`, `transformers==5.14.1`, and `openai-clip==1.0.1`, `accelerate==1.14.0`, `sentencepiece==0.2.2`, and `einops==0.8.2`. CPU, CUDA, and Apple MPS targets use `torch==2.13.0` with `torchvision==0.28.0`; the Windows DirectML target is constrained to Python 3.11–3.12 with `torch==2.4.1`, `torchvision==0.19.1`, and `torch-directml==0.2.5.dev240914`. DirectML is not installed through the generic latest-Torch path.
 
 The manual/weekly model smoke workflow installs these constraints, runs `pip check`, prepares TOPIQ and CLIPIQA in separate fresh caches, and repeats both checks offline in a new process. It records resolved versions and retains sanitized JSON diagnostics on failure; caches, weights, and generated images are not uploaded.
 
@@ -206,7 +209,7 @@ The browser-focused frontend checks are intentionally about **visual QA** and vi
 - [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md): third-party model and library licensing
 - [LICENSE](LICENSE): GNU Affero General Public License v3.0 or later (AGPLv3+)
 
-ShotSieve uses AI models and libraries with their own terms. The learned-IQA extra currently pins `pyiqa==0.1.16`, whose PolyForm Noncommercial license and included notices must be reviewed with the model/checkpoint terms before commercial use. No model weights are bundled; supported assets may be downloaded into the configured upstream caches. Q-Align is retired from new runs and is not part of the supported asset set. See [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md) for the per-component audit boundary.
+ShotSieve uses AI models and libraries with their own terms. The learned-IQA extra currently pins `pyiqa==0.1.16`, whose PolyForm Noncommercial license and included notices must be reviewed with the model/checkpoint terms before commercial use. No model weights are bundled; supported assets may be downloaded into the configured upstream caches. Q-Align remains subject to its model-card and underlying base-model terms and is supported only on validated accelerator paths. See [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md) for the per-component audit boundary.
 
 ## Project docs
 

@@ -71,8 +71,8 @@ class TestWebRoutesReviewIntegration:
 
         approved_only = urlopen(f"{base_url}/api/review/decisions.csv?root={root_query}&decision=approved")
         approved_text = approved_only.read().decode("utf-8-sig")
-        assert str(approved_id) in approved_text
-        assert str(rejected_id) not in approved_text
+        approved_rows = list(csv.reader(approved_text.splitlines()))
+        assert [row[0] for row in approved_rows[1:]] == [str(approved_id)]
 
     def test_decision_csv_validates_root_and_decision(self, test_server):
         base_url, _, _ = test_server

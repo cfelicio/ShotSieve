@@ -190,8 +190,11 @@ class TestWebRoutesJobsIntegration:
         assert payload["preview_modes"] == ["fast", "auto", "high-quality"]
         assert payload["raw_preview_auto_min_long_edge"] == 1024
         assert "technical-only" not in payload["learned_models"]
-        assert set(payload["learned_models"]).issubset({"topiq_nr", "clipiqa"})
-        assert "qalign" not in payload["learned_models"]
+        assert set(payload["learned_models"]).issubset({"topiq_nr", "clipiqa", "qalign"})
+        if payload["learned"]["default_runtime"] in {"cuda", "mps"}:
+            assert "qalign" in payload["learned_models"]
+        else:
+            assert "qalign" not in payload["learned_models"]
         assert "auto_runtime_priority" in payload["learned"]
         assert "cpu" in payload["learned"]["auto_runtime_priority"]
         assert payload["runtime_targets"] == ["auto", "cpu", "cuda", "xpu", "directml", "mps"]
@@ -421,7 +424,7 @@ class TestWebRoutesJobsIntegration:
         payload = json.loads(response.read().decode("utf-8"))
 
         assert payload["learned"]["default_runtime"] == "cuda"
-        assert payload["learned_models"] == ["topiq_nr", "clipiqa"]
+        assert payload["learned_models"] == ["topiq_nr", "clipiqa", "qalign"]
 
     def test_options_route_uses_refreshed_hardware_cache_after_invalidation(self, test_server, monkeypatch):
         base_url, _, _ = test_server

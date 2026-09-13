@@ -33,11 +33,10 @@ def _row_id(row: object) -> int:
     return _coerce_int(_row_value(row, "id"))
 
 
-def test_compare_rejects_disabled_model_before_loading_catalog_rows() -> None:
-    import pytest
+def test_compare_accepts_qalign_as_a_supported_model() -> None:
+    from shotsieve.learned_iqa_catalog import validate_model_name
 
-    with pytest.raises(ValueError, match="unknown or disabled"):
-        compare_learned_models(None, model_names=["qalign"])
+    assert validate_model_name("q-align") == "qalign"
 
 
 

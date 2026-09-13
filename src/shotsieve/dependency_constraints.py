@@ -9,6 +9,9 @@ COMMON_MODEL_REQUIREMENTS = (
     "huggingface-hub==1.24.0",
     "transformers==5.14.1",
     "openai-clip==1.0.1",
+    "accelerate==1.14.0",
+    "sentencepiece==0.2.2",
+    "einops==0.8.2",
 )
 
 NON_DIRECTML_TORCH_REQUIREMENTS = (
@@ -31,6 +34,9 @@ MODEL_DEPENDENCY_DISTRIBUTIONS = (
     "huggingface-hub",
     "transformers",
     "openai-clip",
+    "accelerate",
+    "sentencepiece",
+    "einops",
 )
 
 

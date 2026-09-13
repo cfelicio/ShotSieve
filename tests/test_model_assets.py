@@ -89,19 +89,44 @@ def test_prepare_model_cancellation_is_retained_as_incomplete_diagnostic(tmp_pat
     assert record["recovery_action"]
 
 
-def test_preparation_rejects_disabled_model_before_backend_creation(tmp_path: Path) -> None:
-    called = False
+def test_preparation_uses_requested_accelerator_for_qalign(tmp_path: Path) -> None:
+    calls: list[tuple[str, object]] = []
 
-    def factory(*args, **kwargs):
-        nonlocal called
-        called = True
-        return _Backend([])
+    class QAlignBackend(_Backend):
+        runtime = "cuda"
 
-    with pytest.raises(ValueError, match="unknown or disabled"):
-        model_assets.prepare_model("qalign", data_dir=tmp_path, backend_factory=factory)
+    def factory(model: str, *, device: str):
+        calls.append(("build", (model, device)))
+        return QAlignBackend(calls)
 
-    assert called is False
-    assert not model_assets.preparation_record_path(tmp_path).exists()
+    result = model_assets.prepare_model(
+        "q-align",
+        data_dir=tmp_path,
+        device="cuda",
+        backend_factory=factory,
+    )
+
+    assert result["state"] == "prepared"
+    assert result["model"] == "qalign"
+    assert result["requested_runtime"] == "cuda"
+    assert result["tested_runtime"] == "cuda"
+    assert result["asset_check"]["method"] == "backend_initialization_and_inference"
+    assert calls[0] == ("build", ("qalign", "cuda"))
+    assert calls[-1] == ("close", None)
+
+
+def test_preparation_rejects_qalign_on_cpu_after_backend_resolution(tmp_path: Path) -> None:
+    with pytest.raises(RuntimeError, match="not compatible with model 'qalign'"):
+        model_assets.prepare_model(
+            "qalign",
+            data_dir=tmp_path,
+            device="cpu",
+            backend_factory=lambda *_args, **_kwargs: _Backend([]),
+        )
+
+    record = json.loads(model_assets.preparation_record_path(tmp_path).read_text(encoding="utf-8"))
+    assert record["state"] == "failed"
+    assert record["requested_runtime"] == "cpu"
 
 
 def test_readiness_context_change_invalidates_previous_record_without_scanning_cache(tmp_path: Path) -> None:

@@ -20,9 +20,14 @@ _PRIVATE_ARTIFACT_PATH_PATTERN = re.compile(
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--model", required=True, help="Supported model id, such as topiq_nr or clipiqa")
+    parser.add_argument("--model", required=True, help="Supported model id, such as topiq_nr, clipiqa, or qalign")
     parser.add_argument("--cache-dir", required=True, type=Path)
     parser.add_argument("--data-dir", required=True, type=Path)
+    parser.add_argument(
+        "--device",
+        default=None,
+        help="Requested validation runtime; CPU-compatible models default to CPU, while accelerator-only models default to Auto.",
+    )
     parser.add_argument(
         "--offline",
         action="store_true",
@@ -73,9 +78,9 @@ def main() -> None:
         from shotsieve.model_assets import apply_model_cache_dir, prepare_model
 
         apply_model_cache_dir(args.cache_dir)
-        record = prepare_model(args.model, data_dir=args.data_dir)
-        if record.get("state") != "prepared" or record.get("tested_runtime") != "cpu":
-            raise RuntimeError("Model smoke did not produce a prepared CPU record.")
+        record = prepare_model(args.model, data_dir=args.data_dir, device=args.device)
+        if record.get("state") != "prepared":
+            raise RuntimeError("Model smoke did not produce a prepared record.")
 
         report = {
             "status": "passed",
@@ -93,7 +98,7 @@ def main() -> None:
             exc,
             phase="validating_initialization",
             model_name=args.model,
-            requested_runtime="cpu",
+            requested_runtime=args.device or "auto",
             cache_dir=args.cache_dir,
         )
         report = {

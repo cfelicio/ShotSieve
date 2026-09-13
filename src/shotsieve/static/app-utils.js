@@ -143,9 +143,9 @@
       return Math.max(1, Number(serverRecommendations[modelName]));
     }
     // Fallback: conservative defaults when VRAM is unknown
-    const heavy = modelName === "clipiqa";
+    const heavy = modelName === "clipiqa" || modelName === "qalign";
     if (heavy) {
-      return 2;
+      return modelName === "qalign" ? 1 : 2;
     }
     return isAcceleratedRuntime(runtime) ? 12 : 4;
   }
@@ -159,9 +159,9 @@
       return null;
     }
     // Fallback: conservative defaults when server recommendations unavailable
-    const hasHeavyModel = models.some((modelName) => modelName === "clipiqa");
+    const hasHeavyModel = models.some((modelName) => modelName === "clipiqa" || modelName === "qalign");
     if (hasHeavyModel) {
-      return 2;
+      return models.includes("qalign") ? 1 : 2;
     }
     return isAcceleratedRuntime(runtime) ? 12 : 4;
   }

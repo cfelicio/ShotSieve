@@ -19,7 +19,11 @@ from datetime import UTC, datetime
 from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit
 
-from shotsieve.learned_iqa_catalog import MODEL_CATALOG, validate_model_name
+from shotsieve.learned_iqa_catalog import (
+    MODEL_CATALOG,
+    is_model_runtime_compatible,
+    validate_model_name,
+)
 
 PREPARATION_RECORD_NAME = "model-preparation.json"
 PREPARATION_STATES = ("not_checked", "preparing", "prepared", "failed", "runtime_unavailable")
@@ -33,6 +37,9 @@ _VERSION_PACKAGE_NAMES = (
     "torch-directml",
     "timm",
     "huggingface-hub",
+    "accelerate",
+    "sentencepiece",
+    "einops",
 )
 _SENSITIVE_ENV_NAMES = {
     "HF_TOKEN",
@@ -206,6 +213,7 @@ def storage_estimate(model_name: str) -> dict[str, object]:
 def _base_record(
     model_name: str,
     *,
+    requested_runtime: str = "cpu",
     cache_paths: Mapping[str, object],
     dependency_versions: Mapping[str, str],
     dependency_fingerprint: str,
@@ -221,7 +229,7 @@ def _base_record(
         "updated_at": now,
         "finished_at": None,
         "phase": "checking_storage",
-        "requested_runtime": "cpu",
+        "requested_runtime": requested_runtime,
         "actual_runtime": None,
         "tested_runtime": None,
         "dependency_fingerprint": dependency_fingerprint,
@@ -232,7 +240,7 @@ def _base_record(
         "expected_resources": expected_resources(model_name),
         "disk_estimate": storage_estimate(model_name),
         "processed_counts": {"validation_images": 0},
-        "asset_check": {"status": "pending", "method": "backend_initialization_and_cpu_inference"},
+        "asset_check": {"status": "pending", "method": "backend_initialization_and_inference"},
         "error": None,
         "error_report": None,
         "recovery_action": None,
@@ -395,7 +403,7 @@ def read_preparation_record(
     if record.get("state") == "prepared":
         recorded_paths = record.get("cache_paths")
         if isinstance(recorded_paths, dict):
-            required_roots = ("hf_hub_cache", "torch_home") if canonical_model == "topiq_nr" else ("torch_home",)
+            required_roots = _model_spec(canonical_model).required_cache_roots
             missing_roots = [
                 name
                 for name in required_roots
@@ -602,6 +610,7 @@ def prepare_model(
     model_name: str,
     *,
     data_dir: Path,
+    device: str | None = None,
     progress_callback: Callable[[dict[str, object]], None] | None = None,
     cancel_check: Callable[[], None] | None = None,
     backend_factory: Callable[..., object] | None = None,
@@ -609,8 +618,12 @@ def prepare_model(
     record_writer: Callable[[Path, Mapping[str, object]], dict[str, object]] = write_preparation_record,
     environ: Mapping[str, str] | None = None,
 ) -> dict[str, object]:
-    """Prepare exactly one supported model on CPU and validate one tiny inference."""
+    """Prepare exactly one supported model and validate one tiny inference."""
     canonical_model = validate_model_name(model_name)
+    model_spec = _model_spec(canonical_model)
+    requested_runtime = str(device or ("cpu" if "cpu" in model_spec.supported_runtimes else "auto")).strip().casefold()
+    if not requested_runtime:
+        requested_runtime = "auto"
     env = os.environ if environ is None else environ
     cache_paths = effective_cache_paths(environ=env)
     dependency_versions = _dependency_versions()
@@ -622,6 +635,7 @@ def prepare_model(
     )
     record = _base_record(
         canonical_model,
+        requested_runtime=requested_runtime,
         cache_paths=cache_paths,
         dependency_versions=dependency_versions,
         dependency_fingerprint=fingerprint,
@@ -664,11 +678,17 @@ def prepare_model(
             from shotsieve.learned_iqa import build_learned_backend
 
             backend_factory = build_learned_backend
-        backend = backend_factory(canonical_model, device="cpu")
-        actual_runtime = str(getattr(backend, "runtime", "cpu")).casefold()
+        backend = backend_factory(canonical_model, device=requested_runtime)
+        actual_runtime = str(getattr(backend, "runtime", "unknown")).casefold()
         save(actual_runtime=actual_runtime)
-        if actual_runtime != "cpu":
-            raise RuntimeError("CPU preparation returned a non-CPU learned runtime.")
+        if not is_model_runtime_compatible(
+            canonical_model,
+            torch_version=None,
+            runtime=actual_runtime,
+        ):
+            raise RuntimeError(
+                f"Preparation runtime '{actual_runtime}' is not compatible with model '{canonical_model}'."
+            )
 
         current_phase = "validating_initialization"
         save(phase=current_phase)
@@ -690,9 +710,9 @@ def prepare_model(
         save(
             state="prepared",
             phase="complete",
-            actual_runtime="cpu",
-            tested_runtime="cpu",
-            asset_check={"status": "passed", "method": "backend_initialization_and_cpu_inference"},
+            actual_runtime=actual_runtime,
+            tested_runtime=actual_runtime,
+            asset_check={"status": "passed", "method": "backend_initialization_and_inference"},
             finished_at=_utc_now(),
             processed_counts={"validation_images": 1},
             error=None,
@@ -705,7 +725,7 @@ def prepare_model(
             exc,
             phase=current_phase,
             model_name=canonical_model,
-            requested_runtime="cpu",
+            requested_runtime=requested_runtime,
             actual_runtime=record.get("actual_runtime"),
             cache_paths=cache_paths,
             environ=env,
@@ -727,7 +747,7 @@ def prepare_model(
             exc,
             phase=current_phase,
             model_name=canonical_model,
-            requested_runtime="cpu",
+            requested_runtime=requested_runtime,
             actual_runtime=record.get("actual_runtime"),
             cache_paths=cache_paths,
             environ=env,
@@ -740,7 +760,7 @@ def prepare_model(
             exc,
             phase=current_phase,
             model_name=canonical_model,
-            requested_runtime="cpu",
+            requested_runtime=requested_runtime,
             actual_runtime=record.get("actual_runtime"),
             cache_paths=cache_paths,
             environ=env,

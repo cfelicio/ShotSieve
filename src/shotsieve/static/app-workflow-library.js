@@ -434,10 +434,21 @@
       if (!model) {
         throw new Error("No supported learned-IQA model is available to prepare.");
       }
+      const catalogEntry = Array.isArray(state.options?.learned?.model_catalog)
+        ? state.options.learned.model_catalog.find((entry) => entry?.canonical_id === model)
+        : null;
+      const supportedRuntimes = Array.isArray(catalogEntry?.supported_runtimes)
+        ? catalogEntry.supported_runtimes.map((runtime) => String(runtime).toLowerCase())
+        : ["cpu"];
+      const acceleratorOnly = !supportedRuntimes.includes("cpu");
+      const selectedDevice = document.getElementById("device-select")?.value || "auto";
+      const preparationDevice = acceleratorOnly && supportedRuntimes.includes(String(selectedDevice).toLowerCase())
+        ? selectedDevice
+        : (acceleratorOnly ? "auto" : "cpu");
       setBusyPhaseProgress({ percent: null, phaseIndex: 1, phaseCount: 3, phaseLabel: "Preparing model" });
       setBusyProgress(0);
-      setBusyMessage(`Preparing ${model} on CPU. First use may download model assets...`);
-      const startPayload = await postJson("/api/models/prepare/start", { model }, { signal: state.abortController?.signal });
+      setBusyMessage(`Preparing ${model} on ${preparationDevice.toUpperCase()}. First use may download model assets...`);
+      const startPayload = await postJson("/api/models/prepare/start", { model, device: preparationDevice }, { signal: state.abortController?.signal });
       const jobId = String(startPayload?.job_id || "");
       if (!jobId) {
         throw new Error("Model preparation failed to start.");
@@ -464,8 +475,9 @@
         }
         setBusyProgress(100);
         setBusyPhaseProgress({ percent: 100, phaseIndex: 3, phaseCount: 3, phaseLabel: "Model prepared" });
-        showToast(`${model} is prepared and passed a CPU validation inference.`);
-        addLogEntry("Model prepared", `${model} is ready for use.`);
+        const testedRuntime = String(result?.tested_runtime || result?.actual_runtime || preparationDevice).toUpperCase();
+        showToast(`${model} is prepared and passed a ${testedRuntime} validation inference.`);
+        addLogEntry("Model prepared", `${model} is ready for use on ${testedRuntime}.`);
         return result;
       } catch (error) {
         if (error?.name !== "AbortError") {

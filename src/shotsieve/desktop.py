@@ -515,7 +515,7 @@ def install_ai_support(
         "torch_available": torch_available,
         "warnings": warnings,
         "restart_guidance": "Restart ShotSieve if the newly installed runtime is not available in this session.",
-        "weights_guidance": "Model weights are separate. Use Prepare selected model for first-use downloads and CPU validation.",
+        "weights_guidance": "Model weights are separate. Use Prepare selected model for first-use downloads and runtime-specific validation.",
         "recovery_action": "Retry Install/Repair AI support. Check the sidecar pip-install.log if it fails again.",
     }
     if outcome == "failed":

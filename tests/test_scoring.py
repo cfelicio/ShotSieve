@@ -14,23 +14,40 @@ from shotsieve.scanner import scan_root
 from shotsieve.scoring import score_files
 
 
-def test_score_rejects_disabled_model_before_using_connection_or_backend() -> None:
-    backend_calls: list[str] = []
+def test_score_accepts_qalign_as_a_supported_model(tmp_path: Path) -> None:
+    db_path = tmp_path / "data" / "shotsieve.db"
+    preview_dir = tmp_path / "previews"
+    photo_dir = tmp_path / "photos"
+    photo_dir.mkdir()
+    create_image(photo_dir / "sample.jpg")
 
-    def backend_factory(model_name: str):
-        backend_calls.append(model_name)
-        raise AssertionError("disabled model reached the backend factory")
+    class FakeQAlignBackend:
+        name = "qalign"
+        model_version = "fake:qalign:cuda"
+        runtime = "cuda"
 
-    import pytest
+        def score_paths(self, image_paths, *, batch_size: int = 1, resource_profile: str | None = None):
+            return [LearnedScoreResult(raw_score=3.8, normalized_score=70.0, confidence=88.0) for _ in image_paths]
 
-    with pytest.raises(ValueError, match="unknown or disabled"):
-        score_files(
-            None,
-            learned_backend_name="qalign",
-            learned_backend_factory=backend_factory,
+    initialize_database(db_path)
+
+    with connect(db_path) as connection:
+        scan_root(
+            connection,
+            root=photo_dir,
+            recursive=True,
+            extensions=(".jpg",),
+            preview_dir=preview_dir,
+        )
+        summary = score_files(
+            connection,
+            learned_backend_name="q-align",
+            learned_device="cuda",
+            learned_backend_factory=lambda _model_name: FakeQAlignBackend(),
         )
 
-    assert backend_calls == []
+    assert summary.files_scored == 1
+    assert summary.learned_scored == 1
 
 
 def _row_value(row: object, key: str) -> object:

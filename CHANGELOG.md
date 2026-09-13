@@ -30,18 +30,18 @@ All notable changes to this project will be documented in this file.
 - Scan, score, comparison, preparation, and file-operation jobs now retain unresolved identity after status loss, block new mutations until recovery, and refresh the workspace after terminal **Check status** recovery.
 - Rejected-file deletion now uses the tracked async operation flow, matching selected deletion and export/move behavior.
 - Added a read-only, root-scoped **Download decisions CSV** fallback for approved, rejected, or both decisions across the full matching result set.
-- Reduced new learned-IQA runs to the reviewed `topiq_nr` and `clipiqa` product catalog; disabled PyIQA names remain readable in historical results without being silently deleted.
+- Restored Q-Align (`qalign`) to the supported learned-IQA product catalog for CUDA and Apple MPS, with accelerator-only preparation, one-image batching, and explicit CPU/DirectML exclusion; other PyIQA names remain disabled for new runs while historical rows stay readable.
 - Removed the process-global Torch loader workaround. Runtime discovery now reports empty/unavailable model state when the supported models are not ready, and explicit unavailable accelerators fail with actionable guidance while Auto reports CPU fallback reasons.
 - Pinned the Windows DirectML target to Python 3.11–3.12 with `torch==2.4.1`, `torchvision==0.19.1`, and `torch-directml==0.2.5.dev240914` in the target-specific release and sidecar install paths.
-- Added selected-model preparation with CPU validation, atomic readiness records, cache-path/version invalidation, sanitized failure diagnostics, and retained cancellation state.
+- Added selected-model preparation with runtime-specific validation, atomic readiness records, cache-path/version invalidation, sanitized failure diagnostics, and retained cancellation state.
 - Made optional AI runtime acquisition explicit: ordinary noninteractive launches no longer install or repair learned-IQA/CUDA sidecars automatically; Settings now provides one job-backed Install / Repair AI support action with target/cache paths, diagnostics, retry, and restart guidance. The existing `SHOTSIEVE_BOOTSTRAP_AUTO_INSTALL_*` environment variables remain available for deliberate startup automation.
 - Reused sanitized model diagnostics across preparation, scoring, and comparison jobs, including model/runtime/cache-volume context, offline and recovery classification, orphaned-preparation recovery, and retained API reports when readiness persistence fails.
 - Added the optional `--model-cache-dir` startup setting; explicit Hugging Face/Torch cache environment settings remain authoritative.
 - Aligned model smoke, release-target, and sidecar installs on the tested learned-IQA dependency stack, with separate non-DirectML Torch and Windows DirectML constraint files plus release-time `pip check` validation.
 - Model smoke now records resolved dependency versions and retains sanitized JSON failure reports without uploading caches, weights, or generated images.
 - CI now runs on direct `main` pushes, adds a Python 3.14 core suite, smoke-tests an installed wheel outside the checkout, and fails browser coverage when Chromium cannot launch in CI while preserving local skips.
-- Pinned the optional learned-IQA integration to `pyiqa==0.1.16` and documented separate package, checkpoint, cache, and retired-model licensing boundaries.
-- Added offline pull-request CI and a separate weekly/manual two-model smoke workflow; the latter validates a fresh cache in a new network-disabled process without publishing weights or photos.
+- Pinned the optional learned-IQA integration to `pyiqa==0.1.16` and documented separate package, checkpoint, cache, and Q-Align/base-model licensing boundaries.
+- Added offline pull-request CI and a separate weekly/manual CPU smoke workflow for TOPIQ and CLIPIQA; accelerator-specific Q-Align smoke remains a target-host release gate and never publishes weights or photos.
 - Added a fixed 40-million-pixel decode budget for exceptional preview and direct learned-IQA source fallbacks, with per-file resource-limit diagnostics and file-attributed header warnings. Ready previews and usable RAW embedded thumbnails remain preferred, and corrupt RAW thumbnails can still fall back to bounded demosaicing.
 
 ### Fixed

@@ -765,6 +765,7 @@ def start_model_prepare_job(handler: Any, context: WebRouteContext, payload: dic
     if not raw_model:
         raise ValueError("model is required")
     model_name = validate_model_name(raw_model)
+    requested_device = deps.optional_string(payload.get("device"))
     prepare_fn = getattr(deps, "prepare_model", None)
     if not callable(prepare_fn):
         raise RuntimeError("Model preparation is unavailable")
@@ -825,6 +826,7 @@ def start_model_prepare_job(handler: Any, context: WebRouteContext, payload: dic
             result = prepare_fn(
                 model_name,
                 data_dir=context.db_path.parent,
+                device=requested_device,
                 progress_callback=publish,
                 cancel_check=cancel_check,
             )

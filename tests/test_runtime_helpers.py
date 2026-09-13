@@ -444,7 +444,7 @@ def test_learned_model_catalog_exposes_all_supported_backends() -> None:
     models = supported_learned_models()
     runtimes = supported_runtime_targets()
 
-    assert models == ("topiq_nr", "clipiqa")
+    assert models == ("topiq_nr", "clipiqa", "qalign")
     assert "musiq" not in models
     assert "musiq-spaq" not in models
     assert "maniqa" not in models

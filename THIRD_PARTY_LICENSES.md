@@ -53,13 +53,14 @@ The supported plain `clipiqa` model does not download a separate learned
 CLIPIQA prompt checkpoint. The optional `clipiqa+` variants are outside the
 ShotSieve product catalog.
 
-## Retired Q-Align (`qalign`)
+## Q-Align (`qalign`)
 
-Q-Align remains recognizable only so historical score rows can be displayed.
-It is disabled for new ShotSieve runs and is not part of the current asset or
-bundle set. No Q-Align weights are bundled or downloaded by the supported
-product workflow. If an old installation still contains Q-Align assets, audit
-their original model-card and base-model terms separately.
+- **Paper:** [Q-Align: Teaching LMMs for Visual Scoring via Discrete Text-Defined Levels](https://arxiv.org/abs/2312.17091)
+- **Implementation:** pyiqa's Q-Align integration, which downloads the Q-Future `one-align` model from Hugging Face
+- **Repository:** [Q-Future/Q-Align](https://github.com/Q-Future/Q-Align)
+- **Terms:** subject to the licenses of the Q-Align implementation, its model card, and the underlying mPLUG-Owl2/LLaMA base models. Users must treat the downloaded weights as research-use only unless the upstream terms clearly grant broader rights.
+- **ShotSieve runtime boundary:** supported for CUDA and Apple MPS only; not supported on CPU or DirectML. Q-Align weights are never bundled and are downloaded only during explicit model preparation or scoring.
+- **Authors:** Haoning Wu et al.
 
 ---
 
@@ -86,4 +87,4 @@ insufficient.
 | pyiqa 0.1.16 | PolyForm Noncommercial 1.0.0 plus included notices | Do not assume commercial permission |
 | TOPIQ assets | Package, checkpoint, and backbone terms are separate | Verify each asset before use |
 | CLIPIQA assets | pyiqa code plus OpenAI CLIP RN50 terms | Verify both code and checkpoint terms |
-| Q-Align assets | Retired and not shipped by the supported workflow | Not supported for new runs |
+| Q-Align assets | Downloaded on demand under upstream model/base-model terms | Verify research/commercial rights before use |
