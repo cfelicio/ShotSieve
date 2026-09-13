@@ -7,8 +7,8 @@ import threading
 from hashlib import sha1
 from http import HTTPStatus
 from pathlib import Path
-from urllib.request import urlopen
 from urllib.error import HTTPError
+from urllib.request import Request, urlopen
 
 import pytest
 from PIL import Image
@@ -21,6 +21,74 @@ from conftest import create_image, find_free_port
 
 
 class TestMediaStreaming:
+    @pytest.mark.parametrize("variant", ["source", "preview"])
+    def test_mutable_media_reloads_replaced_content(self, test_server, variant):
+        base_url, db_path, tmp_path = test_server
+        photo_dir = tmp_path / "photos"
+        photo_dir.mkdir()
+        source_path = photo_dir / "test.jpg"
+        create_image(source_path)
+        preview_dir = tmp_path / "data" / "previews"
+
+        with database(db_path) as connection:
+            scan_root(
+                connection,
+                root=photo_dir,
+                recursive=True,
+                extensions=(".jpg",),
+                preview_dir=preview_dir,
+            )
+            file_row = connection.execute(
+                "SELECT id, preview_path FROM files LIMIT 1",
+            ).fetchone()
+
+        file_id = file_row["id"]
+        media_path = source_path if variant == "source" else Path(file_row["preview_path"])
+        url = f"{base_url}/api/media/{variant}?id={file_id}"
+
+        first_response = urlopen(url)
+        first_body = first_response.read()
+        assert first_response.headers.get("Cache-Control") == "private, no-cache"
+
+        replacement_body = f"replacement {variant}".encode("ascii")
+        media_path.write_bytes(replacement_body)
+
+        second_response = urlopen(url)
+        assert second_response.headers.get("Cache-Control") == "private, no-cache"
+        assert second_response.read() == replacement_body
+        assert first_body != replacement_body
+
+    def test_media_response_preserves_byte_ranges_with_mutable_cache_policy(self, test_server):
+        base_url, db_path, tmp_path = test_server
+        photo_dir = tmp_path / "photos"
+        photo_dir.mkdir()
+        source_path = photo_dir / "test.jpg"
+        source_body = b"0123456789"
+        source_path.write_bytes(source_body)
+        preview_dir = tmp_path / "data" / "previews"
+
+        with database(db_path) as connection:
+            scan_root(
+                connection,
+                root=photo_dir,
+                recursive=True,
+                extensions=(".jpg",),
+                preview_dir=preview_dir,
+                generate_previews=False,
+            )
+            file_id = connection.execute("SELECT id FROM files LIMIT 1").fetchone()["id"]
+
+        request = Request(
+            f"{base_url}/api/media/source?id={file_id}",
+            headers={"Range": "bytes=2-5"},
+        )
+        response = urlopen(request)
+
+        assert response.status == HTTPStatus.PARTIAL_CONTENT
+        assert response.headers.get("Cache-Control") == "private, no-cache"
+        assert response.headers.get("Content-Range") == "bytes 2-5/10"
+        assert response.read() == source_body[2:6]
+
     def test_media_response_includes_content_length(self, test_server):
         base_url, db_path, tmp_path = test_server
         photo_dir = tmp_path / "photos"

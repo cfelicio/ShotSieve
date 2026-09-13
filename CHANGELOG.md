@@ -39,6 +39,7 @@ All notable changes to this project will be documented in this file.
 ### Fixed
 
 - Runtime bootstrap archives now require a valid SHA-256 digest before download reuse, extraction, or launch; stale unchecked cache markers and digest mismatches are rejected, and releases publish a manifest generated from the exact archive files.
+- Media preview and source responses now require private revalidation so regenerated files cannot remain stale under the same catalog-ID URL; byte-range delivery is unchanged.
 - File discovery now reports unavailable roots and child-directory enumeration errors with the affected path instead of silently returning an empty scan.
 - Added regression coverage for empty/unavailable scan behavior and rejected the removed cleanup scope at both cache-clear entry points.
 - Missing-entry apply rechecks root accessibility, source absence, scope, review state, and the preview token; stale or unavailable previews return without mutating the catalog.

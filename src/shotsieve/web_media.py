@@ -156,7 +156,10 @@ def serve_media_response(
     handler.send_header("Content-Type", content_type)
     handler.send_header("Content-Length", str(content_length))
     handler.send_header("Accept-Ranges", "bytes")
-    handler.send_header("Cache-Control", "max-age=3600, immutable")
+    # Media URLs are keyed by catalog ID, while previews and source files can
+    # be replaced in place.  Clients must revalidate instead of reusing stale
+    # bytes from a long-lived immutable cache entry.
+    handler.send_header("Cache-Control", "private, no-cache")
     handler.end_headers()
     with path.open("rb") as handle:
         if start > 0:

@@ -103,6 +103,10 @@ The Library UI retains the latest operation result, keeps unsuccessful/unprocess
 
 The folder browser accepts a full local path or UNC path such as `\\server\share\folder`; press Enter after editing the path to open it. The browser does not enumerate network servers or probe write/delete permissions against user photos.
 
+### Media cache behavior
+
+Preview and original-media endpoints use URLs keyed by catalog file ID, but either file may be regenerated or replaced in place. They therefore return `Cache-Control: private, no-cache`, requiring clients to revalidate rather than reuse stale bytes. Media streaming continues to support single byte ranges for compatible clients.
+
 ## Testing and verification
 
 Run the automated suite with:
