@@ -197,7 +197,7 @@ class TestWebRoutesJobsIntegration:
             assert "qalign" not in payload["learned_models"]
         assert "auto_runtime_priority" in payload["learned"]
         assert "cpu" in payload["learned"]["auto_runtime_priority"]
-        assert payload["runtime_targets"] == ["auto", "cpu", "cuda", "xpu", "directml", "mps"]
+        assert payload["runtime_targets"] == ["auto", "cpu", "cuda", "xpu", "mps"]
         assert payload["learned"]["model_preparation"]["state"] == "not_checked"
 
     def test_ai_support_installation_uses_operation_job_and_retains_summary(self, test_server, monkeypatch):

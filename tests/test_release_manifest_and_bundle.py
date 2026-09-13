@@ -102,19 +102,16 @@ def test_release_constraints_file_exists_with_required_pins() -> None:
     assert "setuptools<81" in constraints_text
     assert "pyinstaller>=6.19,<7" in constraints_text
     assert "pyiqa==0.1.16" in constraints_text
-    assert "timm==1.0.28" in constraints_text
-    assert "huggingface-hub==1.24.0" in constraints_text
-    assert "transformers==5.14.1" in constraints_text
+    assert "timm==1.0.29" in constraints_text
+    assert "huggingface-hub==1.31.0" in constraints_text
+    assert "transformers==5.17.0" in constraints_text
     assert "openai-clip==1.0.1" in constraints_text
 
     torch_constraints = (PROJECT_ROOT / "scripts" / "release-constraints-torch.txt").read_text(encoding="utf-8")
-    assert "torch==2.13.0" in torch_constraints
-    assert "torchvision==0.28.0" in torch_constraints
+    assert "torch==2.14.0" in torch_constraints
+    assert "torchvision==0.29.0" in torch_constraints
 
-    dml_constraints = (PROJECT_ROOT / "scripts" / "release-constraints-windows-dml.txt").read_text(encoding="utf-8")
-    assert "torch==2.4.1" in dml_constraints
-    assert "torchvision==0.19.1" in dml_constraints
-    assert "torch-directml==0.2.5.dev240914" in dml_constraints
+    assert not (PROJECT_ROOT / "scripts" / "release-constraints-windows-dml.txt").exists()
 
 
 def test_release_targets_module_does_not_define_bootstrap_matrix_helpers() -> None:

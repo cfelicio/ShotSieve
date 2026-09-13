@@ -56,69 +56,6 @@
     };
     const workflowCompare = window.ShotSieveWorkflowCompare.createWorkflowCompare(compareDeps);
 
-    function comparisonFailureText(row, modelName) {
-      return workflowCompare.comparisonFailureText(row, modelName);
-    }
-
-    function defaultCompareRowSort(modelNames) {
-      if (modelNames.includes("topiq_nr")) {
-        return "topiq_nr:desc";
-      }
-      const scoreChoice = workflowCompare.compareRowSortChoices(modelNames).find(
-        (choice) => choice.value.endsWith(":desc"),
-      );
-      return scoreChoice?.value || "input";
-    }
-
-    function syncCompareSortControls(modelNames) {
-      const rowSort = document.getElementById("compare-row-sort");
-      if (!rowSort) return;
-      const rowChoices = workflowCompare.compareRowSortChoices(modelNames);
-      rowSort.innerHTML = rowChoices
-        .map((choice) => `<option value="${deps.formatting.escapeHtml(choice.value)}">${deps.formatting.escapeHtml(choice.label)}</option>`)
-        .join("");
-      const hasCurrentChoice = rowChoices.some((choice) => choice.value === deps.state.compareRowSort);
-      if (!deps.state.compareRowSortInitialized || !hasCurrentChoice) {
-        deps.state.compareRowSort = defaultCompareRowSort(modelNames);
-        deps.state.compareRowSortInitialized = true;
-      }
-      rowSort.value = deps.state.compareRowSort;
-      const rowFilter = document.getElementById("compare-row-filter");
-      if (rowFilter) {
-        rowFilter.value = deps.state.compareRowFilter || "all";
-      }
-    }
-
-    function filterComparisonRows(rows, modelNames) {
-      const filterMode = String(deps.state.compareRowFilter || "all");
-      if (filterMode === "all") return rows;
-      if (filterMode === "extremes") {
-        return workflowCompare.filterComparisonRows(rows, modelNames);
-      }
-      return workflowCompare.filterComparisonRows(rows, modelNames);
-    }
-
-    function comparisonTruncationWarningText(comparison) {
-      if (!comparison || !comparison.truncated) return null;
-      const processedRows = Number(comparison.processed_rows_total || comparison.files_considered || 0);
-      const requestedRows = Number(comparison.requested_rows_total || processedRows || 0);
-      const processedRowsText = Math.max(0, Math.trunc(processedRows)).toLocaleString();
-      const requestedRowsText = Math.max(0, Math.trunc(requestedRows)).toLocaleString();
-      return `Comparing first ${processedRowsText} of ${requestedRowsText} files. Narrow the root or apply filters for a full compare.`;
-    }
-
-    function renderComparisonResults() {
-      const gallery = document.getElementById("compare-card-gallery");
-      if (gallery) {
-        gallery.innerHTML = "";
-      }
-      const comparison = deps.state.comparison;
-      if (comparison?.compare_failures) {
-        const dummyFailures = comparison.compare_failures;
-      }
-      return workflowCompare.renderComparisonResults();
-    }
-
     function resetReviewFiltersForAnalyze(root) {
       document.getElementById("query-filter").value = "";
       document.getElementById("sort-filter").value = "learned_asc";

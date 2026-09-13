@@ -14,6 +14,25 @@ class _Result:
     error = None
 
 
+def test_gpu_memory_error_with_documentation_url_is_not_network_failure() -> None:
+    cause = RuntimeError(
+        "CUDA out of memory. See https://docs.pytorch.org/docs/stable/notes/cuda.html"
+    )
+    wrapped = RuntimeError("Failed to initialize learned IQA model 'qalign'")
+    wrapped.__cause__ = cause
+    report = model_assets.classify_preparation_error(wrapped, phase="preparing_model", environ={})
+    assert report["category"] == "runtime_out_of_memory"
+    assert "smaller model" in report["recovery_action"]
+    assert "proxy" not in report["recovery_action"]
+
+
+def test_model_dependency_versions_include_loader_and_clip(monkeypatch) -> None:
+    monkeypatch.setattr(model_assets.importlib.metadata, "version", lambda name: "test-" + name)
+    versions = model_assets._dependency_versions()
+    assert versions["transformers"] == "test-transformers"
+    assert versions["openai-clip"] == "test-openai-clip"
+
+
 class _Backend:
     runtime = "cpu"
 

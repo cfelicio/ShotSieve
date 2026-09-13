@@ -20,7 +20,9 @@ wheels/
 *.egg-info/
 .installed.cfg
 *.egg
-implementation.md
+implement.md
+manualsteps.md
+
 
 # Virtual Environments
 .venv/

@@ -61,8 +61,6 @@ def runtime_target_id_from_executable_name(*, system_name: str | None = None) ->
 
     if "nvidia" in runtime_name or "cuda" in runtime_name:
         return f"{prefix}-nvidia"
-    if prefix == "windows" and ("directml" in runtime_name or "-dml" in runtime_name):
-        return "windows-dml"
     if prefix == "macos" and "mps" in runtime_name:
         return "macos-mps"
     if "cpu" in runtime_name:
@@ -224,8 +222,6 @@ def _runtime_name_from_target_id(target_id: str | None) -> str:
     normalized = (target_id or "").strip().casefold()
     if normalized.endswith("-nvidia"):
         return "cuda"
-    if normalized.endswith("-dml"):
-        return "directml"
     if normalized.endswith("-cpu"):
         return "cpu"
     if normalized.endswith("-mps"):

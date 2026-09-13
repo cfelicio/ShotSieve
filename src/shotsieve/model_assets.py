@@ -34,9 +34,10 @@ _VERSION_PACKAGE_NAMES = (
     "pyiqa",
     "torch",
     "torchvision",
-    "torch-directml",
     "timm",
     "huggingface-hub",
+    "transformers",
+    "openai-clip",
     "accelerate",
     "sentencepiece",
     "einops",
@@ -476,7 +477,14 @@ def classify_preparation_error(
     type_names = {type(item).__name__.casefold() for item in chain}
     offline = any(_offline_flags(env).values())
 
-    if offline and any(token in messages for token in ("not found in cache", "offline", "local_files_only", "no cached")):
+    if {"outofmemoryerror", "memoryerror"} & type_names or "out of memory" in messages:
+        category = "runtime_out_of_memory"
+        recovery = (
+            "Free accelerator/system memory or use a smaller model, then choose Prepare selected model. "
+            "Q-Align's default FP16 weights alone require about 16.4 GB before inference overhead; "
+            "a 16 GB GPU may not fit the model even at batch size one."
+        )
+    elif offline and any(token in messages for token in ("not found in cache", "offline", "local_files_only", "no cached")):
         category = "missing_offline_assets"
         recovery = "Populate the required model caches or turn off offline mode, then open Settings and choose Prepare selected model."
     elif any(isinstance(item, (PermissionError,)) or getattr(item, "errno", None) in {13, 1} for item in chain) or any(

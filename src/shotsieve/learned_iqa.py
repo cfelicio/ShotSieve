@@ -40,7 +40,6 @@ RESOURCE_PROFILES = learned_iqa_runtime.RESOURCE_PROFILES
 DEFAULT_RESOURCE_PROFILE = learned_iqa_runtime.DEFAULT_RESOURCE_PROFILE
 
 ResolvedDevice = learned_iqa_runtime.ResolvedDevice
-DirectMLProbe = learned_iqa_runtime.DirectMLProbe
 LearnedRuntimeUnavailableError = learned_iqa_runtime.LearnedRuntimeUnavailableError
 LearnedBackendUnavailableError = backend_core.LearnedBackendUnavailableError
 LearnedScoreResult = backend_core.LearnedScoreResult
@@ -63,8 +62,6 @@ runtime_candidates = learned_iqa_runtime.runtime_candidates
 has_cuda = learned_iqa_runtime.has_cuda
 has_xpu = learned_iqa_runtime.has_xpu
 has_mps = learned_iqa_runtime.has_mps
-load_directml_device = learned_iqa_runtime.load_directml_device
-probe_directml_device = learned_iqa_runtime.probe_directml_device
 resolve_device = learned_iqa_runtime.resolve_device
 runtime_statuses = learned_iqa_runtime.runtime_statuses
 
@@ -237,7 +234,7 @@ def unavailable_backend_payload(
     catalog = ",".join(supported_learned_models())
     runtime_targets = ",".join(supported_runtime_targets())
     auto_priority = ",".join(auto_runtime_order())
-    vendor_aliases = "nvidia->cuda,amd->directml(windows),intel->xpu/directml,apple->mps"
+    vendor_aliases = "nvidia->cuda,amd->cpu(windows until ROCm),intel->xpu,apple->mps"
     runtime_status_text = _runtime_status_text_from_torch_import(import_module=import_module, system_name=system_name)
     hardware = detect_hardware_capabilities()
     vram_mb = _coerce_vram_mb(hardware.get("vram_mb"))
@@ -387,7 +384,6 @@ __all__ = [
     "DEFAULT_MODEL_NAME",
     "DEFAULT_RESOURCE_PROFILE",
     "DEFAULT_RUNTIME_STATUS_TEXT",
-    "DirectMLProbe",
     "DEVICE_TARGET_ALIASES",
     "HF_UNAUTHENTICATED_REQUEST_WARNING_PATTERN",
     "LearnedBackendUnavailableError",
@@ -444,13 +440,11 @@ __all__ = [
     "is_supported_model_name",
     "model_catalog_payload",
     "load_batch_tensor",
-    "load_directml_device",
     "normalize_device_target",
     "normalize_model_name",
     "normalize_score",
     "parse_score_range",
     "preferred_model_names",
-    "probe_directml_device",
     "recommended_batch_size",
     "recommended_cpu_workers",
     "release_learned_backend",

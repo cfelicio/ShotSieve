@@ -830,14 +830,14 @@ class TestStaticAssetHeaders:
 
     def test_static_js_compare_keeps_row_and_setup_failure_paths_wired(self, test_server):
         base_url, _, _ = test_server
-        body = urlopen(f"{base_url}/app-workflows.js").read().decode("utf-8")
+        body = urlopen(f"{base_url}/app-workflow-compare.js").read().decode("utf-8")
         assert "comparisonFailureText(row, modelName)" in body
         assert "comparison.compare_failures" in body
         assert 'gallery.innerHTML = ""' in body
 
     def test_static_js_compare_warns_when_results_are_truncated(self, test_server):
         base_url, _, _ = test_server
-        body = urlopen(f"{base_url}/app-workflows.js").read().decode("utf-8")
+        body = urlopen(f"{base_url}/app-workflow-compare.js").read().decode("utf-8")
         assert "comparison.truncated" in body
         assert "Comparing first ${processedRowsText} of ${requestedRowsText} files." in body
         assert "Narrow the root or apply filters for a full compare." in body
@@ -890,7 +890,7 @@ class TestStaticAssetHeaders:
 
     def test_static_js_compare_defaults_to_topiq_sort_and_extreme_filter_support(self, test_server):
         base_url, _, _ = test_server
-        body = urlopen(f"{base_url}/app-workflows.js").read().decode("utf-8")
+        body = urlopen(f"{base_url}/app-workflow-compare.js").read().decode("utf-8")
 
         assert 'state.compareRowSort = rowChoices[0]?.value || "input"' not in body
         assert 'topiq_nr:desc' in body

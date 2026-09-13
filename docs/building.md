@@ -7,7 +7,6 @@ If you just want to understand what ShotSieve is or which package to download, s
 ## Python and environment notes
 
 - `requires-python` is `>=3.11`
-- For the DirectML extra, prefer Python `3.11` or `3.12`
 - Apple Silicon uses the standard `learned-iqa` install and resolves to `mps` automatically when available
 
 ## Source install
@@ -24,7 +23,6 @@ Optional extras:
 - Lint dependencies: `python -m pip install -e .[lint]`
 - Format loaders for HEIF and RAW workflows: `python -m pip install -e .[format-loaders]`
 - Learned IQA support: `python -m pip install -e .[learned-iqa]` (`pyiqa==0.1.16`)
-- DirectML learned IQA support on Python 3.11–3.12: `python -m pip install -e .[learned-iqa-directml]` (the supported target pins `torch==2.4.1`, `torchvision==0.19.1`, and `torch-directml==0.2.5.dev240914` together)
 - Windows build tooling: `python -m pip install -e .[windows-build]`
 
 ## Desktop entry point
@@ -39,7 +37,6 @@ Downloaded runtime packs use target-specific launcher names instead:
 
 - Windows CPU: `ShotSieve-CPU.exe`
 - Windows NVIDIA / CUDA: `ShotSieve-NVIDIA.exe`
-- Windows DirectML: `ShotSieve-DML.exe`
 - Linux CPU: `ShotSieve-CPU`
 - Linux NVIDIA / CUDA: `ShotSieve-NVIDIA`
 - macOS CPU: `ShotSieve-CPU`
@@ -81,17 +78,17 @@ Startup automation remains available when explicitly configured:
 
 Interactive console launches may still ask for consent when neither automation setting is present. Portable and frozen builds prefer the bundled pip-based installer paths from `shotsieve.bootstrap`; if that installer is unavailable or declined, ShotSieve keeps running but learned backends may stay disabled. Cancelling an explicit installation takes effect between runtime install steps; restart ShotSieve if newly installed native packages are not usable in the current process.
 
-The supported learned-model catalog is `topiq_nr`, `clipiqa`, and accelerator-only `qalign`, with TOPIQ as the default. Q-Align is exposed only when the selected runtime is CUDA or Apple MPS; CPU and DirectML intentionally expose only the compatible models. PyIQA discovery is not an allowlist: if a product model is not discoverable or cannot initialize, Settings shows an unavailable/empty model state. Older stored model names remain displayable by their raw name, but retired names cannot be selected for new scoring or comparison runs. No process-wide `torch.load` override is used.
+The supported learned-model catalog is `topiq_nr`, `clipiqa`, and accelerator-only `qalign`, with TOPIQ as the default. Q-Align is exposed only when the selected runtime is CUDA or Apple MPS; CPU and XPU intentionally expose only the compatible models. PyIQA discovery is not an allowlist: if a product model is not discoverable or cannot initialize, Settings shows an unavailable/empty model state. Older stored model names remain displayable by their raw name, but retired names cannot be selected for new scoring or comparison runs. No process-wide `torch.load` override is used.
 
-The Settings **Prepare selected model** action uses CPU for CPU-compatible models and the selected/Auto accelerator for Q-Align, then runs a tiny generated-image inference check. It may download the model's upstream assets on first use; TOPIQ can require its ResNet backbone and CFANet checkpoint, CLIPIQA can require the CLIP RN50 dependency, and Q-Align can require approximately 7 GB of Hugging Face assets with a one-image batch limit. Preparation records coarse phases, effective cache paths and volume free space, dependency versions/fingerprint, requested and tested runtime, and sanitized error/recovery details in a small atomic JSON file under the app data directory. A `preparing` record owned by a process that has ended is downgraded to an interrupted failure at startup. A later `/api/options` call performs only local record, dependency-metadata, and disk-volume reads; it does not scan caches, download assets, or construct models. Missing or changed cache context invalidates a previous `prepared` state, and scoring still validates its selected runtime at use time: readiness is a last successful check, not a future availability guarantee.
+The Settings **Prepare selected model** action uses CPU for CPU-compatible models and the selected/Auto accelerator for Q-Align, then runs a tiny generated-image inference check. It may download the model's upstream assets on first use; TOPIQ can require its ResNet backbone and CFANet checkpoint, CLIPIQA can require the CLIP RN50 dependency, and Q-Align can require approximately 16.4 GB of Hugging Face assets with a one-image batch limit. Preparation records coarse phases, effective cache paths and volume free space, dependency versions/fingerprint, requested and tested runtime, and sanitized error/recovery details in a small atomic JSON file under the app data directory. A `preparing` record owned by a process that has ended is downgraded to an interrupted failure at startup. A later `/api/options` call performs only local record, dependency-metadata, and disk-volume reads; it does not scan caches, download assets, or construct models. Missing or changed cache context invalidates a previous `prepared` state, and scoring still validates its selected runtime at use time: readiness is a last successful check, not a future availability guarantee.
 
 Score and Compare job failures reuse the same diagnostic schema as Prepare. Their status/result payloads retain sanitized exception chains, category and recovery action, model name(s), requested and actual runtime when known, offline flags, effective cache paths, and the free-space view for each cache volume. Known offline-cache, permission, no-space, dependency, runtime, network, and corruption failures receive targeted guidance; unknown or execution failures retain their sanitized causes. The recovery guidance points to **Prepare selected model** before retrying, and URL credentials, Hub tokens, and proxy secrets are redacted before the diagnostic reaches the API or UI.
 
 `--model-cache-dir ROOT` sets default `HF_HOME=ROOT/huggingface`, `HF_HUB_CACHE=ROOT/huggingface/hub`, and `TORCH_HOME=ROOT/torch` before learned-IQA runtime preparation. Explicit environment values win, including Hub endpoints, proxy/certificate, and offline settings, so the resulting cache paths may be split. For an offline portable setup, prepare the selected model into the intended compatible cache tree, shut down the app, copy that tree with the app-data readiness record, and validate it in a fresh offline process. ShotSieve does not migrate or remove caches automatically.
 
-The release and sidecar paths use the tested learned-IQA package set `pyiqa==0.1.16`, `timm==1.0.28`, `huggingface-hub==1.24.0`, `transformers==5.14.1`, and `openai-clip==1.0.1`, `accelerate==1.14.0`, `sentencepiece==0.2.2`, and `einops==0.8.2`. CPU, CUDA, and Apple MPS targets use `torch==2.13.0` with `torchvision==0.28.0`; the CUDA path selects the cu126 index, while CPU selects the PyTorch CPU index. The corresponding target constraint file is `scripts/release-constraints-torch.txt`.
+The release and sidecar paths use the tested learned-IQA package set `pyiqa==0.1.16`, `timm==1.0.29`, `huggingface-hub==1.31.0`, `transformers==5.17.0`, and `openai-clip==1.0.1`, `accelerate==1.15.0`, `sentencepiece==0.2.2`, and `einops==0.8.2`. CPU, CUDA, and Apple MPS targets use `torch==2.14.0` with `torchvision==0.29.0`; the CUDA path selects the cu130 index, while CPU selects the PyTorch CPU index. The corresponding target constraint file is `scripts/release-constraints-torch.txt`.
 
-For a Windows DirectML sidecar, the embedded installer resolves the pinned Torch/Torchvision/DirectML trio in one install step. Release builds use `scripts/release-constraints-windows-dml.txt` in addition to the common build constraints; the DirectML target remains on Python 3.11-3.12 and does not inherit the non-DirectML Torch pair. Local Windows release builds and CI run `pip check` after resolving the target environment.
+Windows AMD hardware remains on CPU until a native ROCm path passes its separate source-install validation. The retired DirectML package, sidecar path, and Windows-DML release target are absent from new installs and release builds. Local Windows release builds and CI run `pip check` after resolving the target environment.
 
 Pull requests run the offline test workflow in `.github/workflows/ci.yml`; it sets the learned-model offline flags so an accidental model download fails rather than silently reaching the Hub. The separate `.github/workflows/model-smoke.yml` workflow is manual/weekly and prepares TOPIQ and CLIPIQA in fresh isolated caches, then repeats the CPU check in a new process with socket access disabled. Q-Align requires an accelerator-capable host and is validated through the release-target smoke procedure rather than the CPU-only GitHub-hosted job. The workflow does not upload caches or generated images.
 
@@ -175,11 +172,10 @@ Current Windows runtime-pack outputs:
 
 - `ShotSieve-windows-cpu`
 - `ShotSieve-windows-nvidia`
-- `ShotSieve-windows-dml`
 
 Tier 1 runtime-pack targets are currently defined for:
 
-- Windows CPU, NVIDIA CUDA, and DirectML
+- Windows CPU and NVIDIA CUDA
 - Linux CPU and NVIDIA CUDA
 - macOS CPU and Apple Silicon MPS
 
@@ -208,3 +204,17 @@ That tag helper performs the local git safety checks, creates the tag, and pushe
 ```
 
 The current tag-push workflow does not support `-PreRelease`; if you need a pre-release, mark it manually in GitHub after the workflow publishes it or extend the release workflow to handle that metadata.
+
+### Model-stack validation follow-up (2026-09-13)
+
+The selected stack was exercised locally on CPU and CUDA 13.0 (RTX 5060 Ti).
+The former DirectML experiment is retained only as historical retirement
+evidence; it is not a supported stack or release target. Exact shipped bundles
+and MPS remain release validation gates. Existing source environments must be
+upgraded explicitly; changing release constraints does not modify an existing
+virtual environment.
+
+Q-ALIGN's two published shards total about 16.4 GB; default FP16 placement failed
+with CUDA OOM on the local 16 GB card. Its cache download is complete, but it has
+no passing local inference result. See `manualsteps.md` before claiming a
+runtime/model combination is validated.

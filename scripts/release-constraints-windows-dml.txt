@@ -1,6 +1,0 @@
-# Windows-DML runtime target. Keep the adapter and its Torch pair in one target lock.
-# This file is used in addition to scripts/release-constraints.txt.
-# It intentionally does not inherit the non-DirectML Torch pair.
-torch==2.4.1 ; platform_system == "Windows" and python_version >= "3.11" and python_version < "3.13"
-torchvision==0.19.1 ; platform_system == "Windows" and python_version >= "3.11" and python_version < "3.13"
-torch-directml==0.2.5.dev240914 ; platform_system == "Windows" and python_version >= "3.11" and python_version < "3.13"

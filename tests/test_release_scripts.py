@@ -122,7 +122,7 @@ def test_integrated_release_script_installs_target_runtime_dependencies() -> Non
 
     assert "function Install-TorchVariant" in script_text
     assert "--index-url https://download.pytorch.org/whl/cpu" in script_text
-    assert "--index-url https://download.pytorch.org/whl/cu126" in script_text
+    assert "--index-url https://download.pytorch.org/whl/cu130" in script_text
     assert "function Install-TargetDependencies" in script_text
     assert "-c $ConstraintsFile" in script_text
     assert "pip install -e \".[" in script_text
@@ -136,30 +136,18 @@ def test_integrated_release_script_marks_cuda_targets_to_skip_bundled_torch() ->
     assert "TargetIds" in script_text
 
 
-def test_integrated_release_script_does_not_include_directml_torch26_override_switches() -> None:
+def test_integrated_release_script_has_no_directml_path() -> None:
     script_text = SCRIPT_PATH.read_text(encoding="utf-8")
 
-    assert "[switch]$ForceDirectMLTorch26" not in script_text
-    assert "[switch]$DisableDirectMLTorch26Override" not in script_text
-    assert "function Install-DirectMLTorch26Override" not in script_text
-    assert "function Test-DirectMLRuntimeAvailable" not in script_text
-    assert "function Install-DirectMLStableRuntime" not in script_text
-
-
-def test_integrated_release_script_uses_stable_directml_runtime_path_without_torch26_overrides() -> None:
-    script_text = SCRIPT_PATH.read_text(encoding="utf-8")
-
-    assert "Installing the pinned Torch/Torchvision/DirectML trio for DirectML target" in script_text
-    assert "torch==2.4.1 torchvision==0.19.1 torch-directml==0.2.5.dev240914" in script_text
-    assert "torch==2.6.*" not in script_text
-    assert "torchvision==0.21.*" not in script_text
+    assert "directml" not in script_text.casefold()
+    assert "torch-directml" not in script_text.casefold()
 
 
 def test_integrated_release_script_installs_pinned_cuda_runtime_for_torchless_bundles() -> None:
     script_text = SCRIPT_PATH.read_text(encoding="utf-8")
 
     assert "Installing the pinned CUDA Torch/Torchvision pair" in script_text
-    assert "--index-url https://download.pytorch.org/whl/cu126" in script_text
+    assert "--index-url https://download.pytorch.org/whl/cu130" in script_text
     assert '"cuda"' in script_text
 
 
@@ -412,22 +400,13 @@ def test_target_modules_do_not_keep_dead_imports() -> None:
     assert completed.returncode == 0, completed.stdout + completed.stderr
 
 
-def test_directml_extra_pins_the_supported_torch_trio() -> None:
+def test_pyproject_has_no_directml_extra() -> None:
     pyproject_text = (PROJECT_ROOT / "pyproject.toml").read_text(encoding="utf-8")
     pyproject = tomllib.loads(pyproject_text)
-    directml_dependencies = pyproject["project"]["optional-dependencies"]["learned-iqa-directml"]
 
-    torch_directml_dependency = next(
-        (entry for entry in directml_dependencies if entry.startswith("torch-directml")),
-        "",
-    )
-
-    assert torch_directml_dependency
-    assert "==0.2.5.dev240914" in torch_directml_dependency
-    assert "python_version >= '3.11'" in torch_directml_dependency
-    assert "python_version < '3.13'" in torch_directml_dependency
-    assert any(entry.startswith("torch==2.4.1") for entry in directml_dependencies)
-    assert any(entry.startswith("torchvision==0.19.1") for entry in directml_dependencies)
+    optional_dependencies = pyproject["project"]["optional-dependencies"]
+    assert "learned-iqa-directml" not in optional_dependencies
+    assert all("torch-directml" not in entry for entry in optional_dependencies["learned-iqa"])
 
 
 def test_learned_iqa_extras_include_icecream_dependency() -> None:
@@ -435,10 +414,7 @@ def test_learned_iqa_extras_include_icecream_dependency() -> None:
     pyproject = tomllib.loads(pyproject_text)
 
     learned_iqa_dependencies = pyproject["project"]["optional-dependencies"]["learned-iqa"]
-    directml_dependencies = pyproject["project"]["optional-dependencies"]["learned-iqa-directml"]
-
     assert any(entry.startswith("icecream") for entry in learned_iqa_dependencies)
-    assert any(entry.startswith("icecream") for entry in directml_dependencies)
 
 
 def test_windows_build_dependencies_pin_setuptools_with_pkg_resources() -> None:
@@ -468,7 +444,6 @@ def test_tier1_release_matrix_covers_all_runtime_pack_targets() -> None:
     assert set(targets) == {
         "windows-cpu",
         "windows-nvidia",
-        "windows-dml",
         "linux-cpu",
         "linux-nvidia",
         "macos-cpu",
@@ -478,8 +453,6 @@ def test_tier1_release_matrix_covers_all_runtime_pack_targets() -> None:
     assert targets["windows-cpu"]["runsOn"] == "windows-latest"
     assert targets["linux-cpu"]["runsOn"] == "ubuntu-latest"
     assert targets["macos-mps"]["runsOn"] == "macos-latest"
-    assert targets["windows-dml"]["extras"] == ["format-loaders", "learned-iqa-directml", "windows-build"]
-    assert targets["windows-dml"]["constraintsFile"] == "scripts/release-constraints-windows-dml.txt"
     assert targets["windows-cpu"]["constraintsFile"] == "scripts/release-constraints-torch.txt"
     assert targets["windows-nvidia"]["constraintsFile"] == "scripts/release-constraints-torch.txt"
     assert targets["linux-cpu"]["constraintsFile"] == "scripts/release-constraints-torch.txt"

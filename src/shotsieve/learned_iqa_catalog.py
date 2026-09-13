@@ -19,7 +19,7 @@ MAX_BATCH_SIZES = {
 }
 MODEL_WEIGHT_MB = {
     "clipiqa": 600,
-    "qalign": 7000,
+    "qalign": 16410,
     "topiq_nr": 80,
 }
 PER_IMAGE_ACTIVATION_MB = {
@@ -37,8 +37,6 @@ DEVICE_TARGET_ALIASES = {
     "nvidia": "cuda",
     "xpu": "xpu",
     "intel": "intel",
-    "directml": "directml",
-    "dml": "directml",
     "amd": "amd",
     "mps": "mps",
     "apple": "apple",
@@ -62,7 +60,7 @@ MODEL_NAME_ALIASES = {
     "q-align": "qalign",
     "qalign": "qalign",
 }
-_SUPPORTED_RUNTIME_TARGETS = ("auto", "cpu", "cuda", "xpu", "directml", "mps", "nvidia", "amd", "intel", "apple")
+_SUPPORTED_RUNTIME_TARGETS = ("auto", "cpu", "cuda", "xpu", "mps", "nvidia", "amd", "intel", "apple")
 
 
 @dataclass(frozen=True, slots=True)
@@ -91,7 +89,7 @@ class LearnedModelSpec:
         return payload
 
 
-_COMMON_RUNTIME_POLICY = ("cpu", "cuda", "xpu", "directml", "mps")
+_COMMON_RUNTIME_POLICY = ("cpu", "cuda", "xpu", "mps")
 MODEL_CATALOG = (
     LearnedModelSpec(
         canonical_id="topiq_nr",
@@ -133,7 +131,7 @@ MODEL_CATALOG = (
         resource_labels=("very large model", "high memory", "accelerator required"),
         cache_families=("Hugging Face Hub cache",),
         required_cache_roots=("hf_hub_cache",),
-        first_use_disclosure="First use downloads the Q-Future one-align model, which is approximately 7 GB and requires a compatible CUDA or Apple MPS runtime; Q-Align currently supports one image per inference batch.",
+        first_use_disclosure="First use downloads approximately 16.4 GB of Q-Future one-align weights, plus tokenizer and configuration files. Allow additional cache and loading memory. Requires a compatible CUDA or Apple MPS runtime; Q-Align supports one image per inference batch.",
     ),
 )
 

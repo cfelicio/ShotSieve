@@ -20,7 +20,6 @@ def test_score_paths_only_enables_channels_last_for_cpu_and_cuda_runtimes() -> N
     for runtime, expected in (
         ("cpu", True),
         ("cuda", True),
-        ("directml", False),
         ("mps", False),
     ):
         calls: list[tuple[object, ...]] = []
@@ -94,7 +93,7 @@ def test_score_paths_disables_next_batch_prefetch_on_cpu_but_keeps_it_for_accele
         assert calls == expected_calls
 
 
-def test_score_tensor_batch_uses_inference_mode_for_non_directml_runtimes() -> None:
+def test_score_tensor_batch_uses_inference_mode() -> None:
     from shotsieve import learned_iqa_backend as backend_module
 
     context_calls: list[str] = []
@@ -140,59 +139,12 @@ def test_score_tensor_batch_uses_inference_mode_for_non_directml_runtimes() -> N
     assert context_calls == ["enter:inference_mode", "exit:inference_mode"]
 
 
-def test_score_tensor_batch_uses_no_grad_for_directml_runtime() -> None:
-    from shotsieve import learned_iqa_backend as backend_module
-
-    context_calls: list[str] = []
-
-    class FakeContextManager:
-        def __init__(self, label: str) -> None:
-            self.label = label
-
-        def __enter__(self) -> None:
-            context_calls.append(f"enter:{self.label}")
-
-        def __exit__(self, exc_type, exc, tb) -> None:
-            context_calls.append(f"exit:{self.label}")
-
-    class FakeTorch:
-        @staticmethod
-        def no_grad() -> FakeContextManager:
-            return FakeContextManager("no_grad")
-
-        @staticmethod
-        def inference_mode() -> FakeContextManager:
-            return FakeContextManager("inference_mode")
-
-    backend = types.SimpleNamespace(
-        _torch=FakeTorch,
-        runtime="directml",
-        metric=lambda batch_tensor, return_mos=True, return_dist=True: ([0.25], [0.75]),
-        score_range="0, 1",
-        lower_better=False,
-    )
-
-    results = backend_module.score_tensor_batch(
-        backend,
-        object(),
-        flatten_tensor_fn=lambda tensor: [tensor[0]],
-        confidence_values_fn=lambda dist_tensor, torch_module: [dist_tensor[0]],
-        normalize_score_fn=lambda raw_score, **kwargs: raw_score * 100,
-    )
-
-    assert len(results) == 1
-    assert results[0].raw_score == 0.25
-    assert results[0].confidence == 0.75
-    assert context_calls == ["enter:no_grad", "exit:no_grad"]
-
-
 @pytest.mark.parametrize(
     ("runtime", "expect_autocast"),
     [
         ("cuda", True),
         ("mps", True),
         ("cpu", False),
-        ("directml", False),
         ("xpu", False),
     ],
 )
@@ -250,11 +202,11 @@ def test_score_tensor_batch_only_uses_float16_autocast_for_cuda_and_mps(
     assert results[0].raw_score == 0.25
     assert results[0].confidence == 0.75
 
-    expected_calls = ["enter:no_grad"] if runtime == "directml" else ["enter:inference_mode"]
+    expected_calls = ["enter:inference_mode"]
     if expect_autocast:
         expected_calls.append(f"enter:autocast:{runtime}:float16")
         expected_calls.append(f"exit:autocast:{runtime}:float16")
-    expected_calls.append("exit:no_grad" if runtime == "directml" else "exit:inference_mode")
+    expected_calls.append("exit:inference_mode")
     assert context_calls == expected_calls
 
 

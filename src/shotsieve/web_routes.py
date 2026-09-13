@@ -15,6 +15,7 @@ from shotsieve.web_route_common import (
     ExportResultPayload,
     WebRouteContext,
     WebRouteDependencies,
+    _SELECTION_BATCH_SIZE,
     _begin_consistent_snapshot,
     _compare_request_models,
     _delete_result_payload,
@@ -105,9 +106,6 @@ _STATIC_FILES = {
     "/app-controller.js": ("app-controller.js", "application/javascript; charset=utf-8"),
     "/app-events.js": ("app-events.js", "application/javascript; charset=utf-8"),
 }
-
-_SELECTION_BATCH_SIZE = 500
-
 
 def _handle_static_get_routes(handler: Any, context: WebRouteContext, parsed: Any) -> bool:
     static_entry = _STATIC_FILES.get(parsed.path)

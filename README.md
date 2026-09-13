@@ -28,14 +28,14 @@ If you are choosing between the packaged builds, pick the one that matches your 
 |---|---|---|
 | `CPU` | Any machine, safest fallback | Runs entirely on the processor. Slowest, but the most compatible. |
 | `NVIDIA / CUDA` | Windows or Linux machines with an NVIDIA GPU | Best choice when you have a supported NVIDIA card and want the fastest learned-IQA scoring. |
-| `DML / DirectML` | Windows machines with non-NVIDIA GPUs, like AMD and Intel (can also work with NVIDIA) | Uses Microsoft's DirectML stack. Usually the right Windows accelerator option when CUDA is not available. |
+| `Intel XPU` (source install) | Supported Intel accelerators with the matching PyTorch XPU runtime | Source-install path; not a packaged runtime download. |
 | `Apple Silicon / MPS` | Recent Macs with Apple Silicon | Best choice on Apple Silicon when you want GPU acceleration without a separate CUDA stack. |
 
 Practical rule of thumb:
 
 - If you have an NVIDIA GPU, choose **CUDA**.
 - If you are on Apple Silicon, choose **MPS**.
-- If you are on Windows without NVIDIA but do have a modern GPU, try **DirectML**.
+- If you are on Windows without a validated CUDA or XPU runtime, choose **CPU**.
 - If you just want the most reliable option or are unsure, choose **CPU**.
 
 Intel XPU remains a source-install/runtime option today, but it is not one of the packaged runtime downloads listed above.
@@ -54,7 +54,6 @@ Downloaded bundles use platform- and runtime-specific launcher names instead of 
 |---|---|---|
 | Windows | CPU | `ShotSieve-CPU.exe` |
 | Windows | NVIDIA / CUDA | `ShotSieve-NVIDIA.exe` |
-| Windows | DirectML | `ShotSieve-DML.exe` |
 | Linux | CPU | `ShotSieve-CPU` |
 | Linux | NVIDIA / CUDA | `ShotSieve-NVIDIA` |
 | macOS | CPU | `ShotSieve-CPU` |
@@ -128,21 +127,18 @@ The supported in-app model catalog is intentionally small:
 - `clipiqa` is a fast secondary option for quick comparisons
 - `qalign` is the large accelerator-backed option for CUDA and Apple MPS
 
-TReS, QualiCLIP, ARNIQA, and other PyIQA names are not supported for new scoring or comparison runs. Q-Align is not available on CPU or DirectML. Older stored scores remain readable and are shown using their saved raw model name; disabling a model does not delete those rows.
+TReS, QualiCLIP, ARNIQA, and other PyIQA names are not supported for new scoring or comparison runs. Q-Align is not available on CPU or XPU. Older stored scores remain readable and are shown using their saved raw model name; disabling a model does not delete those rows.
 
 Runtime names you may see in settings or developer docs:
 
 - `cpu`: no GPU acceleration
 - `cuda`: NVIDIA GPU acceleration
 - `xpu`: Intel accelerator path for source installs where the local PyTorch runtime exposes it
-- `directml`: Windows GPU acceleration through DirectML
-- `mps`: Apple Silicon GPU acceleration
-- `directml`: Windows GPU acceleration through DirectML
 - `mps`: Apple Silicon GPU acceleration
 
 The Settings model list is populated from runtime discovery. If discovery or initialization is unavailable, the list stays empty instead of claiming that a model is ready. Auto mode may fall back to CPU and reports the failed accelerator reason; an explicitly requested unavailable runtime fails with recovery guidance.
 
-The release and sidecar paths use the tested learned-IQA package set `pyiqa==0.1.16`, `timm==1.0.28`, `huggingface-hub==1.24.0`, `transformers==5.14.1`, and `openai-clip==1.0.1`, `accelerate==1.14.0`, `sentencepiece==0.2.2`, and `einops==0.8.2`. CPU, CUDA, and Apple MPS targets use `torch==2.13.0` with `torchvision==0.28.0`; the Windows DirectML target is constrained to Python 3.11–3.12 with `torch==2.4.1`, `torchvision==0.19.1`, and `torch-directml==0.2.5.dev240914`. DirectML is not installed through the generic latest-Torch path.
+The release and sidecar paths use the tested learned-IQA package set `pyiqa==0.1.16`, `timm==1.0.29`, `huggingface-hub==1.31.0`, `transformers==5.17.0`, and `openai-clip==1.0.1`, `accelerate==1.15.0`, `sentencepiece==0.2.2`, and `einops==0.8.2`. CPU, CUDA, and Apple MPS targets use `torch==2.14.0` with `torchvision==0.29.0`; CUDA selects the cu130 index and CPU selects the PyTorch CPU index. Windows AMD hardware falls back to CPU until a native ROCm path is validated. The retired DirectML package and release target are not installed or published.
 
 The manual/weekly model smoke workflow installs these constraints, runs `pip check`, prepares TOPIQ and CLIPIQA in separate fresh caches, and repeats both checks offline in a new process. It records resolved versions and retains sanitized JSON diagnostics on failure; caches, weights, and generated images are not uploaded.
 

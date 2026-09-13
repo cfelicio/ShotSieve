@@ -56,16 +56,6 @@ for pkg in difficult_packages:
     except Exception as e:
         print(f"Warning: Failed to collect_all for {pkg}: {e}")
 
-# Handle DirectML specifically if present
-if importlib.util.find_spec("torch_directml") is not None:
-    try:
-        tmp_datas, tmp_binaries, tmp_hiddenimports = collect_all("torch_directml")
-        datas += tmp_datas
-        binaries += tmp_binaries
-        hiddenimports += tmp_hiddenimports
-    except Exception:
-        pass
-
 analysis_excludes = []
 if skip_bundled_torch:
     datas = [entry for entry in datas if not _is_torch_related(entry)]

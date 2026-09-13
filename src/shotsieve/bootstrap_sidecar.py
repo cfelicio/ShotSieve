@@ -13,11 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from shotsieve import runtime_support
-from shotsieve.dependency_constraints import (
-    COMMON_MODEL_REQUIREMENTS,
-    DIRECTML_TORCH_REQUIREMENTS,
-    NON_DIRECTML_TORCH_REQUIREMENTS,
-)
+from shotsieve.dependency_constraints import COMMON_MODEL_REQUIREMENTS, TORCH_REQUIREMENTS
 
 DEFAULT_TORCH_AUTO_INSTALL_ENV = "SHOTSIEVE_BOOTSTRAP_AUTO_INSTALL_TORCH"
 DEFAULT_TORCH_SITE_PACKAGES_DIRNAME = "site-packages"
@@ -100,7 +96,7 @@ def _torch_install_index_args(runtime: str) -> list[str]:
     if normalized == "cuda":
         return [
             "--index-url",
-            "https://download.pytorch.org/whl/cu126",
+            "https://download.pytorch.org/whl/cu130",
             "--trusted-host",
             "download.pytorch.org",
         ]
@@ -115,9 +111,8 @@ def _torch_install_index_args(runtime: str) -> list[str]:
 
 
 def _torch_packages_for_runtime(runtime: str) -> tuple[str, ...]:
-    if runtime.casefold() == "directml":
-        return DIRECTML_TORCH_REQUIREMENTS
-    return NON_DIRECTML_TORCH_REQUIREMENTS
+    _ = runtime
+    return TORCH_REQUIREMENTS
 
 
 def _patch_distlib_finder_for_frozen() -> None:

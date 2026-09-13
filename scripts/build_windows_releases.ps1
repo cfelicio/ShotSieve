@@ -154,12 +154,7 @@ function Install-TorchVariant {
         }
         "cuda" {
             Write-Host "Installing the pinned CUDA Torch/Torchvision pair for torchless runtime-pack target..."
-            & $PythonCommand -m pip install --upgrade --force-reinstall --no-cache-dir torch torchvision --index-url https://download.pytorch.org/whl/cu126 --trusted-host download.pytorch.org @constraintArgs
-            break
-        }
-        "directml" {
-            Write-Host "Installing the pinned Torch/Torchvision/DirectML trio for DirectML target..."
-            & $PythonCommand -m pip install --upgrade --force-reinstall --no-cache-dir torch==2.4.1 torchvision==0.19.1 torch-directml==0.2.5.dev240914 @constraintArgs
+            & $PythonCommand -m pip install --upgrade --force-reinstall --no-cache-dir torch torchvision --index-url https://download.pytorch.org/whl/cu130 --trusted-host download.pytorch.org @constraintArgs
             break
         }
         default {

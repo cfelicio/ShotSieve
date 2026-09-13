@@ -1,4 +1,13 @@
 (() => {
+  function formatFileSize(bytes) {
+    if (bytes < 1000) return `${bytes} B`;
+    const kb = bytes / 1000;
+    if (kb < 1000) return `${kb.toFixed(1)} KB`;
+    const mb = kb / 1000;
+    if (mb < 1000) return `${mb.toFixed(1)} MB`;
+    return `${(mb / 1000).toFixed(2)} GB`;
+  }
+
   function isCompactReviewLayout() {
     return Boolean(window.matchMedia?.("(max-width: 63.9375rem)").matches);
   }
@@ -356,17 +365,7 @@
         statPills.push(`<span class="stat-badge-pill pill-mp">${mp} MP</span>`);
       }
       if (detail.size_bytes) {
-        const bytes = detail.size_bytes;
-        let sizeStr = `${bytes} B`;
-        if (bytes >= 1000) {
-          const kb = bytes / 1000;
-          if (kb < 1000) sizeStr = `${kb.toFixed(1)} KB`;
-          else {
-            const mb = kb / 1000;
-            if (mb < 1000) sizeStr = `${mb.toFixed(1)} MB`;
-            else sizeStr = `${(mb / 1000).toFixed(2)} GB`;
-          }
-        }
+        const sizeStr = formatFileSize(detail.size_bytes);
         statPills.push(`<span class="stat-badge-pill pill-size">${sizeStr}</span>`);
       }
       if (aiScore !== null && aiScore !== undefined) {
@@ -429,17 +428,7 @@
         chips.push(`<span class="metadata-chip chip-aspect">Aspect ${ar}</span>`);
       }
       if (detail.size_bytes) {
-        const bytes = detail.size_bytes;
-        let sizeStr = `${bytes} B`;
-        if (bytes >= 1000) {
-          const kb = bytes / 1000;
-          if (kb < 1000) sizeStr = `${kb.toFixed(1)} KB`;
-          else {
-            const mb = kb / 1000;
-            if (mb < 1000) sizeStr = `${mb.toFixed(1)} MB`;
-            else sizeStr = `${(mb / 1000).toFixed(2)} GB`;
-          }
-        }
+        const sizeStr = formatFileSize(detail.size_bytes);
         chips.push(`<span class="metadata-chip chip-size">${sizeStr}</span>`);
       }
       metadataStrip.innerHTML = chips.join("");

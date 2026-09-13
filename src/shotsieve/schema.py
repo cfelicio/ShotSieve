@@ -1,3 +1,5 @@
+# files.file_hash and scan_runs.preset_name are legacy/reserved columns.
+# Preserve them for existing databases and external SQL consumers.
 SCHEMA_SQL = """
 PRAGMA journal_mode=WAL;
 
@@ -134,5 +136,4 @@ SCHEMA_MIGRATIONS = {
     "scan_runs": {
         "files_removed": "ALTER TABLE scan_runs ADD COLUMN files_removed INTEGER NOT NULL DEFAULT 0",
     },
-    "review_state": {},
 }

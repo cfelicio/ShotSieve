@@ -9,7 +9,6 @@ import shotsieve.learned_iqa as learned_iqa_module
 from shotsieve.learned_iqa import (
     configure_runtime_noise_controls,
     install_runtime_warning_filters,
-    runtime_statuses,
 )
 
 
@@ -238,9 +237,6 @@ def test_qalign_is_accelerator_only() -> None:
     assert learned_iqa_module.is_model_runtime_compatible("qalign", torch_version="2.6.0", runtime="cuda") is True
     assert learned_iqa_module.is_model_runtime_compatible("qalign", torch_version=None, runtime="mps") is True
     assert learned_iqa_module.is_model_runtime_compatible("qalign", torch_version="2.6.0", runtime="cpu") is False
-    assert learned_iqa_module.is_model_runtime_compatible("qalign", torch_version="2.6.0", runtime="directml") is False
-
-
 def test_qalign_is_rejected_on_cpu_before_metric_creation(monkeypatch: pytest.MonkeyPatch) -> None:
     class FakePyiqa:
         @staticmethod
@@ -317,14 +313,9 @@ def test_runtime_model_discovery_does_not_readvertise_catalog_on_failure(monkeyp
     assert learned_iqa_module.runtime_curated_learned_models() == ()
 
 
-def test_runtime_compatible_model_names_filters_qalign_from_cpu_and_directml() -> None:
+def test_runtime_compatible_model_names_filters_qalign_from_cpu() -> None:
     models = ["topiq_nr", "clipiqa", "qalign"]
 
-    filtered_directml = learned_iqa_module.runtime_compatible_model_names(
-        models,
-        torch_version="2.11.0+cpu",
-        runtime="directml",
-    )
     filtered_cpu = learned_iqa_module.runtime_compatible_model_names(
         models,
         torch_version="2.11.0+cpu",
@@ -341,8 +332,6 @@ def test_runtime_compatible_model_names_filters_qalign_from_cpu_and_directml() -
         runtime="mps",
     )
 
-    assert "qalign" not in filtered_directml
-    assert filtered_directml == ["topiq_nr", "clipiqa"]
     assert "qalign" not in filtered_cpu
     assert filtered_cpu == ["topiq_nr", "clipiqa"]
     assert filtered_cuda == ["topiq_nr", "clipiqa", "qalign"]
@@ -457,7 +446,7 @@ def test_available_backends_fallback_includes_runtime_and_hardware_when_pyiqa_mi
         learned_iqa_module,
         "_runtime_status_text_from_torch_import",
         lambda import_module=learned_iqa_module.importlib.import_module, system_name=None: (
-            "cuda:available,xpu:unavailable,directml:missing,mps:unsupported,cpu:available"
+            "cuda:available,xpu:unavailable,mps:unsupported,cpu:available"
         ),
     )
     monkeypatch.setattr(
@@ -469,7 +458,7 @@ def test_available_backends_fallback_includes_runtime_and_hardware_when_pyiqa_mi
     payload = learned_iqa_module.available_learned_backends(resource_profile="normal")
 
     assert payload["pyiqa"] == "not-installed"
-    assert payload["runtime_status"] == "cuda:available,xpu:unavailable,directml:missing,mps:unsupported,cpu:available"
+    assert payload["runtime_status"] == "cuda:available,xpu:unavailable,mps:unsupported,cpu:available"
     assert payload["hardware"] == {"cpu_count": 16, "ram_mb": 65536, "vram_mb": 24576}
     assert payload["resource_profile"] == "normal"
     assert isinstance(payload["recommended_batch_sizes"], dict)
@@ -507,39 +496,6 @@ def test_available_backends_tolerates_runtime_probe_exceptions(monkeypatch: pyte
     assert payload["pyiqa"] == "installed"
     assert payload["default_runtime"] == "cpu"
     assert payload["default_device"] == "cpu"
-
-
-def test_runtime_statuses_tolerates_directml_import_runtime_error(monkeypatch: pytest.MonkeyPatch) -> None:
-    from shotsieve import learned_iqa_runtime as runtime_module
-
-    monkeypatch.setattr(runtime_module.sys, "version_info", (3, 12, 0))
-    class NoAccelTorch:
-        @staticmethod
-        def device(name: str) -> str:
-            return name
-
-        class cuda:
-            @staticmethod
-            def is_available() -> bool:
-                return False
-
-        class xpu:
-            @staticmethod
-            def is_available() -> bool:
-                return False
-
-    def import_directml_runtime_error(name: str):
-        if name == "torch_directml":
-            raise RuntimeError("incompatible torch_directml runtime")
-        raise ImportError(name)
-
-    statuses = runtime_statuses(
-        torch_module=NoAccelTorch,
-        import_module=import_directml_runtime_error,
-        system_name="Windows",
-    )
-
-    assert statuses["directml"] == "broken"
 
 
 def test_available_backends_tolerates_incomplete_torch_runtime(monkeypatch: pytest.MonkeyPatch) -> None:

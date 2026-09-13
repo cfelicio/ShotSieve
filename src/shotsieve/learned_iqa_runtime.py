@@ -6,7 +6,6 @@ import logging
 import os
 import platform
 import re
-import sys
 import threading
 import warnings
 
@@ -31,8 +30,8 @@ TORCHSCRIPT_ARCHIVE_WARNING_PATTERN = r"'torch\.load' received a zip file that l
 TRANSFORMERS_GENERATION_FLAGS_WARNING_PATTERN = r"The following generation flags are not valid and may be ignored"
 TRANSFORMERS_RETURN_DICT_DEPRECATION_PATTERN = r"`use_return_dict` is deprecated! Use `return_dict` instead!"
 HF_UNAUTHENTICATED_REQUEST_WARNING_PATTERN = r"Warning: You are sending unauthenticated requests to the HF Hub"
-DEFAULT_RUNTIME_STATUS_TEXT = "cuda:unavailable,xpu:unavailable,directml:missing,mps:unsupported,cpu:available"
-RUNTIME_STATUS_ORDER = ("cuda", "xpu", "directml", "mps", "cpu")
+DEFAULT_RUNTIME_STATUS_TEXT = "cuda:unavailable,xpu:unavailable,mps:unsupported,cpu:available"
+RUNTIME_STATUS_ORDER = ("cuda", "xpu", "mps", "cpu")
 RESOURCE_PROFILES = {
     "aggressive": {"vram_factor": 0.80, "cpu_factor": 2.0, "ram_factor": 0.75},
     "normal": {"vram_factor": 0.50, "cpu_factor": 1.0, "ram_factor": 0.50},
@@ -51,13 +50,6 @@ class ResolvedDevice:
     tensor_device: object
     display_device: str
     fallback_reason: str | None = None
-
-
-@dataclass(frozen=True, slots=True)
-class DirectMLProbe:
-    status: str
-    device: object | None = None
-    cause: str | None = None
 
 
 class LearnedRuntimeUnavailableError(RuntimeError):
@@ -98,8 +90,10 @@ def normalize_device_target(device: str | None, *, system_name: str | None = Non
     normalized = DEVICE_TARGET_ALIASES.get(requested, requested)
     system = current_system_name(system_name)
 
-    if normalized == "amd":
-        return "directml" if system == "Windows" else "amd"
+    if normalized in {"directml", "dml"}:
+        # Keep an old persisted target usable while making the migration visible
+        # in the resolver's fallback reason. The retired runtime is never probed.
+        return "cpu"
 
     if normalized == "apple":
         return "mps" if system == "Darwin" else "apple"
@@ -113,7 +107,7 @@ def auto_runtime_order(system_name: str | None = None) -> tuple[str, ...]:
         return ("mps", "cpu")
     if system == "Linux":
         return ("cuda", "xpu", "cpu")
-    return ("cuda", "xpu", "directml", "cpu")
+    return ("cuda", "xpu", "cpu")
 
 
 def runtime_candidates(requested: str, *, system_name: str | None = None) -> tuple[str, ...]:
@@ -121,12 +115,12 @@ def runtime_candidates(requested: str, *, system_name: str | None = None) -> tup
     if requested == "auto":
         return auto_runtime_order(system)
     if requested == "amd":
-        return ("directml",) if system == "Windows" else ("amd",)
+        return ("cpu",) if system == "Windows" else ("amd",)
     if requested == "apple":
         return ("mps",) if system == "Darwin" else ("apple",)
     if requested == "intel":
-        return ("xpu", "directml") if system == "Windows" else ("xpu",)
-    if requested in {"cuda", "xpu", "directml", "mps", "cpu"}:
+        return ("xpu",)
+    if requested in {"cuda", "xpu", "mps", "cpu"}:
         return (requested,)
     return (requested,)
 
@@ -163,38 +157,15 @@ def _sanitize_runtime_cause(exc: BaseException) -> str:
     return text[:240]
 
 
-def probe_directml_device(*, import_module=importlib.import_module, system_name: str | None = None) -> DirectMLProbe:
-    if current_system_name(system_name) != "Windows":
-        return DirectMLProbe(status="unsupported", cause="DirectML is supported only on Windows.")
-    if sys.version_info < (3, 11) or sys.version_info >= (3, 13):
-        return DirectMLProbe(status="unsupported", cause="The supported DirectML target requires Python 3.11 or 3.12.")
-
-    try:
-        torch_directml = import_module("torch_directml")
-    except ModuleNotFoundError as exc:
-        if exc.name == "torch_directml":
-            return DirectMLProbe(status="missing", cause="Install the Windows DirectML runtime package.")
-        return DirectMLProbe(status="broken", cause=_sanitize_runtime_cause(exc))
-    except ImportError as exc:
-        return DirectMLProbe(status="broken", cause=_sanitize_runtime_cause(exc))
-    except Exception as exc:
-        return DirectMLProbe(status="broken", cause=_sanitize_runtime_cause(exc))
-
-    try:
-        device = torch_directml.device(torch_directml.default_device())
-    except Exception as exc:
-        return DirectMLProbe(status="broken", cause=_sanitize_runtime_cause(exc))
-    return DirectMLProbe(status="available", device=device)
-
-
-def load_directml_device(*, import_module=importlib.import_module) -> object | None:
-    return probe_directml_device(import_module=import_module, system_name="Windows").device
-
-
 def resolve_device(device: str | None, *, torch_module, import_module=importlib.import_module, system_name: str | None = None) -> ResolvedDevice:
     system = current_system_name(system_name)
+    raw_requested = (device or "").strip().casefold()
     requested = normalize_device_target(device, system_name=system)
     failures: list[str] = []
+    if raw_requested in {"directml", "dml"}:
+        failures.append("The previously selected DirectML runtime has been retired; using CPU.")
+    if requested == "amd" and system == "Windows":
+        failures.append("AMD GPU acceleration is not validated on Windows; using CPU until native ROCm support is validated.")
 
     for runtime in runtime_candidates(requested, system_name=system):
         if runtime == "cuda":
@@ -217,13 +188,6 @@ def resolve_device(device: str | None, *, torch_module, import_module=importlib.
                     failures.append(f"XPU device initialization failed: {_sanitize_runtime_cause(exc)}")
             else:
                 failures.append("XPU is unavailable in the installed Torch runtime")
-            continue
-
-        if runtime == "directml":
-            probe = probe_directml_device(import_module=import_module, system_name=system)
-            if probe.device is not None:
-                return ResolvedDevice(requested=requested, runtime="directml", metric_device=probe.device, tensor_device=probe.device, display_device="directml")
-            failures.append(f"DirectML {probe.status}: {probe.cause or 'device probe failed'}")
             continue
 
         if runtime == "mps":
@@ -269,13 +233,10 @@ def resolve_device(device: str | None, *, torch_module, import_module=importlib.
 
 def runtime_statuses(*, torch_module, import_module=importlib.import_module, system_name: str | None = None) -> dict[str, str]:
     system = current_system_name(system_name)
+    _ = import_module
     statuses = {"cpu": "available"}
     statuses["cuda"] = "available" if has_cuda(torch_module) else "unavailable"
     statuses["xpu"] = "available" if has_xpu(torch_module) else ("unsupported" if system == "Darwin" else "unavailable")
-    if system == "Windows":
-        statuses["directml"] = probe_directml_device(import_module=import_module, system_name=system).status
-    else:
-        statuses["directml"] = "unsupported"
     if system == "Darwin":
         statuses["mps"] = "available" if has_mps(torch_module) else "unavailable"
     else:
@@ -618,7 +579,7 @@ def unavailable_backend_payload(*, status: str, error: str | None = None, resour
     catalog = ",".join(supported_learned_models())
     runtime_targets = ",".join(supported_runtime_targets())
     auto_priority = ",".join(auto_runtime_order())
-    vendor_aliases = "nvidia->cuda,amd->directml(windows),intel->xpu/directml,apple->mps"
+    vendor_aliases = "nvidia->cuda,amd->cpu(windows until ROCm),intel->xpu,apple->mps"
     runtime_status_text = _runtime_status_text_from_torch_import(import_module=import_module, system_name=system_name)
     hw = detect_hardware_capabilities()
     vram_mb = _coerce_vram_mb(hw.get("vram_mb"))
@@ -705,7 +666,6 @@ def import_pyiqa_runtime(*, import_module=importlib.import_module):
 __all__ = [
     "DEFAULT_RESOURCE_PROFILE",
     "DEFAULT_RUNTIME_STATUS_TEXT",
-    "DirectMLProbe",
     "HF_UNAUTHENTICATED_REQUEST_WARNING_PATTERN",
     "PKG_RESOURCES_DEPRECATION_PATTERN",
     "RESOURCE_PROFILES",
@@ -738,9 +698,7 @@ __all__ = [
     "install_runtime_warning_filters",
     "invalidate_hw_cache",
     "LearnedRuntimeUnavailableError",
-    "load_directml_device",
     "normalize_device_target",
-    "probe_directml_device",
     "recommended_batch_size",
     "recommended_cpu_workers",
     "resolve_device",

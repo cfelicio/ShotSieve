@@ -402,9 +402,7 @@ def _tensor_grad_context(backend):
         yield
         return
 
-    runtime = getattr(backend, "runtime", None)
-    preferred_context = "no_grad" if runtime == "directml" else "inference_mode"
-    context_factory = getattr(torch_module, preferred_context, None)
+    context_factory = getattr(torch_module, "inference_mode", None)
     if not callable(context_factory):
         context_factory = getattr(torch_module, "no_grad", None)
     if not callable(context_factory):
@@ -459,7 +457,7 @@ def available_learned_backends(*, resource_profile: str | None = None, import_py
     catalog = ",".join(supported_model_names)
     runtime_targets = ",".join(supported_runtime_targets_fn())
     auto_priority = ",".join(auto_runtime_order_fn())
-    vendor_aliases = "nvidia->cuda,amd->directml(windows),intel->xpu/directml,apple->mps"
+    vendor_aliases = "nvidia->cuda,amd->cpu(windows until ROCm),intel->xpu,apple->mps"
 
     try:
         pyiqa, torch = import_pyiqa_runtime_fn()

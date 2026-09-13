@@ -32,7 +32,6 @@ def _new_module(name: str) -> Any:
 def test_learned_iqa_split_runtime_and_catalog_modules_preserve_facade_exports() -> None:
     from shotsieve import learned_iqa_catalog as catalog_module
     from shotsieve import learned_iqa_runtime as runtime_module
-
     class NoCudaTorch:
         @staticmethod
         def device(name: str) -> str:
@@ -308,7 +307,7 @@ def test_arrays_to_tensor_stacks_before_applying_channels_last_and_device_transf
     ]
 
 
-@pytest.mark.parametrize("runtime", ["cpu", "directml", "mps"])
+@pytest.mark.parametrize("runtime", ["cpu", "mps"])
 def test_arrays_to_tensor_skips_pin_memory_and_non_blocking_for_non_cuda_targets(
     runtime: str,
 ) -> None:
@@ -322,10 +321,6 @@ def test_arrays_to_tensor_skips_pin_memory_and_non_blocking_for_non_cuda_targets
 
         def __str__(self) -> str:
             return f"{self.type}:0"
-
-    class FakeDirectMlDevice:
-        def __str__(self) -> str:
-            return "dml:0"
 
     class FakeTensor:
         def __init__(self, label: str) -> None:
@@ -357,11 +352,7 @@ def test_arrays_to_tensor_skips_pin_memory_and_non_blocking_for_non_cuda_targets
             return FakeTensor("batch")
 
     arrays = [np.zeros((4, 4, 3), dtype=np.float32)]
-    tensor_device = {
-        "cpu": FakeTensorDevice("cpu"),
-        "directml": FakeDirectMlDevice(),
-        "mps": FakeTensorDevice("mps"),
-    }[runtime]
+    tensor_device = FakeTensorDevice(runtime)
 
     batch_tensor = cast(FakeTensor, preprocessing_module._arrays_to_tensor(
         arrays,
@@ -449,17 +440,14 @@ def test_learned_model_catalog_exposes_all_supported_backends() -> None:
     assert "musiq-spaq" not in models
     assert "maniqa" not in models
     assert "nima" not in models
-    assert "directml" in runtimes
+    assert "directml" not in runtimes
     assert "intel" in runtimes
     assert "amd" in runtimes
     assert "mps" in runtimes
     assert "apple" in runtimes
 
 
-def test_learned_model_aliases_and_runtime_resolution(monkeypatch: pytest.MonkeyPatch) -> None:
-    from shotsieve import learned_iqa_runtime as runtime_module
-
-    monkeypatch.setattr(runtime_module.sys, "version_info", (3, 12, 0))
+def test_learned_model_aliases_and_runtime_resolution() -> None:
     class NoCudaTorch:
         @staticmethod
         def device(name: str) -> str:
@@ -505,15 +493,6 @@ def test_learned_model_aliases_and_runtime_resolution(monkeypatch: pytest.Monkey
             def is_available() -> bool:
                 return True
 
-    class FakeDirectMlModule:
-        @staticmethod
-        def default_device() -> int:
-            return 0
-
-        @staticmethod
-        def device(index: int) -> str:
-            return f"dml:{index}"
-
     class MpsTorch:
         @staticmethod
         def device(name: str) -> str:
@@ -535,11 +514,6 @@ def test_learned_model_aliases_and_runtime_resolution(monkeypatch: pytest.Monkey
                 def is_available() -> bool:
                     return True
 
-    def import_directml(name: str):
-        if name == "torch_directml":
-            return FakeDirectMlModule
-        raise ImportError(name)
-
     def import_missing(name: str):
         raise ImportError(name)
 
@@ -548,7 +522,7 @@ def test_learned_model_aliases_and_runtime_resolution(monkeypatch: pytest.Monkey
     assert normalize_model_name("Q-Align") == "qalign"
     assert normalize_model_name("Quali-Clip") == "qualiclip"
     assert normalize_device_target("NVIDIA") == "cuda"
-    assert normalize_device_target("AMD", system_name="Windows") == "directml"
+    assert normalize_device_target("AMD", system_name="Windows") == "amd"
     assert normalize_device_target("AMD", system_name="Linux") == "amd"
     assert normalize_device_target("Apple", system_name="Darwin") == "mps"
     assert normalize_device_target("Intel") == "intel"
@@ -559,16 +533,22 @@ def test_learned_model_aliases_and_runtime_resolution(monkeypatch: pytest.Monkey
     assert resolve_device(None, torch_module=CudaTorch, import_module=import_missing, system_name="Linux").runtime == "cuda"
     assert resolve_device("cpu", torch_module=CudaTorch, import_module=import_missing).runtime == "cpu"
     assert resolve_device("intel", torch_module=XpuTorch, import_module=import_missing).runtime == "xpu"
-    assert resolve_device("amd", torch_module=NoCudaTorch, import_module=import_directml, system_name="Windows").runtime == "directml"
+    amd_result = resolve_device("amd", torch_module=NoCudaTorch, import_module=import_missing, system_name="Windows")
+    assert amd_result.runtime == "cpu"
+    assert amd_result.fallback_reason is not None
+    assert "ROCm" in amd_result.fallback_reason
+    legacy_result = resolve_device("directml", torch_module=NoCudaTorch, import_module=import_missing, system_name="Windows")
+    assert legacy_result.runtime == "cpu"
+    assert legacy_result.fallback_reason is not None
+    assert "retired" in legacy_result.fallback_reason
     assert resolve_device("apple", torch_module=MpsTorch, import_module=import_missing, system_name="Darwin").runtime == "mps"
     assert resolve_device("auto", torch_module=MpsTorch, import_module=import_missing, system_name="Darwin").runtime == "mps"
 
-    statuses = runtime_statuses(torch_module=NoCudaTorch, import_module=import_directml, system_name="Windows")
+    statuses = runtime_statuses(torch_module=NoCudaTorch, import_module=import_missing, system_name="Windows")
     assert statuses == {
         "cpu": "available",
         "cuda": "unavailable",
         "xpu": "unavailable",
-        "directml": "available",
         "mps": "unsupported",
     }
 
@@ -577,7 +557,6 @@ def test_learned_model_aliases_and_runtime_resolution(monkeypatch: pytest.Monkey
         "cpu": "available",
         "cuda": "unavailable",
         "xpu": "unsupported",
-        "directml": "unsupported",
         "mps": "available",
     }
 

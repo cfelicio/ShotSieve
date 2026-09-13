@@ -134,7 +134,7 @@
   }
 
   function isAcceleratedRuntime(runtime) {
-    return ["auto", "cuda", "xpu", "directml", "nvidia", "intel", "amd", "apple", "mps"].includes(String(runtime || "").toLowerCase());
+    return ["auto", "cuda", "xpu", "nvidia", "intel", "apple", "mps"].includes(String(runtime || "").toLowerCase());
   }
 
   function scoreBatchSize(modelName, runtime, serverRecommendations) {
@@ -343,7 +343,6 @@
     const labels = {
       cuda: "CUDA",
       xpu: "XPU",
-      directml: "DirectML",
       mps: "MPS",
       cpu: "CPU",
       auto: "Auto",
@@ -372,7 +371,7 @@
   }
 
   function summarizeAccelerators(statusMap) {
-    const orderedAccelerators = ["cuda", "xpu", "directml", "mps"];
+    const orderedAccelerators = ["cuda", "xpu", "mps"];
     return orderedAccelerators
       .map((runtime) => {
         const status = statusMap[runtime] || "unknown";
@@ -382,7 +381,7 @@
   }
 
   function summarizeAutoPriority(options) {
-    const priorityRaw = String(options?.learned?.auto_runtime_priority || "cuda,xpu,directml,cpu");
+    const priorityRaw = String(options?.learned?.auto_runtime_priority || "cuda,xpu,cpu");
     const priority = priorityRaw
       .split(",")
       .map((runtime) => runtime.trim())

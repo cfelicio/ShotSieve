@@ -1,5 +1,5 @@
-# Tested non-DirectML Torch pair for CPU, CUDA, and Apple MPS release targets.
+# Tested Torch pair for CPU, CUDA, and Apple MPS release targets.
 # The installer selects the CPU or CUDA index where appropriate; this file
 # constrains the package versions on both indexes.
-torch==2.13.0
-torchvision==0.28.0
+torch==2.14.0
+torchvision==0.29.0

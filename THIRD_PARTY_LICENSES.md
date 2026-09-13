@@ -15,10 +15,10 @@ not a blanket permission for every upstream asset: package code, checkpoint
 files, and any base model can have different terms. The exact package versions
 used by a release must be taken from that release's target constraints and
 audited before publication. The current tested model integration selection is
-`pyiqa==0.1.16`, `timm==1.0.28`, `huggingface-hub==1.24.0`,
-`transformers==5.14.1`, and `openai-clip==1.0.1`; non-DirectML targets use
-`torch==2.13.0` and `torchvision==0.28.0`, while the Windows DirectML target
-uses its separate `scripts/release-constraints-windows-dml.txt` trio.
+`pyiqa==0.1.16`, `timm==1.0.29`, `huggingface-hub==1.31.0`,
+`transformers==5.17.0`, and `openai-clip==1.0.1`; supported targets use
+`torch==2.14.0` and `torchvision==0.29.0`. The retired DirectML package and
+target are not part of the supported dependency or release matrix.
 
 ---
 
@@ -59,7 +59,7 @@ ShotSieve product catalog.
 - **Implementation:** pyiqa's Q-Align integration, which downloads the Q-Future `one-align` model from Hugging Face
 - **Repository:** [Q-Future/Q-Align](https://github.com/Q-Future/Q-Align)
 - **Terms:** subject to the licenses of the Q-Align implementation, its model card, and the underlying mPLUG-Owl2/LLaMA base models. Users must treat the downloaded weights as research-use only unless the upstream terms clearly grant broader rights.
-- **ShotSieve runtime boundary:** supported for CUDA and Apple MPS only; not supported on CPU or DirectML. Q-Align weights are never bundled and are downloaded only during explicit model preparation or scoring.
+- **ShotSieve runtime boundary:** supported for CUDA and Apple MPS only; not supported on CPU or XPU. Q-Align weights are never bundled and are downloaded only during explicit model preparation or scoring.
 - **Authors:** Haoning Wu et al.
 
 ---
