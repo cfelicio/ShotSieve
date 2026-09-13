@@ -15,7 +15,7 @@ import urllib.request
 import zipfile
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, NoReturn
 
 from shotsieve.release_targets import runtime_pack_release_targets
 from shotsieve import runtime_support
@@ -26,6 +26,7 @@ PORTABLE_RUNTIME_DIRNAME = "runtime"
 DEFAULT_RELEASE_REPO = "cfelicio/ShotSieve"
 DEFAULT_MANIFEST_URL = "https://github.com/cfelicio/ShotSieve/releases/latest/download/bootstrap-manifest.json"
 DEFAULT_DOWNLOAD_TIMEOUT_SECONDS = 60
+SHA256_PATTERN = re.compile(r"^[0-9a-fA-F]{64}$")
 
 
 def _battr(name: str, fallback: Any) -> Any:
@@ -100,7 +101,7 @@ def fetch_manifest(manifest_url: str) -> dict[str, Any]:
         open_func = _battr("open_url", open_url)
         with open_func(manifest_url) as response:
             payload = response.read().decode("utf-8")
-        return json.loads(payload)
+        manifest = json.loads(payload)
     except (urllib.error.HTTPError, urllib.error.URLError, OSError, json.JSONDecodeError) as exc:
         if manifest_url != DEFAULT_MANIFEST_URL:
             err_func = _battr("_manifest_fetch_error_message", _manifest_fetch_error_message)
@@ -110,10 +111,15 @@ def fetch_manifest(manifest_url: str) -> dict[str, Any]:
             fallback_func = _battr("_try_manifest_from_latest_release_api", _try_manifest_from_latest_release_api)
             github_fallback = fallback_func(manifest_url, status_code=exc.code)
             if github_fallback is not None:
-                return github_fallback
+                manifest = github_fallback
+            else:
+                default_func = _battr("_build_default_latest_manifest", _build_default_latest_manifest)
+                manifest = default_func(DEFAULT_RELEASE_REPO)
+        else:
+            default_func = _battr("_build_default_latest_manifest", _build_default_latest_manifest)
+            manifest = default_func(DEFAULT_RELEASE_REPO)
 
-        default_func = _battr("_build_default_latest_manifest", _build_default_latest_manifest)
-        return default_func(DEFAULT_RELEASE_REPO)
+    return _validate_manifest_digests(manifest)
 
 
 def select_manifest_asset(manifest: dict[str, Any], target_id: str) -> dict[str, Any]:
@@ -145,11 +151,13 @@ def parse_runtime_asset(entry: dict[str, Any]) -> RuntimeAsset:
         "archive_name",
         "executable_name",
         "variant_folder_name",
+        "sha256",
     )
     missing = [key for key in required_keys if key not in entry]
     if missing:
         raise SystemExit(f"Bootstrap manifest entry is missing keys: {', '.join(missing)}")
 
+    digest = _validate_sha256(entry["sha256"], target_id=entry.get("id"))
     return RuntimeAsset(
         id=str(entry["id"]),
         platform=str(entry["platform"]),
@@ -158,8 +166,44 @@ def parse_runtime_asset(entry: dict[str, Any]) -> RuntimeAsset:
         archive_name=str(entry["archive_name"]),
         executable_name=str(entry["executable_name"]),
         variant_folder_name=str(entry["variant_folder_name"]),
-        sha256=str(entry["sha256"]) if entry.get("sha256") else None,
+        sha256=digest,
     )
+
+
+def _checksum_error(target_id: object = None) -> str:
+    target_detail = f" for target '{target_id}'" if isinstance(target_id, str) and target_id else ""
+    return (
+        "Bootstrap manifest does not contain a valid 64-digit SHA-256 archive digest"
+        f"{target_detail}. Refusing to acquire, extract, or launch the runtime. "
+        "Use a valid release manifest generated for the same release, or provide a manual package "
+        "with its verified digest."
+    )
+
+
+def _validate_sha256(value: object, *, target_id: object = None) -> str:
+    if not isinstance(value, str):
+        raise SystemExit(_checksum_error(target_id))
+
+    digest = value.strip()
+    if SHA256_PATTERN.fullmatch(digest) is None:
+        raise SystemExit(_checksum_error(target_id))
+    return digest.casefold()
+
+
+def _validate_manifest_digests(manifest: object) -> dict[str, Any]:
+    if not isinstance(manifest, dict):
+        raise SystemExit("Bootstrap manifest must be a JSON object")
+
+    raw_assets = manifest.get("assets")
+    if not isinstance(raw_assets, list):
+        raise SystemExit("Bootstrap manifest is missing an 'assets' list")
+
+    for entry in raw_assets:
+        if not isinstance(entry, dict):
+            raise SystemExit("Bootstrap manifest contains a non-object asset entry")
+        _validate_sha256(entry.get("sha256"), target_id=entry.get("id"))
+
+    return manifest
 
 
 def sha256_file(path: Path) -> str:
@@ -365,11 +409,15 @@ def _try_manifest_from_latest_release_api(manifest_url: str, *, status_code: int
     except Exception:
         return None
 
+    if not isinstance(release_payload, dict):
+        return None
+
     raw_assets = release_payload.get("assets")
     if not isinstance(raw_assets, list):
         return None
 
     download_url_by_name: dict[str, str] = {}
+    digest_by_name: dict[str, str | None] = {}
     for entry in raw_assets:
         if not isinstance(entry, dict):
             continue
@@ -377,12 +425,20 @@ def _try_manifest_from_latest_release_api(manifest_url: str, *, status_code: int
         browser_download_url = entry.get("browser_download_url")
         if isinstance(asset_name, str) and isinstance(browser_download_url, str):
             download_url_by_name[asset_name] = browser_download_url
+            digest_by_name[asset_name] = _github_release_asset_sha256(entry)
+
+    release_tag = release_payload.get("tag_name")
+    if not isinstance(release_tag, str) or not release_tag.strip():
+        return None
 
     manifest_assets: list[dict[str, Any]] = []
     for target in runtime_pack_release_targets():
         asset_url = download_url_by_name.get(target.archiveName)
         if not asset_url:
             continue
+        digest = digest_by_name.get(target.archiveName)
+        if digest is None:
+            return None
         manifest_assets.append(
             {
                 "id": target.id,
@@ -392,7 +448,7 @@ def _try_manifest_from_latest_release_api(manifest_url: str, *, status_code: int
                 "executable_name": target.executableName,
                 "variant_folder_name": target.variantFolderName,
                 "url": asset_url,
-                "sha256": None,
+                "sha256": digest,
             }
         )
 
@@ -402,33 +458,28 @@ def _try_manifest_from_latest_release_api(manifest_url: str, *, status_code: int
     return {
         "version": 1,
         "repo": f"{owner}/{repo}",
-        "release_tag": release_payload.get("tag_name", "latest"),
+        "release_tag": release_tag,
         "assets": manifest_assets,
     }
 
 
-def _build_default_latest_manifest(repo: str) -> dict[str, Any]:
-    assets: list[dict[str, Any]] = []
-    for target in runtime_pack_release_targets():
-        assets.append(
-            {
-                "id": target.id,
-                "platform": target.platform,
-                "runtime": target.runtime,
-                "archive_name": target.archiveName,
-                "executable_name": target.executableName,
-                "variant_folder_name": target.variantFolderName,
-                "url": f"https://github.com/{repo}/releases/latest/download/{target.archiveName}",
-                "sha256": None,
-            }
-        )
+def _github_release_asset_sha256(entry: dict[str, Any]) -> str | None:
+    digest = entry.get("digest")
+    if not isinstance(digest, str):
+        return None
 
-    return {
-        "version": 1,
-        "repo": repo,
-        "release_tag": "latest",
-        "assets": assets,
-    }
+    algorithm, separator, value = digest.partition(":")
+    if separator != ":" or algorithm.casefold() != "sha256":
+        return None
+    return value
+
+
+def _build_default_latest_manifest(repo: str) -> NoReturn:
+    raise SystemExit(
+        f"No checksummed release manifest with a valid 64-digit SHA-256 archive digest is available for '{repo}'. "
+        "Refusing to acquire, extract, or launch the runtime. Use a valid release manifest generated "
+        "for the same release, or provide a manual package with its verified digest."
+    )
 
 
 def _find_runtime_executable(install_dir: Path, asset: RuntimeAsset) -> Path:
@@ -491,6 +542,8 @@ def ensure_runtime_asset(asset: RuntimeAsset, *, runtime_root: Path, force_refre
         if colocated is not None:
             return colocated
 
+    expected_sha256 = _validate_sha256(asset.sha256, target_id=asset.id)
+
     downloads_dir = runtime_root / "downloads"
     installs_dir = runtime_root / "installs"
     install_dir = installs_dir / asset.id
@@ -498,11 +551,11 @@ def ensure_runtime_asset(asset: RuntimeAsset, *, runtime_root: Path, force_refre
 
     find_exe_func = _battr("_find_runtime_executable", _find_runtime_executable)
     if not force_refresh and install_dir.exists() and marker_path.exists():
-        if asset.sha256:
-            existing_hash = marker_path.read_text(encoding="utf-8").strip()
-            if existing_hash == asset.sha256:
-                return find_exe_func(install_dir, asset)
-        else:
+        try:
+            existing_hash = marker_path.read_text(encoding="utf-8").strip().casefold()
+        except (OSError, UnicodeError):
+            existing_hash = ""
+        if existing_hash == expected_sha256:
             try:
                 return find_exe_func(install_dir, asset)
             except SystemExit:
@@ -519,13 +572,12 @@ def ensure_runtime_asset(asset: RuntimeAsset, *, runtime_root: Path, force_refre
         download_func = _battr("_download_archive_with_local_fallback", _download_archive_with_local_fallback)
         download_func(asset=asset, archive_path=archive_path)
 
-    if asset.sha256:
-        sha_func = _battr("sha256_file", sha256_file)
-        downloaded_hash = sha_func(archive_path)
-        if downloaded_hash != asset.sha256:
-            raise SystemExit(
-                f"Downloaded archive hash mismatch for target '{asset.id}'. Expected {asset.sha256}, got {downloaded_hash}."
-            )
+    sha_func = _battr("sha256_file", sha256_file)
+    downloaded_hash = sha_func(archive_path).strip().casefold()
+    if downloaded_hash != expected_sha256:
+        raise SystemExit(
+            f"Downloaded archive hash mismatch for target '{asset.id}'. Expected {expected_sha256}, got {downloaded_hash}."
+        )
 
     extract_func = _battr("extract_archive", extract_archive)
     with tempfile.TemporaryDirectory(prefix=f"shotsieve-bootstrap-{asset.id}-") as temp_dir:
@@ -536,7 +588,7 @@ def ensure_runtime_asset(asset: RuntimeAsset, *, runtime_root: Path, force_refre
             shutil.rmtree(install_dir)
         shutil.move(str(temp_path), str(install_dir))
 
-    marker_path.write_text(asset.sha256 or "", encoding="utf-8")
+    marker_path.write_text(expected_sha256, encoding="utf-8")
 
     try:
         archive_path.unlink(missing_ok=True)

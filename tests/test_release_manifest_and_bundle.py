@@ -115,9 +115,48 @@ def test_release_targets_module_does_not_define_bootstrap_matrix_helpers() -> No
     assert "def bootstrap_release_matrix" not in module_text
 
 
-def test_scripts_folder_no_longer_contains_bootstrap_release_helpers() -> None:
-    assert not BOOTSTRAP_MANIFEST_SCRIPT_PATH.exists()
+def test_scripts_folder_contains_only_the_checksummed_manifest_generator() -> None:
+    assert BOOTSTRAP_MANIFEST_SCRIPT_PATH.exists()
     assert not EMBED_BOOTSTRAP_MANIFEST_SCRIPT_PATH.exists()
+
+
+def test_bootstrap_manifest_generator_hashes_each_runtime_archive(tmp_path: Path) -> None:
+    spec = importlib.util.spec_from_file_location("generate_bootstrap_manifest_script", BOOTSTRAP_MANIFEST_SCRIPT_PATH)
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    archive_root = tmp_path / "release-assets"
+    archive_root.mkdir()
+    for target in module.runtime_pack_release_targets():
+        (archive_root / target.archiveName).write_bytes(target.id.encode("utf-8"))
+
+    manifest = module.build_manifest(
+        archive_root=archive_root,
+        release_tag="v9.9.9",
+        repository="example/ShotSieve",
+    )
+
+    assets = {asset["id"]: asset for asset in cast(list[dict[str, object]], manifest["assets"])}
+    assert set(assets) == {target.id for target in module.runtime_pack_release_targets()}
+    cpu_asset = assets["windows-cpu"]
+    assert cpu_asset["url"] == (
+        "https://github.com/example/ShotSieve/releases/download/v9.9.9/ShotSieve-windows-cpu-x64.zip"
+    )
+    assert cpu_asset["sha256"] == module.sha256_file(archive_root / "ShotSieve-windows-cpu-x64.zip")
+    assert len(cast(str, cpu_asset["sha256"])) == 64
+
+
+def test_bootstrap_manifest_generator_rejects_missing_runtime_archive(tmp_path: Path) -> None:
+    spec = importlib.util.spec_from_file_location("generate_bootstrap_manifest_missing", BOOTSTRAP_MANIFEST_SCRIPT_PATH)
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    with pytest.raises(SystemExit, match="archive .* was not found"):
+        module.build_manifest(archive_root=tmp_path, release_tag="v9.9.9")
 
 
 def test_bootstrap_pyinstaller_spec_has_been_removed() -> None:

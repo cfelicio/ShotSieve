@@ -62,6 +62,14 @@ Startup/runtime notes:
 - Installed packages outside a source checkout fall back to `%LOCALAPPDATA%\ShotSieve` on Windows, `%APPDATA%\ShotSieve` as a Windows fallback, or `~/.shotsieve` when platform app-data variables are unavailable
 - On any install style, `--data-dir` overrides the default location
 
+### Runtime archive integrity
+
+The bootstrap path accepts only runtime manifests whose acquired archives have a valid, 64-character SHA-256 digest. The digest is checked against downloaded archives and local fallback archives before extraction. Cached installations are reusable only when their `.asset-sha256` marker matches the current manifest digest; an old empty marker, a missing marker, or a malformed marker requires verified reinstallation. A missing, malformed, or mismatched digest stops acquisition and launch with guidance to use a release manifest generated for the same release or a manually verified package.
+
+Release manifests are generated from the exact built archives with `scripts/generate_bootstrap_manifest.py`. The generated `bootstrap-manifest.json` records the release tag, archive URLs, and per-archive SHA-256 values, and is published with the runtime-pack archives. A checksum detects transfer or storage mismatch against the publisher's value; it does not establish publisher identity or replace signing, SBOMs, or broader artifact provenance.
+
+This check covers archives acquired by the bootstrap path. An explicitly supplied or colocated executable in a frozen bundle is a separate trust boundary and is accepted as supplied; the bootstrap does not hash that executable. Verify the containing bundle through its distribution channel when using that path.
+
 On startup, `shotsieve-desktop` may attempt sidecar installation or repair for missing learned-IQA dependencies and CUDA PyTorch runtimes. Current controls:
 
 - `SHOTSIEVE_BOOTSTRAP_AUTO_INSTALL_TORCH=1` to auto-install CUDA-sidecar PyTorch without prompting
@@ -158,6 +166,8 @@ Tier 1 runtime-pack targets are currently defined for:
 - macOS CPU and Apple Silicon MPS
 
 The target matrix lives in `src/shotsieve/release_targets.py` and is emitted by `scripts/release_target_matrix.py`.
+
+After all runtime-pack build jobs finish, the release workflow runs `scripts/generate_bootstrap_manifest.py` over the downloaded archives and publishes `bootstrap-manifest.json` alongside them. For a local fixture or release rehearsal, use the same generator with `--archive-root`, `--output`, and `--release-tag`; it fails if any target archive is missing or ambiguous.
 
 Prepare release references first, then publish the tag. The prep helper updates the package version files and ensures the changelog has an entry for the release:
 

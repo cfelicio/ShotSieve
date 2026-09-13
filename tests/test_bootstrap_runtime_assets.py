@@ -37,6 +37,7 @@ def test_ensure_runtime_asset_falls_back_to_local_archive_when_download_fails(
     local_archive = build_root / archive_name
     with zipfile.ZipFile(local_archive, "w", compression=zipfile.ZIP_DEFLATED) as archive:
         archive.writestr(f"{variant_folder}/{executable_name}", "fake-binary")
+    archive_sha256 = bootstrap_module.sha256_file(local_archive)
 
     monkeypatch.chdir(build_root)
 
@@ -56,7 +57,7 @@ def test_ensure_runtime_asset_falls_back_to_local_archive_when_download_fails(
         archive_name=archive_name,
         executable_name=executable_name,
         variant_folder_name=variant_folder,
-        sha256=None,
+        sha256=archive_sha256,
     )
 
     executable = bootstrap_module.ensure_runtime_asset(asset, runtime_root=tmp_path / "runtime")
@@ -81,7 +82,7 @@ def test_ensure_runtime_asset_raises_when_download_fails_and_no_local_archive(
         archive_name="ShotSieve-windows-cpu-x64.zip",
         executable_name="ShotSieve-CPU.exe",
         variant_folder_name="ShotSieve-windows-cpu",
-        sha256=None,
+        sha256="a" * 64,
     )
 
     def fake_open_url(url: str):
@@ -93,7 +94,7 @@ def test_ensure_runtime_asset_raises_when_download_fails_and_no_local_archive(
         bootstrap_module.ensure_runtime_asset(asset, runtime_root=tmp_path)
 
 
-def test_ensure_runtime_asset_reuses_existing_install_without_sha_and_without_archive(
+def test_ensure_runtime_asset_does_not_reuse_old_empty_marker_without_verified_archive(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -111,6 +112,7 @@ def test_ensure_runtime_asset_reuses_existing_install_without_sha_and_without_ar
         raise _not_found_http_error(url)
 
     monkeypatch.setattr(bootstrap_module, "open_url", fake_open_url)
+    monkeypatch.setattr(bootstrap_module, "find_local_runtime_archive", lambda archive_name: None)
 
     asset = bootstrap_module.RuntimeAsset(
         id="windows-nvidia",
@@ -120,13 +122,59 @@ def test_ensure_runtime_asset_reuses_existing_install_without_sha_and_without_ar
         archive_name="ShotSieve-windows-nvidia-x64.zip",
         executable_name="ShotSieve-NVIDIA.exe",
         variant_folder_name="ShotSieve-windows-nvidia",
-        sha256=None,
+        sha256="a" * 64,
     )
 
-    resolved = bootstrap_module.ensure_runtime_asset(asset, runtime_root=runtime_root)
+    with pytest.raises(SystemExit, match="Failed to download runtime archive"):
+        bootstrap_module.ensure_runtime_asset(asset, runtime_root=runtime_root)
 
-    assert resolved.resolve() == executable.resolve()
-    assert called_urls == []
+    assert called_urls == [asset.url]
+
+
+def test_ensure_runtime_asset_rejects_malformed_digest_before_download(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    asset = bootstrap_module.RuntimeAsset(
+        id="windows-cpu",
+        platform="windows",
+        runtime="cpu",
+        url="https://example.invalid/runtime.zip",
+        archive_name="runtime.zip",
+        executable_name="ShotSieve-CPU.exe",
+        variant_folder_name="ShotSieve-windows-cpu",
+        sha256="not-a-sha256",
+    )
+    monkeypatch.setattr(bootstrap_module, "open_url", lambda url: pytest.fail(f"downloaded {url}"))
+
+    with pytest.raises(SystemExit, match="valid 64-digit SHA-256"):
+        bootstrap_module.ensure_runtime_asset(asset, runtime_root=tmp_path)
+
+
+def test_ensure_runtime_asset_rejects_mismatched_archive_before_extraction(
+    tmp_path: Path,
+) -> None:
+    archive_name = "ShotSieve-windows-cpu-x64.zip"
+    archive_path = tmp_path / "downloads" / archive_name
+    archive_path.parent.mkdir(parents=True)
+    with zipfile.ZipFile(archive_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr("ShotSieve-windows-cpu/ShotSieve-CPU.exe", "fake-binary")
+
+    asset = bootstrap_module.RuntimeAsset(
+        id="windows-cpu",
+        platform="windows",
+        runtime="cpu",
+        url="https://example.invalid/runtime.zip",
+        archive_name=archive_name,
+        executable_name="ShotSieve-CPU.exe",
+        variant_folder_name="ShotSieve-windows-cpu",
+        sha256="b" * 64,
+    )
+
+    with pytest.raises(SystemExit, match="Downloaded archive hash mismatch"):
+        bootstrap_module.ensure_runtime_asset(asset, runtime_root=tmp_path)
+
+    assert not (tmp_path / "installs" / asset.id).exists()
 
 
 def test_ensure_runtime_asset_prefers_colocated_frozen_runtime_executable(

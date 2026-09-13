@@ -226,15 +226,32 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/v')
 
     steps:
+      - name: Checkout release tooling
+        uses: actions/checkout@v4
+
       - name: Download all build artifacts
         uses: actions/download-artifact@v4
         with:
           path: release-assets
 
+      - name: Set up Python for manifest generation
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Generate checksummed bootstrap manifest
+        run: |
+          python scripts/generate_bootstrap_manifest.py \
+            --archive-root release-assets \
+            --output release-assets/bootstrap-manifest.json \
+            --release-tag "${GITHUB_REF_NAME}" \
+            --repository "${GITHUB_REPOSITORY}"
+
       - name: Publish GitHub release
         uses: softprops/action-gh-release@v2
         with:
           files: |
+            release-assets/bootstrap-manifest.json
             release-assets/**/*.whl
             release-assets/**/*.zip
             release-assets/**/*.tar.gz

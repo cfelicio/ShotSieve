@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from email.message import Message
+import io
+import json
 import sys
 import types
 from pathlib import Path
@@ -136,7 +138,7 @@ def test_fetch_manifest_raises_friendly_error_for_non_default_manifest(monkeypat
         bootstrap_module.fetch_manifest("https://example.invalid/bootstrap-manifest.json")
 
 
-def test_fetch_manifest_uses_static_default_fallback_when_default_manifest_unreachable(
+def test_fetch_manifest_rejects_unverified_static_fallback_when_default_manifest_unreachable(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     def fake_urlopen(request, timeout: int):
@@ -145,11 +147,57 @@ def test_fetch_manifest_uses_static_default_fallback_when_default_manifest_unrea
 
     monkeypatch.setattr(bootstrap_module.urllib.request, "urlopen", fake_urlopen)
 
+    with pytest.raises(SystemExit, match="checksummed release manifest.*valid release manifest.*manual package"):
+        bootstrap_module.fetch_manifest(bootstrap_module.DEFAULT_MANIFEST_URL)
+
+
+def test_parse_runtime_asset_requires_a_valid_sha256_digest() -> None:
+    entry = {
+        "id": "windows-cpu",
+        "platform": "windows",
+        "runtime": "cpu",
+        "url": "https://example.invalid/runtime.zip",
+        "archive_name": "runtime.zip",
+        "executable_name": "ShotSieve-CPU.exe",
+        "variant_folder_name": "ShotSieve-windows-cpu",
+    }
+
+    with pytest.raises(SystemExit, match="missing keys: sha256"):
+        bootstrap_module.parse_runtime_asset(entry)
+
+    entry["sha256"] = "z" * 64
+    with pytest.raises(SystemExit, match="valid 64-digit SHA-256"):
+        bootstrap_module.parse_runtime_asset(entry)
+
+
+def test_fetch_manifest_uses_release_api_digest_for_404_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    release_tag = "v9.9.9"
+    release_payload = {
+        "tag_name": release_tag,
+        "assets": [
+            {
+                "name": "ShotSieve-windows-cpu-x64.zip",
+                "browser_download_url": "https://github.com/example/ShotSieve/releases/download/v9.9.9/ShotSieve-windows-cpu-x64.zip",
+                "digest": "sha256:" + "a" * 64,
+            }
+        ],
+    }
+
+    def fake_open_url(url: str):
+        if url == bootstrap_module.DEFAULT_MANIFEST_URL:
+            raise _not_found_http_error(url)
+        assert url == "https://api.github.com/repos/cfelicio/ShotSieve/releases/latest"
+        return io.BytesIO(json.dumps(release_payload).encode("utf-8"))
+
+    monkeypatch.setattr(bootstrap_module, "open_url", fake_open_url)
+
     manifest = bootstrap_module.fetch_manifest(bootstrap_module.DEFAULT_MANIFEST_URL)
 
-    assert manifest["release_tag"] == "latest"
-    assert manifest["repo"] == "cfelicio/ShotSieve"
-    assert any(asset["id"] == "windows-cpu" for asset in manifest["assets"])
+    assert manifest["release_tag"] == release_tag
+    asset = bootstrap_module.select_manifest_asset(manifest, "windows-cpu")
+    assert asset["sha256"] == "a" * 64
 
 
 def test_find_local_runtime_archive_in_parent_dist_root_for_frozen_launcher_layout(
