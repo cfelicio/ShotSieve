@@ -146,7 +146,7 @@ CI runs the offline suite for pull requests and direct pushes to `main`. It also
 
 ## Performance measurement
 
-Performance diagnostics are opt-in and do not run as part of the ordinary test suite. The synthetic 60,000-row SQLite baseline and the procedure for collecting local real-photo scan, preview, and learned-IQA measurements are documented in [performance-measurement.md](./performance-measurement.md).
+Performance diagnostics are opt-in and do not run as part of the ordinary test suite. The synthetic 100,000-active-row SQLite baseline now measures global and active deep Review navigation, while the local utility records the same list/count/revision timings and query plans alongside scan, preview, and learned-IQA measurements. The procedure is documented in [performance-measurement.md](./performance-measurement.md).
 
 Use that guide before changing indexes, pagination, or catalog storage behavior. It explains the required environment notes and separates database-query results from filesystem, preview, model-startup, and inference costs.
 

@@ -11,19 +11,30 @@ import sys
 from collections import Counter
 from dataclasses import asdict
 from pathlib import Path
-from typing import Any, Callable, TypeVar
+from typing import Callable, TypeVar
 
 from shotsieve.config import DEFAULT_SUPPORTED_EXTENSIONS, HEIF_EXTENSIONS, RAW_CAMERA_EXTENSIONS
 from shotsieve.db import database, initialize_database, root_path_filter
 from shotsieve.performance import explain_query_plan, monotonic_seconds
 from shotsieve.preview import generate_preview
 from shotsieve.review import count_review_files, list_review_files, review_overview, review_selection_revision
+from shotsieve.review_filters import SORT_ORDERS, _build_review_browser_where
 from shotsieve.scanner import scan_root
 from shotsieve.scoring import count_score_rows, fetch_score_rows
 
 
 _T = TypeVar("_T")
 _STANDARD_EXTENSIONS = frozenset({".jpg", ".jpeg", ".png", ".tif", ".tiff"})
+_REVIEW_PAGE_SIZE = 60
+_REVIEW_NAVIGATION_SORTS = ("score_desc", "path", "date_desc")
+_REVIEW_FILTER_CASES: tuple[tuple[str, dict[str, object]], ...] = (
+    ("score_band", {"min_score": 25.0, "max_score": 75.0}),
+    ("jpeg", {"formats": ["jpeg"]}),
+    ("unmarked", {"marked": "none"}),
+    ("metadata_valid", {"metadata": "valid"}),
+    ("issues", {"issues": "issues"}),
+    ("path_search", {"query": "."}),
+)
 
 
 def _measure(timings_ms: dict[str, float], label: str, action: Callable[[], _T]) -> _T:
@@ -64,6 +75,244 @@ def _preview_samples(root: Path, *, per_group: int) -> dict[str, list[Path]]:
         if all(len(paths) >= per_group for paths in selected.values()):
             break
     return selected
+
+
+def _review_page_offsets(total: int) -> dict[str, int]:
+    last_offset = max(0, total - _REVIEW_PAGE_SIZE)
+    return {
+        "early": 0,
+        "middle": max(0, (total // 2) - (_REVIEW_PAGE_SIZE // 2)),
+        "deep": last_offset,
+    }
+
+
+def _review_query_plan(
+    connection: sqlite3.Connection,
+    *,
+    root: str | None,
+    filter_options: dict[str, object],
+    operation: str,
+    sort: str | None = None,
+    offset: int = 0,
+) -> list[str]:
+    where_clause, params = _build_review_browser_where(root=root, **filter_options)
+    joins = """
+        FROM files
+        LEFT JOIN scores ON scores.file_id = files.id
+        LEFT JOIN review_state ON review_state.file_id = files.id
+    """
+    if operation == "count":
+        sql = f"SELECT COUNT(*) AS total {joins} {where_clause}"
+    elif operation == "revision":
+        sql = f"""
+            SELECT
+                COUNT(*) AS total,
+                COALESCE(MIN(files.id), 0) AS min_id,
+                COALESCE(MAX(files.id), 0) AS max_id,
+                COALESCE(SUM(files.id), 0) AS sum_id,
+                COALESCE(SUM(files.id * files.id), 0) AS sum_sq_id
+            {joins}
+            {where_clause}
+        """
+    elif operation == "list":
+        if sort not in SORT_ORDERS:
+            raise ValueError(f"Unsupported performance sort: {sort}")
+        sql = f"""
+            SELECT files.id, files.path, files.format, files.preview_status, files.preview_path,
+                   files.width, files.height, files.size_bytes, files.capture_time, files.last_error,
+                   scores.overall_score,
+                   scores.learned_backend, scores.learned_score_normalized, scores.learned_confidence,
+                   COALESCE(review_state.decision_state, 'pending') AS decision_state,
+                   COALESCE(review_state.delete_marked, 0) AS delete_marked,
+                   COALESCE(review_state.export_marked, 0) AS export_marked,
+                   review_state.updated_time
+            {joins}
+            {where_clause}
+            ORDER BY {SORT_ORDERS[sort]}
+            LIMIT ? OFFSET ?
+        """
+        params.extend([_REVIEW_PAGE_SIZE, offset])
+    else:
+        raise ValueError(f"Unsupported performance operation: {operation}")
+    return explain_query_plan(connection, sql, params)
+
+
+def _measure_review_query(
+    connection: sqlite3.Connection,
+    *,
+    measurements: list[dict[str, object]],
+    query_plans: list[dict[str, object]],
+    scope: str,
+    root: str | None,
+    filter_name: str,
+    filter_options: dict[str, object],
+    operation: str,
+    sort: str | None = None,
+    page: str | None = None,
+    offset: int = 0,
+) -> object:
+    query_id_parts = [scope, filter_name, operation]
+    if sort:
+        query_id_parts.append(sort)
+    if page:
+        query_id_parts.append(page)
+    query_id = ".".join(query_id_parts)
+    query_plans.append({
+        "query_id": query_id,
+        "scope": scope,
+        "filter": filter_name,
+        "operation": operation,
+        "sort": sort,
+        "page": page,
+        "details": _review_query_plan(
+            connection,
+            root=root,
+            filter_options=filter_options,
+            operation=operation,
+            sort=sort,
+            offset=offset,
+        ),
+    })
+
+    if operation == "count":
+        def action() -> object:
+            return count_review_files(connection, root=root, **filter_options)
+    elif operation == "revision":
+        def action() -> object:
+            return review_selection_revision(
+                connection,
+                scope="review-browser",
+                root=root,
+                **filter_options,
+            )
+    elif operation == "list":
+        def action() -> object:
+            return list_review_files(
+                connection,
+                root=root,
+                sort=sort or "score_desc",
+                limit=_REVIEW_PAGE_SIZE,
+                offset=offset,
+                **filter_options,
+            )
+    else:
+        raise ValueError(f"Unsupported performance operation: {operation}")
+
+    started_at = monotonic_seconds()
+    result = action()
+    measurement: dict[str, object] = {
+        "query_id": query_id,
+        "scope": scope,
+        "filter": filter_name,
+        "operation": operation,
+        "sort": sort,
+        "page": page,
+        "offset": offset if operation == "list" else None,
+        "elapsed_ms": round((monotonic_seconds() - started_at) * 1000, 3),
+    }
+    if operation == "count":
+        measurement["result_count"] = int(result)
+    elif operation == "revision":
+        measurement["revision_present"] = bool(result)
+    else:
+        measurement["result_count"] = len(result)
+    measurements.append(measurement)
+    return result
+
+
+def _measure_review_navigation(
+    connection: sqlite3.Connection,
+    *,
+    active_root: Path,
+    active_total: int,
+    catalog_total: int,
+) -> dict[str, object]:
+    measurements: list[dict[str, object]] = []
+    query_plans: list[dict[str, object]] = []
+    page_offsets = {
+        "active": _review_page_offsets(active_total),
+        "global": _review_page_offsets(catalog_total),
+    }
+    scopes = (("global", None), ("active", str(active_root)))
+
+    for scope, root in scopes:
+        _measure_review_query(
+            connection,
+            measurements=measurements,
+            query_plans=query_plans,
+            scope=scope,
+            root=root,
+            filter_name="all",
+            filter_options={},
+            operation="count",
+        )
+        _measure_review_query(
+            connection,
+            measurements=measurements,
+            query_plans=query_plans,
+            scope=scope,
+            root=root,
+            filter_name="all",
+            filter_options={},
+            operation="revision",
+        )
+        for sort in _REVIEW_NAVIGATION_SORTS:
+            for page, offset in page_offsets[scope].items():
+                _measure_review_query(
+                    connection,
+                    measurements=measurements,
+                    query_plans=query_plans,
+                    scope=scope,
+                    root=root,
+                    filter_name="all",
+                    filter_options={},
+                    operation="list",
+                    sort=sort,
+                    page=page,
+                    offset=offset,
+                )
+        for filter_name, filter_options in _REVIEW_FILTER_CASES:
+            _measure_review_query(
+                connection,
+                measurements=measurements,
+                query_plans=query_plans,
+                scope=scope,
+                root=root,
+                filter_name=filter_name,
+                filter_options=filter_options,
+                operation="count",
+            )
+            _measure_review_query(
+                connection,
+                measurements=measurements,
+                query_plans=query_plans,
+                scope=scope,
+                root=root,
+                filter_name=filter_name,
+                filter_options=filter_options,
+                operation="revision",
+            )
+            _measure_review_query(
+                connection,
+                measurements=measurements,
+                query_plans=query_plans,
+                scope=scope,
+                root=root,
+                filter_name=filter_name,
+                filter_options=filter_options,
+                operation="list",
+                sort="score_desc",
+                page="early",
+            )
+
+    return {
+        "page_size": _REVIEW_PAGE_SIZE,
+        "page_offsets": page_offsets,
+        "sorts": list(_REVIEW_NAVIGATION_SORTS),
+        "filter_cases": [name for name, _ in _REVIEW_FILTER_CASES],
+        "timings": measurements,
+        "query_plans": query_plans,
+    }
 
 
 def _insert_query_scores(connection: sqlite3.Connection) -> None:
@@ -143,6 +392,16 @@ def measure(root: Path, *, data_dir: Path, preview_samples_per_group: int) -> di
             "review_selection_revision",
             lambda: review_selection_revision(connection, scope="review-browser", root=str(source_root)),
         )
+        review_navigation = _measure(
+            timings_ms,
+            "review_navigation",
+            lambda: _measure_review_navigation(
+                connection,
+                active_root=source_root,
+                active_total=review_total,
+                catalog_total=int(overview["catalog"]["total_files"]),
+            ),
+        )
         score_total = _measure(
             timings_ms,
             "score_row_count",
@@ -157,7 +416,7 @@ def measure(root: Path, *, data_dir: Path, preview_samples_per_group: int) -> di
         query_plan = explain_query_plan(
             connection,
             f"SELECT files.id FROM files WHERE {root_clause} ORDER BY files.id ASC LIMIT ?",
-            (*root_params, 60),
+            (*root_params, _REVIEW_PAGE_SIZE),
         )
 
     preview_results: dict[str, dict[str, object]] = {}
@@ -182,8 +441,9 @@ def measure(root: Path, *, data_dir: Path, preview_samples_per_group: int) -> di
         }
 
     return {
-        "schema": "shotsieve-performance-measurement-v1",
+        "schema": "shotsieve-performance-measurement-v2",
         "environment": {
+            "machine": platform.node() or "unknown",
             "platform": platform.platform(),
             "python": sys.version.split()[0],
             "sqlite": sqlite3.sqlite_version,
@@ -209,11 +469,13 @@ def measure(root: Path, *, data_dir: Path, preview_samples_per_group: int) -> di
             "query_plan": query_plan,
             "note": "Scores are disposable placeholders used only to exercise Review SQL; no learned-IQA inference is measured.",
         },
+        "review_navigation": review_navigation,
         "preview_samples": preview_results,
         "limitations": [
             "Metadata scans do not generate previews.",
             "Learned-IQA model startup and inference are not run by this utility.",
             "RAW and HEIF preview results depend on locally installed optional loaders.",
+            "Navigation timings are comparative measurements for this machine and catalog state; no absolute CI threshold is implied.",
         ],
     }
 
