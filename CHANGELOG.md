@@ -18,6 +18,7 @@ All notable changes to this project will be documented in this file.
 
 ### Changed
 
+- Added one shared, versioned image conversion policy for previews and learned-IQA inputs: EXIF-aware RGBA normalization, white-matte transparency compositing, and high-bit grayscale preservation. Legacy previews and scores are invalidated by conversion version without changing catalog decisions.
 - Ordinary scans now preserve cached catalog rows, scores, and review decisions that are outside the current scan coverage.
 - Removed the unchecked global “missing files” cache-cleanup action and replaced it with a root-scoped preview and confirmation workflow.
 - Added a root-scoped **Review Missing Entries** maintenance flow that previews every candidate and affected review decision before confirmation.

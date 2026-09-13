@@ -14,6 +14,7 @@ CREATE TABLE IF NOT EXISTS files (
     capture_time TEXT,
     preview_path TEXT,
     preview_status TEXT,
+    preview_conversion_version TEXT,
     last_scan_time TEXT,
     last_error TEXT,
     scan_status TEXT NOT NULL DEFAULT 'new',
@@ -47,6 +48,7 @@ CREATE TABLE IF NOT EXISTS scores (
     source_size_bytes INTEGER,
     preset_name TEXT,
     model_version TEXT,
+    image_conversion_version TEXT,
     computed_time TEXT,
     FOREIGN KEY(file_id) REFERENCES files(id) ON DELETE CASCADE
 );
@@ -121,11 +123,13 @@ SCHEMA_MIGRATIONS = {
         "analysis_status": "ALTER TABLE files ADD COLUMN analysis_status TEXT",
         "analysis_error": "ALTER TABLE files ADD COLUMN analysis_error TEXT",
         "last_analysis_time": "ALTER TABLE files ADD COLUMN last_analysis_time TEXT",
+        "preview_conversion_version": "ALTER TABLE files ADD COLUMN preview_conversion_version TEXT",
     },
     "scores": {
         "learned_confidence": "ALTER TABLE scores ADD COLUMN learned_confidence REAL",
         "source_modified_time": "ALTER TABLE scores ADD COLUMN source_modified_time REAL",
         "source_size_bytes": "ALTER TABLE scores ADD COLUMN source_size_bytes INTEGER",
+        "image_conversion_version": "ALTER TABLE scores ADD COLUMN image_conversion_version TEXT",
     },
     "scan_runs": {
         "files_removed": "ALTER TABLE scan_runs ADD COLUMN files_removed INTEGER NOT NULL DEFAULT 0",

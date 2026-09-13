@@ -115,6 +115,8 @@ The folder browser accepts a full local path or UNC path such as `\\server\share
 
 Preview and original-media endpoints use URLs keyed by catalog file ID, but either file may be regenerated or replaced in place. They therefore return `Cache-Control: private, no-cache`, requiring clients to revalidate rather than reuse stale bytes. Media streaming continues to support single byte ranges for compatible clients.
 
+Preview generation and learned-IQA preprocessing share the versioned image conversion helper. Both apply EXIF orientation, normalize palette/alpha data through RGBA, composite transparency onto a white matte, and preserve high-bit grayscale midtones. The preview and score cache records include the conversion version; legacy or changed-version records are regenerated or rescored automatically without clearing review decisions.
+
 ## Testing and verification
 
 Run the automated suite with:

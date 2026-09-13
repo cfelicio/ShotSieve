@@ -6,7 +6,9 @@ from pathlib import Path
 from typing import Sequence
 
 import numpy as np
-from PIL import Image, ImageOps
+from PIL import Image
+
+from shotsieve.image_conversion import prepare_image_for_rgb
 
 
 def _is_cuda_tensor_device(tensor_device: object | None) -> bool:
@@ -23,7 +25,7 @@ def _is_cuda_tensor_device(tensor_device: object | None) -> bool:
 def _load_single_image(path: Path, image_size: int) -> np.ndarray:
     """Load and preprocess a single image for model inference."""
     with Image.open(path) as image:
-        image = ImageOps.exif_transpose(image).convert("RGB")
+        image = prepare_image_for_rgb(image)
         image = image.resize((image_size, image_size), Image.Resampling.BICUBIC)
         return np.asarray(image, dtype=np.float32) / 255.0
 

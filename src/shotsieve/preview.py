@@ -20,6 +20,7 @@ from shotsieve.config import (
     RAW_CAMERA_EXTENSIONS,
 )
 from shotsieve.db import normalize_resolved_path
+from shotsieve.image_conversion import prepare_image_for_rgb
 
 try:
     from pillow_heif import register_heif_opener
@@ -36,7 +37,6 @@ if register_heif_opener is not None:
 
 MAX_PREVIEW_SIZE = (1024, 1024)
 MIN_RAW_THUMBNAIL_LONG_EDGE = max(MAX_PREVIEW_SIZE)
-_HIGH_BIT_GRAYSCALE_MODES = {"I;16", "I;16L", "I;16B", "I;16N"}
 CAPTURE_TIME_EXIF_TAGS = (36867, 36868, 306)
 _STDERR_CAPTURE_LOCK = threading.Lock()
 
@@ -167,7 +167,7 @@ def generate_preview(
                 image = ImageOps.exif_transpose(image)
                 capture_time = extract_capture_time(image)
                 width, height = image.size
-                image = _prepare_standard_preview_image(image)
+                image = prepare_image_for_rgb(image, apply_exif_orientation=False)
 
                 image.thumbnail(MAX_PREVIEW_SIZE, Image.Resampling.LANCZOS)
                 image.save(preview_path, format="JPEG", quality=85, optimize=False)
@@ -197,13 +197,8 @@ def generate_preview(
 
 
 def _prepare_standard_preview_image(image: Image.Image) -> Image.Image:
-    if image.mode in _HIGH_BIT_GRAYSCALE_MODES:
-        image = image.point(lambda value: value / 257).convert("L")
-
-    if image.mode != "RGB":
-        image = image.convert("RGB")
-
-    return image
+    """Backward-compatible wrapper for the shared preview conversion policy."""
+    return prepare_image_for_rgb(image, apply_exif_orientation=False)
 
 
 def generate_raw_preview(
@@ -267,7 +262,7 @@ def generate_raw_preview(
             error_text=_combine_failure_error_text(exc, issue_text),
         )
 
-    image = Image.fromarray(rgb)
+    image = prepare_image_for_rgb(Image.fromarray(rgb), apply_exif_orientation=False)
     width, height = image.size
     if raw_width and raw_height:
         width, height = raw_width, raw_height
@@ -323,9 +318,7 @@ def _try_extract_raw_thumbnail(
                 capture_time = extract_capture_time(image)
                 # Resize if the embedded thumbnail exceeds our preview size.
                 if width > MAX_PREVIEW_SIZE[0] or height > MAX_PREVIEW_SIZE[1]:
-                    image = ImageOps.exif_transpose(image)
-                    if image.mode != "RGB":
-                        image = image.convert("RGB")
+                    image = prepare_image_for_rgb(image)
                     image.thumbnail(MAX_PREVIEW_SIZE, Image.Resampling.LANCZOS)
                     image.save(preview_path, format="JPEG", quality=85, optimize=False)
                 else:
@@ -346,7 +339,7 @@ def _try_extract_raw_thumbnail(
 
     if thumb.format == bitmap_format:
         # Bitmap thumbnail — decode via PIL and save as JPEG.
-        image = Image.fromarray(thumb.data)
+        image = prepare_image_for_rgb(Image.fromarray(thumb.data), apply_exif_orientation=False)
         width, height = image.size
         if not _raw_thumbnail_is_acceptable(width, height, raw_preview_mode=raw_preview_mode):
             return None

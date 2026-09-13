@@ -8,6 +8,7 @@ from typing import Callable, Protocol, Sequence, runtime_checkable
 
 from shotsieve.config import ALL_PREVIEWABLE_EXTENSIONS, DEFAULT_RAW_PREVIEW_MODE, PIL_ANALYSIS_EXTENSIONS, PREVIEW_PRIORITY_EXTENSIONS
 from shotsieve.db import roots_path_filter, set_preview_cache_root
+from shotsieve.image_conversion import IMAGE_CONVERSION_VERSION
 from shotsieve.performance import log_duration, monotonic_seconds
 from shotsieve.learned_iqa import DEFAULT_BATCH_SIZE, DEFAULT_MODEL_NAME, LearnedIqaBackend, LearnedScoreResult, build_learned_backend, release_learned_backend, recommended_batch_size, recommended_cpu_workers, detect_hardware_capabilities, resolve_learned_model_version, validate_model_name
 from shotsieve.model_assets import attach_model_diagnostic
@@ -96,7 +97,28 @@ def _db_model_version(model_version: str | None) -> str:
 
 
 def _has_ready_preview(row) -> bool:
-    return bool(row["preview_path"]) and row["preview_status"] == "ready"
+    return (
+        bool(row["preview_path"])
+        and row["preview_status"] == "ready"
+        and _optional_row_value(row, "preview_conversion_version", IMAGE_CONVERSION_VERSION)
+        == IMAGE_CONVERSION_VERSION
+    )
+
+
+def _has_stale_preview_conversion(row) -> bool:
+    return (
+        bool(row["preview_path"])
+        and row["preview_status"] == "ready"
+        and _optional_row_value(row, "preview_conversion_version", IMAGE_CONVERSION_VERSION)
+        != IMAGE_CONVERSION_VERSION
+    )
+
+
+def _optional_row_value(row, key: str, default=None):
+    try:
+        return row[key]
+    except (KeyError, IndexError):
+        return default
 
 
 def _should_prioritize_generated_preview_for_review(source_path: Path) -> bool:
@@ -189,12 +211,20 @@ def _prepare_analysis_candidates(
         if (
             can_generate_preview
             and not _has_ready_preview(row)
-            and _should_prioritize_generated_preview_for_review(source_path)
+            and (
+                _should_prioritize_generated_preview_for_review(source_path)
+                or _has_stale_preview_conversion(row)
+            )
         ):
             preview_candidates.append((row, source_path))
             continue
 
-        analysis_path = select_analysis_path(row["path"], row["preview_path"], row["preview_status"])
+        analysis_path = select_analysis_path(
+            row["path"],
+            row["preview_path"],
+            row["preview_status"],
+            preview_conversion_version=_optional_row_value(row, "preview_conversion_version"),
+        )
         if analysis_path is not None:
             prepared.analysis_candidates.append(
                 PreparedAnalysisCandidate(row=row, analysis_path=analysis_path)
@@ -547,6 +577,7 @@ def persist_generated_preview(connection, *, row_id: int, preview_result: Previe
         UPDATE files
         SET preview_path = ?,
             preview_status = ?,
+            preview_conversion_version = ?,
             width = ?,
             height = ?,
             capture_time = ?,
@@ -557,6 +588,7 @@ def persist_generated_preview(connection, *, row_id: int, preview_result: Previe
         (
             preview_result.path,
             preview_result.status,
+            IMAGE_CONVERSION_VERSION if preview_result.status == "ready" else None,
             preview_result.width,
             preview_result.height,
             preview_result.capture_time,
@@ -827,7 +859,8 @@ def fetch_score_rows(connection, *, raw_root: str | Sequence[str] | Sequence[Pat
                scores.source_modified_time,
                scores.source_size_bytes,
                scores.preset_name,
-               scores.model_version
+               scores.model_version,
+               scores.image_conversion_version
         FROM files
         LEFT JOIN scores ON scores.file_id = files.id
         """
@@ -930,6 +963,7 @@ def needs_score_update(
         # they are rewritten with source metadata from the current file.
         or stored_modified_time is None
         or stored_size_bytes is None
+        or _optional_row_value(row, "image_conversion_version") != IMAGE_CONVERSION_VERSION
         or current_modified_time is None
         or current_size_bytes is None
         or stored_modified_time != current_modified_time
@@ -960,9 +994,10 @@ def upsert_score_row(
             source_size_bytes,
             preset_name,
             model_version,
+            image_conversion_version,
             computed_time
         )
-        VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(file_id) DO UPDATE SET
             overall_score = excluded.overall_score,
             learned_backend = excluded.learned_backend,
@@ -973,6 +1008,7 @@ def upsert_score_row(
             source_size_bytes = excluded.source_size_bytes,
             preset_name = excluded.preset_name,
             model_version = excluded.model_version,
+            image_conversion_version = excluded.image_conversion_version,
             computed_time = excluded.computed_time
         """,
         (
@@ -986,13 +1022,27 @@ def upsert_score_row(
             row["size_bytes"],
             LEARNED_ONLY_PRESET,
             model_version,
+            IMAGE_CONVERSION_VERSION,
             utc_now(),
         ),
     )
 
 
-def select_analysis_path(raw_path: str, raw_preview_path: str | None, preview_status: str | None) -> Path | None:
-    if raw_preview_path and preview_status == "ready":
+def select_analysis_path(
+    raw_path: str,
+    raw_preview_path: str | None,
+    preview_status: str | None,
+    *,
+    preview_conversion_version: str | None = None,
+) -> Path | None:
+    if (
+        raw_preview_path
+        and preview_status == "ready"
+        and (
+            preview_conversion_version is None
+            or preview_conversion_version == IMAGE_CONVERSION_VERSION
+        )
+    ):
         preview_path = Path(raw_preview_path)
         if preview_path.exists():
             return preview_path

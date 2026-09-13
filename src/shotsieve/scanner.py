@@ -15,6 +15,7 @@ from shotsieve.db import (
     normalize_resolved_path,
     set_preview_cache_root,
 )
+from shotsieve.image_conversion import IMAGE_CONVERSION_VERSION
 from shotsieve.models import ScanRunDiagnostic, ScanSummary
 from shotsieve.preview import generate_preview
 
@@ -649,6 +650,7 @@ def _load_existing_rows(connection, paths: Sequence[Path]) -> dict[str, dict]:
             "height": row["height"],
             "capture_time": row["capture_time"],
             "preview_status": row["preview_status"],
+            "preview_conversion_version": row["preview_conversion_version"],
             "preview_path": row["preview_path"],
             "last_error": row["last_error"],
             "analysis_status": row["analysis_status"],
@@ -656,7 +658,7 @@ def _load_existing_rows(connection, paths: Sequence[Path]) -> dict[str, dict]:
             "last_analysis_time": row["last_analysis_time"],
         }
         for row in connection.execute(
-            f"SELECT path_key, modified_time, size_bytes, width, height, capture_time, preview_status, preview_path, last_error, analysis_status, analysis_error, last_analysis_time FROM files WHERE path_key IN ({placeholders})",
+            f"SELECT path_key, modified_time, size_bytes, width, height, capture_time, preview_status, preview_conversion_version, preview_path, last_error, analysis_status, analysis_error, last_analysis_time FROM files WHERE path_key IN ({placeholders})",
             path_keys,
         ).fetchall()
     }
@@ -695,7 +697,11 @@ def _file_requires_preview_generation(
 
     existing_preview_path = existing_metadata.get("preview_path")
     existing_preview_exists = bool(existing_preview_path) and Path(str(existing_preview_path)).exists()
-    return existing_metadata.get("preview_status") != "ready" or not existing_preview_exists
+    return (
+        existing_metadata.get("preview_status") != "ready"
+        or existing_metadata.get("preview_conversion_version") != IMAGE_CONVERSION_VERSION
+        or not existing_preview_exists
+    )
 
 
 def gather_file_metadata(
@@ -727,6 +733,7 @@ def gather_file_metadata(
         and existing_metadata.get("modified_time") == stat.st_mtime
         and existing_metadata.get("size_bytes") == stat.st_size
         and existing_metadata.get("preview_status") == "ready"
+        and existing_metadata.get("preview_conversion_version") == IMAGE_CONVERSION_VERSION
         and existing_preview_exists
     ):
         return {
@@ -741,6 +748,7 @@ def gather_file_metadata(
             "capture_time": None,
             "preview_path": existing_metadata.get("preview_path"),
             "preview_status": "ready",
+            "preview_conversion_version": IMAGE_CONVERSION_VERSION,
             "last_error": existing_metadata.get("last_error"),
             "scan_status": "unchanged",
             "analysis_status": None,
@@ -761,6 +769,7 @@ def gather_file_metadata(
         "capture_time": None,
         "preview_path": None,
         "preview_status": "pending",
+        "preview_conversion_version": None,
         "last_error": None,
         "scan_status": base_scan_status,
         "analysis_status": "pending" if metadata_changed or existing_metadata is None else existing_metadata.get("analysis_status"),
@@ -775,6 +784,7 @@ def gather_file_metadata(
         metadata.update({
             "preview_path": preview.path,
             "preview_status": preview.status,
+            "preview_conversion_version": IMAGE_CONVERSION_VERSION if preview.status == "ready" else None,
             "width": preview.width,
             "height": preview.height,
             "capture_time": preview.capture_time,
@@ -810,12 +820,14 @@ def commit_batch(connection, batch: list[dict], summary: ScanSummary, *, existin
         INSERT INTO files(
             path, path_key, size_bytes, modified_time, format, 
             width, height, capture_time, preview_path, preview_status,
+            preview_conversion_version,
             last_scan_time, last_error, scan_status,
             analysis_status, analysis_error, last_analysis_time
         )
         VALUES(
             :path, :path_key, :size_bytes, :modified_time, :format, 
             :width, :height, :capture_time, :preview_path, :preview_status,
+            :preview_conversion_version,
             :last_scan_time, :last_error, :scan_status,
             :analysis_status, :analysis_error, :last_analysis_time
         )
@@ -843,6 +855,10 @@ def commit_batch(connection, batch: list[dict], summary: ScanSummary, *, existin
                 preview_status = CASE
                 WHEN :preserve_metadata THEN COALESCE(excluded.preview_status, preview_status)
                     ELSE excluded.preview_status
+                END,
+                preview_conversion_version = CASE
+                WHEN :preserve_metadata THEN COALESCE(excluded.preview_conversion_version, preview_conversion_version)
+                    ELSE excluded.preview_conversion_version
                 END,
             last_scan_time = excluded.last_scan_time,
                 last_error = CASE
