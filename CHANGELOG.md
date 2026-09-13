@@ -32,6 +32,7 @@ All notable changes to this project will be documented in this file.
 - Removed the process-global Torch loader workaround. Runtime discovery now reports empty/unavailable model state when the supported models are not ready, and explicit unavailable accelerators fail with actionable guidance while Auto reports CPU fallback reasons.
 - Pinned the Windows DirectML target to Python 3.11–3.12 with `torch==2.4.1`, `torchvision==0.19.1`, and `torch-directml==0.2.5.dev240914` in the target-specific release and sidecar install paths.
 - Added selected-model preparation with CPU validation, atomic readiness records, cache-path/version invalidation, sanitized failure diagnostics, and retained cancellation state.
+- Reused sanitized model diagnostics across preparation, scoring, and comparison jobs, including model/runtime/cache-volume context, offline and recovery classification, orphaned-preparation recovery, and retained API reports when readiness persistence fails.
 - Added the optional `--model-cache-dir` startup setting; explicit Hugging Face/Torch cache environment settings remain authoritative.
 - Pinned the optional learned-IQA integration to `pyiqa==0.1.16` and documented separate package, checkpoint, cache, and retired-model licensing boundaries.
 - Added offline pull-request CI and a separate weekly/manual two-model smoke workflow; the latter validates a fresh cache in a new network-disabled process without publishing weights or photos.

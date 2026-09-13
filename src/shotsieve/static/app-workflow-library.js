@@ -395,6 +395,16 @@
         }
       }
 
+      if (result?.job_status === "failed" || result?.diagnostic) {
+        const diagnostic = result?.diagnostic || result?.error_report || {};
+        const cause = diagnostic.cause || result?.job_error || "Scoring failed.";
+        const recovery = diagnostic.recovery_action || "Open Settings and choose Prepare selected model before retrying.";
+        showToast(`${cause} ${recovery}`, "error");
+        addLogEntry("Score failed", `${cause} ${recovery}`);
+        await refreshWorkspace();
+        return result;
+      }
+
       if (pipeline) {
         const doneStepIndex = Math.min(Number(pipeline.totalSteps), Number(pipeline.stepIndex) + 1);
         const donePercent = (doneStepIndex / Number(pipeline.totalSteps)) * 100;
@@ -443,9 +453,11 @@
         const result = await pollModelPreparationJob(jobId);
         clearTrackedJob(jobId);
         if (result?.job_status === "failed" || ["failed", "runtime_unavailable"].includes(String(result?.state || ""))) {
-          const detail = result?.error || result?.error_report?.cause || "Model preparation failed.";
-          showToast(`Model preparation failed: ${detail}`, "error");
-          addLogEntry("Model preparation failed", detail);
+          const diagnostic = result?.error_report || result?.diagnostic || {};
+          const detail = result?.error || diagnostic.cause || "Model preparation failed.";
+          const recovery = result?.recovery_action || diagnostic.recovery_action || "Retry preparation from Settings.";
+          showToast(`Model preparation failed: ${detail} ${recovery}`, "error");
+          addLogEntry("Model preparation failed", `${detail} ${recovery}`);
           return result;
         }
         setBusyProgress(100);

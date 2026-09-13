@@ -7,8 +7,9 @@ from typing import Any, cast
 from urllib.parse import parse_qs, urlparse
 
 from shotsieve.config import normalize_raw_preview_mode
+from shotsieve.learned_iqa import DEFAULT_MODEL_NAME
 from shotsieve.learned_iqa_catalog import validate_model_name
-from shotsieve.model_assets import classify_preparation_error, read_preparation_record
+from shotsieve.model_assets import build_model_diagnostic, classify_preparation_error, read_preparation_record
 from shotsieve.db import (
     attach_scan_run_diagnostic,
     mark_scan_run_diagnostic_persisted,
@@ -39,6 +40,25 @@ def _operation_failure_summary(error: BaseException) -> dict[str, object] | None
         summary["cancelled"] = True
         summary["outcome"] = "cancelled"
     return summary
+
+
+def _model_failure_summary(
+    error: BaseException,
+    *,
+    model_name: object,
+    requested_runtime: object,
+    phase: str,
+) -> dict[str, object]:
+    existing = getattr(error, "model_diagnostic", None)
+    diagnostic = dict(existing) if isinstance(existing, dict) else build_model_diagnostic(
+        error,
+        phase=phase,
+        model_name=model_name,
+        requested_runtime=requested_runtime,
+    )
+    diagnostic.setdefault("model", str(model_name) if model_name else None)
+    diagnostic.setdefault("requested_runtime", str(requested_runtime or "auto").casefold())
+    return {"diagnostic": diagnostic, "error_report": diagnostic}
 
 
 def _handle_job_get_routes(handler: Any, context: WebRouteContext, parsed: Any) -> bool:
@@ -589,7 +609,18 @@ def start_score_job(handler: Any, context: WebRouteContext, payload: dict[str, o
                 "files_failed": summary.files_failed,
             })
         except Exception as exc:
-            score_registry.fail(job_id, error=str(exc))
+            failure = _model_failure_summary(
+                exc,
+                model_name=requested_model or DEFAULT_MODEL_NAME,
+                requested_runtime=learned_device,
+                phase="score_job",
+            )
+            diagnostic = failure["diagnostic"]
+            score_registry.fail(
+                job_id,
+                error=str(diagnostic.get("cause") or "Scoring failed."),
+                summary=failure,
+            )
         finally:
             context.operation_lock.release()
 
@@ -638,6 +669,18 @@ def start_model_prepare_job(handler: Any, context: WebRouteContext, payload: dic
             diagnostic = read_preparation_record(context.db_path.parent)
             if diagnostic.get("state") in {"failed", "runtime_unavailable"}:
                 return diagnostic
+            attached = getattr(error, "model_diagnostic", None)
+            if isinstance(attached, dict):
+                return {
+                    **diagnostic,
+                    "state": "failed",
+                    "model": model_name,
+                    "error": attached.get("cause"),
+                    "error_report": attached,
+                    "recovery_action": attached.get("recovery_action"),
+                    "record_write_error": attached.get("record_write_error"),
+                    "cancelled": isinstance(error, InterruptedError),
+                }
             if isinstance(error, InterruptedError):
                 report = {
                     "category": "cancelled",
@@ -744,7 +787,19 @@ def start_compare_job(handler: Any, context: WebRouteContext, payload: dict[str,
 
             compare_registry.complete(job_id, summary=routes.comparison_summary_payload(summary))
         except Exception as exc:
-            compare_registry.fail(job_id, error=str(exc))
+            model_names = routes._compare_request_models(compare_request)
+            failure = _model_failure_summary(
+                exc,
+                model_name=",".join(model_names) if model_names else None,
+                requested_runtime=compare_request.get("device"),
+                phase="compare_job",
+            )
+            diagnostic = failure["diagnostic"]
+            compare_registry.fail(
+                job_id,
+                error=str(diagnostic.get("cause") or "Model comparison failed."),
+                summary=failure,
+            )
         finally:
             context.operation_lock.release()
 
@@ -831,7 +886,7 @@ def handle_job_result(handler: Any, registry: JobRegistry, *, label: str) -> Non
         return
 
     if status_value == "failed":
-        if label in {"Operation", "Model preparation"} and isinstance(status_payload.get("summary"), dict):
+        if label in {"Operation", "Model preparation", "Score", "Compare"} and isinstance(status_payload.get("summary"), dict):
             routes.send_json(handler, status_payload["summary"])
             return
         routes.send_json_error(handler, HTTPStatus.BAD_REQUEST, str(status_payload.get("error") or f"{label} job failed"))

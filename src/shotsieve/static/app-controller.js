@@ -487,10 +487,12 @@
           const preparedModel = String(preparation.model || "");
           const state = String(preparation.state || "not_checked");
           const error = String(preparation.error || preparation.error_report?.cause || "");
+          const category = String(preparation.error_report?.category || "").replaceAll("_", " ");
+          const recovery = String(preparation.recovery_action || preparation.error_report?.recovery_action || "");
           if (state === "prepared" && preparedModel === val) {
             preparationStatus.textContent = `Prepared on CPU${preparation.finished_at ? ` · ${preparation.finished_at}` : ""}. Scoring validates the selected runtime at use time.`;
           } else if (["failed", "runtime_unavailable"].includes(state) && preparedModel === val) {
-            preparationStatus.textContent = `Last preparation ${state.replaceAll("_", " ")}${error ? `: ${error}` : ". Retry preparation for details."}`;
+            preparationStatus.textContent = `Last preparation ${state.replaceAll("_", " ")}${category ? ` (${category})` : ""}${error ? `: ${error}` : ". Retry preparation for details."}${recovery ? ` ${recovery}` : ""}`;
           } else if (state === "not_checked") {
             preparationStatus.textContent = "Model readiness has not been checked for the current runtime/cache context.";
           } else {

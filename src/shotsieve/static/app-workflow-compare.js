@@ -264,6 +264,13 @@
       }
 
       const notices = [];
+      const diagnostic = comparison?.diagnostic;
+      if (diagnostic && typeof diagnostic === "object") {
+        const category = typeof diagnostic.category === "string" ? diagnostic.category.replaceAll("_", " ") : "model setup";
+        const cause = typeof diagnostic.cause === "string" ? diagnostic.cause : "The learned model could not be initialized.";
+        const recovery = typeof diagnostic.recovery_action === "string" ? diagnostic.recovery_action : "Open Settings and choose Prepare selected model before retrying.";
+        notices.push(`Model setup failed (${category}): ${cause} ${recovery}`);
+      }
       const truncationText = comparisonTruncationWarningText(comparison);
       if (truncationText) {
         notices.push(truncationText);
@@ -636,6 +643,17 @@
         if (!state.abortController?.signal?.aborted && !state.recoveryJob) {
           state.compareJobId = null;
         }
+      }
+
+      if (summary?.job_status === "failed" || summary?.diagnostic) {
+        result.diagnostic = summary?.diagnostic || summary?.error_report || {};
+        state.comparison = result;
+        renderComparisonResults();
+        const cause = result.diagnostic.cause || summary?.job_error || "Model comparison failed.";
+        const recovery = result.diagnostic.recovery_action || "Open Settings and choose Prepare selected model before retrying.";
+        addLogEntry("Model comparison failed", `${cause} ${recovery}`);
+        showToast(`${cause} ${recovery}`, "error");
+        return result;
       }
 
       result.model_names = Array.isArray(summary.model_names) && summary.model_names.length ? summary.model_names : result.model_names;

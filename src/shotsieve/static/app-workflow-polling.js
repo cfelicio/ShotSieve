@@ -178,6 +178,7 @@
         progressMessage: scoreProgressMessage,
         progressTotal: rowsTotal,
         failureMessage: "Scoring pass failed.",
+        retainFailedResult: true,
         onProgress: ({ progress, status }) => {
           const phaseValue = String(progress?.phase || "loading").toLowerCase();
           const phase = resolvePhase(phaseValue, phaseMap, "loading");
@@ -220,6 +221,7 @@
         progressMessage: compareProgressMessage,
         progressTotal: rowsTotal,
         failureMessage: "Model comparison failed.",
+        retainFailedResult: true,
         onProgress: ({ progress }) => {
           const phaseValue = String(progress?.phase || "loading").toLowerCase();
           const operationPercent = compareProgressPercent(progress);

@@ -13,7 +13,7 @@ from pathlib import Path
 from shotsieve import runtime_support
 from shotsieve.bootstrap import install_learned_iqa_sidecar, install_torch_sidecar, sidecar_site_packages_dir
 from shotsieve.learned_iqa import invalidate_hw_cache
-from shotsieve.model_assets import apply_model_cache_dir
+from shotsieve.model_assets import apply_model_cache_dir, recover_orphaned_preparation
 from shotsieve.web import serve_review_ui
 
 
@@ -408,6 +408,7 @@ def main() -> None:
     apply_model_cache_dir(args.model_cache_dir)
     data_dir = Path(args.data_dir).expanduser().resolve() if args.data_dir else default_data_dir()
     data_dir.mkdir(parents=True, exist_ok=True)
+    recover_orphaned_preparation(data_dir)
     installed_torch_runtime = maybe_prepare_cuda_torch_runtime(data_dir)
     _call_prepare_learned_iqa_runtime(data_dir, assume_install_consent=installed_torch_runtime)
     db_path = data_dir / "shotsieve.db"

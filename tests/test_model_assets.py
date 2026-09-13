@@ -161,6 +161,83 @@ def test_default_cache_diagnostics_resolve_upstream_locations(tmp_path):
     assert paths["torch_home"] == str(tmp_path / "torch")
 
 
+def test_model_diagnostic_includes_cache_volumes_and_known_exception_chain() -> None:
+    inner = OSError("Model was not found in cache while local_files_only is enabled")
+    error = RuntimeError("backend initialization failed")
+    error.__cause__ = inner
+
+    diagnostic = model_assets.build_model_diagnostic(
+        error,
+        phase="initializing_model",
+        model_name="topiq_nr",
+        requested_runtime="cuda",
+        actual_runtime=None,
+        cache_paths={"hf_hub_cache": "C:/model-cache/hub", "torch_home": "D:/torch"},
+        environ={"HF_HUB_OFFLINE": "1"},
+    )
+
+    assert diagnostic["category"] == "missing_offline_assets"
+    assert diagnostic["model"] == "topiq_nr"
+    assert diagnostic["requested_runtime"] == "cuda"
+    assert diagnostic["actual_runtime"] == "unknown"
+    assert diagnostic["cache_volumes"]
+    assert "Prepare selected model" in diagnostic["recovery_action"]
+
+
+def test_prepare_model_retains_sanitized_diagnostic_when_record_writes_fail(tmp_path: Path) -> None:
+    def failing_writer(_data_dir, _record):
+        raise OSError("record write failed: token=private-secret")
+
+    def factory(*_args, **_kwargs):
+        raise RuntimeError("Hub request https://example.test/model?token=private-secret failed")
+
+    with pytest.raises(RuntimeError) as exc_info:
+        model_assets.prepare_model(
+            "topiq_nr",
+            data_dir=tmp_path,
+            backend_factory=factory,
+            record_writer=failing_writer,
+            environ={"HF_TOKEN": "private-secret"},
+        )
+
+    diagnostic = exc_info.value.model_diagnostic
+    encoded = json.dumps(diagnostic)
+    assert diagnostic["category"] == "network_or_hub"
+    assert diagnostic["record_write_error"] == "record write failed: token=<redacted>"
+    assert "private-secret" not in encoded
+    assert not model_assets.preparation_record_path(tmp_path).exists()
+
+
+def test_read_preparation_record_downgrades_dead_preparation_process(tmp_path: Path, monkeypatch) -> None:
+    env = {"XDG_CACHE_HOME": str(tmp_path / "cache")}
+    cache_paths = model_assets.effective_cache_paths(environ=env)
+    versions = model_assets._dependency_versions()
+    fingerprint = model_assets._dependency_fingerprint(
+        "topiq_nr",
+        cache_paths=cache_paths,
+        dependency_versions=versions,
+        environ=env,
+    )
+    record = model_assets._base_record(
+        "topiq_nr",
+        cache_paths=cache_paths,
+        dependency_versions=versions,
+        dependency_fingerprint=fingerprint,
+        environ=env,
+    )
+    record["process_id"] = 1234
+    monkeypatch.setattr(model_assets, "_process_is_alive", lambda _process_id: False)
+    model_assets.write_preparation_record(tmp_path, record)
+
+    recovered = model_assets.read_preparation_record(tmp_path, environ=env)
+
+    assert recovered["state"] == "failed"
+    assert recovered["orphaned"] is True
+    assert recovered["error_report"]["category"] == "interrupted_process"
+    stored = json.loads(model_assets.preparation_record_path(tmp_path).read_text(encoding="utf-8"))
+    assert stored["state"] == "failed"
+
+
 @pytest.mark.parametrize("header", ["Authorization: Bearer", "Authorization: Basic", "Bearer"])
 def test_preparation_error_redacts_authorization_credentials(header):
     report = model_assets.classify_preparation_error(

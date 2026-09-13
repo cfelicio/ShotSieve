@@ -10,6 +10,7 @@ from shotsieve.config import ALL_PREVIEWABLE_EXTENSIONS, DEFAULT_RAW_PREVIEW_MOD
 from shotsieve.db import roots_path_filter, set_preview_cache_root
 from shotsieve.performance import log_duration, monotonic_seconds
 from shotsieve.learned_iqa import DEFAULT_BATCH_SIZE, DEFAULT_MODEL_NAME, LearnedIqaBackend, LearnedScoreResult, build_learned_backend, release_learned_backend, recommended_batch_size, recommended_cpu_workers, detect_hardware_capabilities, resolve_learned_model_version, validate_model_name
+from shotsieve.model_assets import attach_model_diagnostic
 from shotsieve.preview import PreviewResult, generate_previews_parallel
 from shotsieve.scanner import utc_now
 
@@ -279,7 +280,16 @@ def score_files(
     version_resolver = learned_model_version_resolver
     if version_resolver is None and learned_backend_factory is None:
         def resolve_model_version(model_name: str) -> str | None:
-            return resolve_learned_model_version(model_name, device=learned_device)
+            try:
+                return resolve_learned_model_version(model_name, device=learned_device)
+            except Exception as exc:
+                attach_model_diagnostic(
+                    exc,
+                    phase="resolving_model_version",
+                    model_name=model_name,
+                    requested_runtime=learned_device,
+                )
+                raise
 
         version_resolver = resolve_model_version
     pending_learned: list[tuple[object, Path]] = []
@@ -446,8 +456,9 @@ def score_files(
             )
         )
 
-    backend = factory(selected_backend)
+    backend = None
     try:
+        backend = factory(selected_backend)
         # Keep scoring updates frequent enough to avoid long visible stalls at 0/N.
         progress_chunk_size = max(learned_batch_size, 12)
 
@@ -512,8 +523,18 @@ def score_files(
                         phase="scoring",
                     )
                 )
+    except Exception as exc:
+        attach_model_diagnostic(
+            exc,
+            phase="scoring",
+            model_name=selected_backend,
+            requested_runtime=learned_device,
+            actual_runtime=getattr(backend, "runtime", None),
+        )
+        raise
     finally:
-        release_learned_backend(backend)
+        if backend is not None:
+            release_learned_backend(backend)
 
     return summary
 
@@ -696,7 +717,7 @@ def compare_learned_models(
             )
 
         model_started_at = time.perf_counter()
-        backend = factory(model_name)
+        backend = None
 
         # Use per-model optimal batch size instead of a single global size.
         # This prevents lightweight models (e.g., TOPIQ at batch=128) from being
@@ -714,6 +735,7 @@ def compare_learned_models(
             effective_compare_chunk_size = max(1, compare_chunk_size)
 
         try:
+            backend = factory(model_name)
             if progress_callback is not None:
                 progress_callback(
                     AnalysisProgress(
@@ -760,8 +782,17 @@ def compare_learned_models(
                     )
 
             summary.model_timings_seconds[backend.name] = round(time.perf_counter() - model_started_at, 4)
+        except Exception as exc:
+            attach_model_diagnostic(
+                exc,
+                phase="comparing",
+                model_name=model_name,
+                requested_runtime=learned_device,
+                actual_runtime=getattr(backend, "runtime", None),
+            )
+            raise
         finally:
-            if release_backends:
+            if release_backends and backend is not None:
                 release_learned_backend(backend)
 
     summary.rows = candidate_rows

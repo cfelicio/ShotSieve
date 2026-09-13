@@ -10,6 +10,7 @@ from . import learned_iqa_backend as backend_core
 from . import learned_iqa_catalog
 from . import learned_iqa_preprocessing
 from . import learned_iqa_runtime
+from .model_assets import attach_model_diagnostic
 
 
 DEFAULT_BATCH_SIZE = learned_iqa_catalog.DEFAULT_BATCH_SIZE
@@ -304,18 +305,28 @@ class PyiqaBackend:
     _torch: object
 
     def __init__(self, model_name: str, *, device: str | None = None) -> None:
-        backend_core.initialize_backend(
-            self,
-            model_name,
-            device=device,
-            import_pyiqa_runtime_fn=import_pyiqa_runtime,
-            normalize_model_name_fn=normalize_model_name,
-            preferred_model_names_fn=preferred_model_names,
-            resolve_device_fn=resolve_device,
-            create_metric_safely_fn=create_metric_safely,
-            default_input_sizes=DEFAULT_INPUT_SIZES,
-            default_input_size=DEFAULT_INPUT_SIZE,
-        )
+        try:
+            backend_core.initialize_backend(
+                self,
+                model_name,
+                device=device,
+                import_pyiqa_runtime_fn=import_pyiqa_runtime,
+                normalize_model_name_fn=normalize_model_name,
+                preferred_model_names_fn=preferred_model_names,
+                resolve_device_fn=resolve_device,
+                create_metric_safely_fn=create_metric_safely,
+                default_input_sizes=DEFAULT_INPUT_SIZES,
+                default_input_size=DEFAULT_INPUT_SIZE,
+            )
+        except Exception as exc:
+            attach_model_diagnostic(
+                exc,
+                phase="initializing_model",
+                model_name=model_name,
+                requested_runtime=device,
+                actual_runtime=getattr(self, "runtime", None),
+            )
+            raise
 
     def close(self) -> None:
         backend_core.close_backend(self)

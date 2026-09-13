@@ -135,6 +135,50 @@ class TestWebRoutesJobsIntegration:
         assert payload["status"] == "running"
         assert captured["batch_size"] == 17
 
+    def test_score_failure_retains_sanitized_model_diagnostic(self, test_server, monkeypatch):
+        base_url, _, _ = test_server
+        from shotsieve import web as web_module
+
+        monkeypatch.setattr(web_module, "_require_learned_runtime", lambda **kwargs: None)
+
+        def fail_score(*args, **kwargs):
+            raise RuntimeError("Hub request https://huggingface.co/model?token=secret failed")
+
+        monkeypatch.setattr(web_module, "score_files", fail_score)
+
+        request = Request(
+            f"{base_url}/api/score/start",
+            data=json.dumps({"device": "cpu", "learned_backend_name": "topiq_nr"}).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        start_response = urlopen(request)
+        start_payload = json.loads(start_response.read().decode("utf-8"))
+        job_id = start_payload["job_id"]
+
+        status_payload = None
+        deadline = time.time() + 2
+        while time.time() < deadline:
+            status_response = urlopen(f"{base_url}/api/score/status?job_id={job_id}")
+            candidate = json.loads(status_response.read().decode("utf-8"))
+            if candidate["status"] == "failed":
+                status_payload = candidate
+                break
+            time.sleep(0.05)
+
+        assert status_payload is not None
+        diagnostic = status_payload["summary"]["diagnostic"]
+        assert diagnostic["category"] == "network_or_hub"
+        assert diagnostic["requested_runtime"] == "cpu"
+        assert diagnostic["cache_paths"]
+        assert diagnostic["cache_volumes"]
+
+        result_payload = json.loads(
+            urlopen(f"{base_url}/api/score/result?job_id={job_id}").read().decode("utf-8")
+        )
+        assert result_payload["diagnostic"] == diagnostic
+        assert "secret" not in json.dumps(result_payload)
+
     def test_options_payload_defaults_to_learned_models_only(self, test_server):
         base_url, _, _ = test_server
         response = urlopen(f"{base_url}/api/options")
@@ -613,6 +657,69 @@ class TestWebRoutesJobsIntegration:
             assert captured_preview_mode["value"] == "fast"
         finally:
             release_event.set()
+            server.shutdown()
+
+    def test_compare_failure_retains_sanitized_model_diagnostic(self, tmp_path: Path, monkeypatch):
+        from http.server import ThreadingHTTPServer
+        from shotsieve import web as web_module
+
+        monkeypatch.setattr(
+            web_module,
+            "available_learned_backends",
+            lambda *, resource_profile=None: {"pyiqa": "installed"},
+        )
+
+        def fail_compare(*args, **kwargs):
+            raise PermissionError("permission denied for cache token=secret")
+
+        monkeypatch.setattr(web_module, "compare_learned_models", fail_compare)
+
+        db_path = tmp_path / "data" / "shotsieve.db"
+        initialize_database(db_path)
+        port = find_free_port()
+        server = ThreadingHTTPServer(("127.0.0.1", port), build_handler(db_path))
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            start_req = Request(
+                f"http://127.0.0.1:{port}/api/compare-models/start",
+                data=json.dumps(
+                    {"models": ["topiq_nr", "clipiqa"], "device": "cpu", "root": None}
+                ).encode("utf-8"),
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            start_payload = json.loads(urlopen(start_req).read().decode("utf-8"))
+            job_id = start_payload["job_id"]
+
+            status_payload = None
+            deadline = time.time() + 2
+            while time.time() < deadline:
+                status_response = urlopen(
+                    f"http://127.0.0.1:{port}/api/compare-models/status?job_id={job_id}"
+                )
+                candidate = json.loads(status_response.read().decode("utf-8"))
+                if candidate["status"] == "failed":
+                    status_payload = candidate
+                    break
+                time.sleep(0.05)
+
+            assert status_payload is not None
+            diagnostic = status_payload["summary"]["diagnostic"]
+            assert diagnostic["category"] == "cache_permissions"
+            assert diagnostic["model"] == "topiq_nr,clipiqa"
+            assert diagnostic["requested_runtime"] == "cpu"
+            assert diagnostic["cache_paths"]
+            assert diagnostic["cache_volumes"]
+
+            result_payload = json.loads(
+                urlopen(
+                    f"http://127.0.0.1:{port}/api/compare-models/result?job_id={job_id}"
+                ).read().decode("utf-8")
+            )
+            assert result_payload["diagnostic"] == diagnostic
+            assert "secret" not in json.dumps(result_payload)
+        finally:
             server.shutdown()
 
     def test_compare_models_async_result_includes_pre_row_compare_failures(self, tmp_path: Path, monkeypatch):

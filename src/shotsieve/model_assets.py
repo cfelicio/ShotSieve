@@ -23,6 +23,7 @@ from shotsieve.learned_iqa_catalog import MODEL_CATALOG, validate_model_name
 
 PREPARATION_RECORD_NAME = "model-preparation.json"
 PREPARATION_STATES = ("not_checked", "preparing", "prepared", "failed", "runtime_unavailable")
+MODEL_DIAGNOSTIC_SCHEMA_VERSION = 1
 _OFFLINE_ENV_NAMES = ("HF_HUB_OFFLINE", "TRANSFORMERS_OFFLINE")
 _VERSION_PACKAGE_NAMES = (
     "shotsieve",
@@ -87,6 +88,37 @@ def effective_cache_paths(
         "hf_hub_cache": _path_text(hf_hub_cache),
         "torch_home": _path_text(torch_home),
     }
+
+
+def effective_cache_volumes(*, cache_paths: Mapping[str, object]) -> dict[str, dict[str, object]]:
+    """Report free space for the volumes backing the effective model caches."""
+    volumes: dict[str, dict[str, object]] = {}
+    for name in ("requested_root", "hf_home", "hf_hub_cache", "torch_home"):
+        raw_path = cache_paths.get(name)
+        if not isinstance(raw_path, str) or not raw_path.strip():
+            continue
+        path = Path(raw_path)
+        probe = path
+        try:
+            while not probe.exists() and probe != probe.parent:
+                probe = probe.parent
+            usage = shutil.disk_usage(probe)
+        except (OSError, ValueError) as exc:
+            volumes[name] = {
+                "path": str(path),
+                "volume": str(path.anchor or path),
+                "status": "unavailable",
+                "error": f"{type(exc).__name__}: {exc}",
+            }
+            continue
+        volumes[name] = {
+            "path": str(path),
+            "volume": str(probe.anchor or probe),
+            "status": "available",
+            "free_bytes": usage.free,
+            "total_bytes": usage.total,
+        }
+    return volumes
 
 
 def apply_model_cache_dir(
@@ -182,7 +214,9 @@ def _base_record(
     now = _utc_now()
     return {
         "state": "preparing",
+        "readiness": "last_check",
         "model": model_name,
+        "process_id": os.getpid(),
         "started_at": now,
         "updated_at": now,
         "finished_at": None,
@@ -193,6 +227,7 @@ def _base_record(
         "dependency_fingerprint": dependency_fingerprint,
         "dependency_versions": dict(dependency_versions),
         "cache_paths": dict(cache_paths),
+        "cache_volumes": effective_cache_volumes(cache_paths=cache_paths),
         "offline": _offline_flags(environ),
         "expected_resources": expected_resources(model_name),
         "disk_estimate": storage_estimate(model_name),
@@ -245,10 +280,61 @@ def _not_checked_record(
 ) -> dict[str, object]:
     return {
         "state": "not_checked",
+        "readiness": "last_check",
         "model": model_name,
         "reason": reason,
         "cache_paths": dict(cache_paths or {}),
+        "cache_volumes": effective_cache_volumes(cache_paths=cache_paths or {}),
         "last_preparation": None,
+    }
+
+
+def _process_is_alive(process_id: object) -> bool:
+    try:
+        pid = int(process_id)
+    except (TypeError, ValueError):
+        return False
+    if pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+    except PermissionError:
+        return True
+    except (OSError, ProcessLookupError):
+        return False
+    return True
+
+
+def _orphaned_preparation_record(
+    record: dict[str, object],
+    *,
+    cache_paths: Mapping[str, object],
+    environ: Mapping[str, str],
+) -> dict[str, object]:
+    model_name = record.get("model")
+    diagnostic = build_model_diagnostic(
+        RuntimeError("The previous model preparation process ended before it completed."),
+        model_name=model_name if isinstance(model_name, str) else None,
+        requested_runtime=record.get("requested_runtime"),
+        actual_runtime=record.get("actual_runtime"),
+        phase=str(record.get("phase") or "preparing_model"),
+        cache_paths=cache_paths,
+        environ=environ,
+    )
+    diagnostic["category"] = "interrupted_process"
+    diagnostic["recovery_action"] = "Preparation was interrupted. Open Settings and choose Prepare selected model, then retry."
+    return {
+        **record,
+        "state": "failed",
+        "readiness": "last_check",
+        "finished_at": _utc_now(),
+        "updated_at": _utc_now(),
+        "error": diagnostic["cause"],
+        "error_report": diagnostic,
+        "recovery_action": diagnostic["recovery_action"],
+        "orphaned": True,
+        "cache_paths": dict(cache_paths),
+        "cache_volumes": effective_cache_volumes(cache_paths=cache_paths),
     }
 
 
@@ -280,6 +366,13 @@ def read_preparation_record(
     except ValueError:
         return _not_checked_record(reason="record_model_not_supported", model_name=model_name, cache_paths=cache_paths)
 
+    if record.get("state") == "preparing" and not _process_is_alive(record.get("process_id")):
+        record = _orphaned_preparation_record(record, cache_paths=cache_paths, environ=env)
+        try:
+            write_preparation_record(data_dir, record)
+        except Exception as exc:
+            record["record_write_error"] = _sanitize_text(exc, environ=env)
+
     current_versions = _dependency_versions()
     current_fingerprint = _dependency_fingerprint(
         canonical_model,
@@ -295,6 +388,7 @@ def read_preparation_record(
             "invalidated_state": record.get("state"),
             "last_preparation": record,
             "cache_paths": cache_paths,
+            "cache_volumes": effective_cache_volumes(cache_paths=cache_paths),
             "dependency_versions": current_versions,
             "dependency_fingerprint": current_fingerprint,
         }
@@ -318,9 +412,13 @@ def read_preparation_record(
                     "missing_cache_roots": missing_roots,
                     "last_preparation": record,
                     "cache_paths": cache_paths,
+                    "cache_volumes": effective_cache_volumes(cache_paths=cache_paths),
                     "dependency_versions": current_versions,
                     "dependency_fingerprint": current_fingerprint,
                 }
+    record.setdefault("readiness", "last_check")
+    record["cache_paths"] = cache_paths
+    record["cache_volumes"] = effective_cache_volumes(cache_paths=cache_paths)
     return record
 
 
@@ -372,20 +470,20 @@ def classify_preparation_error(
 
     if offline and any(token in messages for token in ("not found in cache", "offline", "local_files_only", "no cached")):
         category = "missing_offline_assets"
-        recovery = "Turn off offline mode or populate the required model caches, then retry preparation."
+        recovery = "Populate the required model caches or turn off offline mode, then open Settings and choose Prepare selected model."
     elif any(isinstance(item, (PermissionError,)) or getattr(item, "errno", None) in {13, 1} for item in chain) or any(
         token in messages for token in ("permission denied", "access is denied", "read-only file system")
     ):
         category = "cache_permissions"
-        recovery = "Choose a writable model cache directory and retry preparation."
+        recovery = "Choose a writable model cache directory, open Settings, and choose Prepare selected model."
     elif any(getattr(item, "errno", None) == 28 for item in chain) or any(
         token in messages for token in ("no space left", "not enough space", "disk full")
     ):
         category = "cache_no_space"
-        recovery = "Free disk space or choose a larger writable model cache directory, then retry."
+        recovery = "Free disk space or choose a larger writable model cache directory, then choose Prepare selected model."
     elif any(token in messages for token in ("checksum", "corrupt", "incomplete download", "invalid archive")):
         category = "cache_corruption"
-        recovery = "Remove only the affected upstream cache entry using its upstream cache tools, then retry."
+        recovery = "Remove only the affected upstream cache entry using its upstream cache tools, then choose Prepare selected model."
     elif any(
         token in messages
         for token in (
@@ -404,19 +502,19 @@ def classify_preparation_error(
         )
     ) or {"connectionerror", "timeouterror", "sslerror", "proxyerror"} & type_names:
         category = "network_or_hub"
-        recovery = "Check network, proxy, certificate, or Hub endpoint settings, then retry preparation."
+        recovery = "Check network, proxy, certificate, or Hub endpoint settings, then choose Prepare selected model."
     elif any(isinstance(item, (ImportError, ModuleNotFoundError)) for item in chain):
         category = "missing_dependencies"
-        recovery = "Install or repair the optional learned-IQA dependencies, then retry preparation."
+        recovery = "Install or repair the optional learned-IQA dependencies, then choose Prepare selected model."
     elif "learnedruntimeunavailableerror" in type_names or "learnedbackendunavailableerror" in type_names:
         category = "runtime_unavailable"
-        recovery = "Install or repair a supported learned-IQA runtime, then retry preparation."
+        recovery = "Install or repair a supported learned-IQA runtime, then choose Prepare selected model."
     elif phase == "validating_initialization":
         category = "execution_or_operator"
-        recovery = "Retry preparation; if it repeats, check the selected model runtime and its diagnostic details."
+        recovery = "Open Settings and choose Prepare selected model, then retry the operation; if it repeats, retain this diagnostic."
     else:
         category = "unknown"
-        recovery = "Retry preparation. If it repeats, retain this diagnostic when reporting the issue."
+        recovery = "Open Settings and choose Prepare selected model, then retry the operation. If it repeats, retain this diagnostic when reporting the issue."
 
     causes = [f"{type(item).__name__}: {_sanitize_text(item, environ=env)}" for item in chain]
     return {
@@ -426,6 +524,70 @@ def classify_preparation_error(
         "cause_chain": causes,
         "recovery_action": recovery,
     }
+
+
+def build_model_diagnostic(
+    exc: BaseException,
+    *,
+    phase: str,
+    model_name: object = None,
+    requested_runtime: object = None,
+    actual_runtime: object = None,
+    cache_dir: Path | str | None = None,
+    cache_paths: Mapping[str, object] | None = None,
+    environ: Mapping[str, str] | None = None,
+) -> dict[str, object]:
+    """Build the shared, sanitized diagnostic used by prepare, score, and compare."""
+    env = os.environ if environ is None else environ
+    paths = dict(cache_paths) if cache_paths is not None else effective_cache_paths(cache_dir=cache_dir, environ=env)
+    report = classify_preparation_error(exc, phase=phase, environ=env)
+    model_text = str(model_name).strip() if model_name is not None and str(model_name).strip() else None
+    requested_text = str(requested_runtime).strip().casefold() if requested_runtime is not None and str(requested_runtime).strip() else "auto"
+    actual_text = str(actual_runtime).strip().casefold() if actual_runtime is not None and str(actual_runtime).strip() else "unknown"
+    return {
+        "schema_version": MODEL_DIAGNOSTIC_SCHEMA_VERSION,
+        **report,
+        "model": model_text,
+        "requested_runtime": requested_text,
+        "actual_runtime": actual_text,
+        "cache_paths": paths,
+        "cache_volumes": effective_cache_volumes(cache_paths=paths),
+        "offline": _offline_flags(env),
+        "prepare_action": "Open Settings and choose Prepare selected model before retrying scoring or comparison.",
+    }
+
+
+def attach_model_diagnostic(
+    exc: BaseException,
+    *,
+    phase: str,
+    model_name: object = None,
+    requested_runtime: object = None,
+    actual_runtime: object = None,
+    cache_dir: Path | str | None = None,
+    cache_paths: Mapping[str, object] | None = None,
+    environ: Mapping[str, str] | None = None,
+) -> dict[str, object]:
+    diagnostic = build_model_diagnostic(
+        exc,
+        phase=phase,
+        model_name=model_name,
+        requested_runtime=requested_runtime,
+        actual_runtime=actual_runtime,
+        cache_dir=cache_dir,
+        cache_paths=cache_paths,
+        environ=environ,
+    )
+    try:
+        setattr(exc, "model_diagnostic", diagnostic)
+    except Exception:
+        pass
+    return diagnostic
+
+
+def recover_orphaned_preparation(data_dir: Path, *, environ: Mapping[str, str] | None = None) -> dict[str, object]:
+    """Read readiness once at startup and downgrade an abandoned preparation."""
+    return read_preparation_record(data_dir, environ=environ)
 
 
 def _emit_progress(
@@ -470,7 +632,14 @@ def prepare_model(
 
     def save(**updates: object) -> None:
         record.update(updates)
-        record_writer(data_dir, record)
+        try:
+            record_writer(data_dir, record)
+            record.pop("record_write_error", None)
+        except Exception as record_error:
+            # Readiness persistence is diagnostic state.  It must not hide the
+            # original model failure or turn a successful preparation into a
+            # failed capability.
+            record["record_write_error"] = _sanitize_text(record_error, environ=env)
         _emit_progress(progress_callback, record)
 
     try:
@@ -479,7 +648,13 @@ def prepare_model(
             cancel_check()
         data_dir.mkdir(parents=True, exist_ok=True)
         usage = shutil.disk_usage(data_dir)
-        save(storage_check={"free_bytes": usage.free, "total_bytes": usage.total, "estimate": "advisory"})
+        save(
+            storage_check={
+                "data_dir": {"free_bytes": usage.free, "total_bytes": usage.total},
+                "cache_volumes": effective_cache_volumes(cache_paths=cache_paths),
+                "estimate": "advisory",
+            }
+        )
 
         current_phase = "preparing_model"
         save(phase=current_phase)
@@ -526,40 +701,61 @@ def prepare_model(
         )
         return dict(record)
     except InterruptedError as exc:
-        report = {
+        report = build_model_diagnostic(
+            exc,
+            phase=current_phase,
+            model_name=canonical_model,
+            requested_runtime="cpu",
+            actual_runtime=record.get("actual_runtime"),
+            cache_paths=cache_paths,
+            environ=env,
+        )
+        report.update({
             "category": "cancelled",
-            "phase": current_phase,
-            "cause": _sanitize_text(exc, environ=env),
-            "cause_chain": [_sanitize_text(exc, environ=env)],
-            "recovery_action": "Preparation was cancelled. Retry to complete model validation.",
-        }
-        try:
-            save(
-                state="failed",
-                phase=current_phase,
-                finished_at=_utc_now(),
-                error=report["cause"],
-                error_report=report,
-                recovery_action=report["recovery_action"],
-                cancelled=True,
-            )
-        except Exception as record_error:
-            record["record_write_error"] = _sanitize_text(record_error, environ=env)
+            "recovery_action": "Preparation was cancelled. Open Settings and choose Prepare selected model to retry.",
+        })
+        save(
+            state="failed",
+            phase=current_phase,
+            finished_at=_utc_now(),
+            error=report["cause"],
+            error_report=report,
+            recovery_action=report["recovery_action"],
+            cancelled=True,
+        )
+        attached = attach_model_diagnostic(
+            exc,
+            phase=current_phase,
+            model_name=canonical_model,
+            requested_runtime="cpu",
+            actual_runtime=record.get("actual_runtime"),
+            cache_paths=cache_paths,
+            environ=env,
+        )
+        if record.get("record_write_error"):
+            attached["record_write_error"] = record["record_write_error"]
         raise
     except Exception as exc:
-        report = classify_preparation_error(exc, phase=current_phase, environ=env)
+        report = attach_model_diagnostic(
+            exc,
+            phase=current_phase,
+            model_name=canonical_model,
+            requested_runtime="cpu",
+            actual_runtime=record.get("actual_runtime"),
+            cache_paths=cache_paths,
+            environ=env,
+        )
         state = "runtime_unavailable" if report["category"] == "runtime_unavailable" else "failed"
-        try:
-            save(
-                state=state,
-                phase=current_phase,
-                finished_at=_utc_now(),
-                error=report["cause"],
-                error_report=report,
-                recovery_action=report["recovery_action"],
-            )
-        except Exception as record_error:
-            record["record_write_error"] = _sanitize_text(record_error, environ=env)
+        save(
+            state=state,
+            phase=current_phase,
+            finished_at=_utc_now(),
+            error=report["cause"],
+            error_report=report,
+            recovery_action=report["recovery_action"],
+        )
+        if record.get("record_write_error"):
+            report["record_write_error"] = record["record_write_error"]
         raise
     finally:
         if backend is not None:
@@ -576,14 +772,19 @@ def prepare_model(
 
 
 __all__ = [
+    "MODEL_DIAGNOSTIC_SCHEMA_VERSION",
     "PREPARATION_RECORD_NAME",
     "PREPARATION_STATES",
+    "attach_model_diagnostic",
     "apply_model_cache_dir",
+    "build_model_diagnostic",
     "classify_preparation_error",
     "effective_cache_paths",
+    "effective_cache_volumes",
     "expected_resources",
     "preparation_record_path",
     "prepare_model",
+    "recover_orphaned_preparation",
     "read_preparation_record",
     "storage_estimate",
     "write_preparation_record",
