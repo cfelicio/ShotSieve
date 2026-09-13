@@ -234,111 +234,61 @@ def test_import_pyiqa_runtime_uses_injected_import_module_for_optional_dependenc
     assert ensure_calls == [fake_import_module]
 
 
-def test_qalign_not_runtime_compatible_on_cpu_or_directml() -> None:
-    assert learned_iqa_module.is_model_runtime_compatible("qalign", torch_version="2.6.0") is True
-    assert learned_iqa_module.is_model_runtime_compatible("qalign", torch_version="2.11.0+cpu") is True
-    assert learned_iqa_module.is_model_runtime_compatible("qalign", torch_version="2.3.1") is True
-    assert learned_iqa_module.is_model_runtime_compatible("qalign", torch_version="2.11.0+cpu", runtime="cpu") is False
-    assert learned_iqa_module.is_model_runtime_compatible("qalign", torch_version="2.11.0+cpu", runtime="directml") is False
-    assert learned_iqa_module.is_model_runtime_compatible("qalign", torch_version=None) is True
+def test_disabled_models_are_not_runtime_compatible() -> None:
+    assert learned_iqa_module.is_model_runtime_compatible("qalign", torch_version="2.6.0") is False
+    assert learned_iqa_module.is_model_runtime_compatible("qalign", torch_version=None) is False
 
 
-@pytest.mark.parametrize("runtime", ["cpu", "directml"])
-def test_pyiqa_backend_blocks_qalign_on_explicit_incompatible_runtime(
-    monkeypatch: pytest.MonkeyPatch,
-    runtime: str,
-) -> None:
-    class FakePyiqa:
-        __version__ = "0.1-test"
+def test_disabled_model_is_rejected_before_backend_runtime_import(monkeypatch: pytest.MonkeyPatch) -> None:
+    import_calls: list[bool] = []
 
-        @staticmethod
-        def list_models(metric_mode: str):
-            assert metric_mode == "NR"
-            return ["topiq_nr", "clipiqa", "qalign"]
+    def fail_if_imported():
+        import_calls.append(True)
+        raise AssertionError("disabled model imported the learned runtime")
 
-    class FakeTorch:
-        __version__ = "2.11.0+cpu"
+    monkeypatch.setattr(learned_iqa_module, "import_pyiqa_runtime", fail_if_imported)
 
-        @staticmethod
-        def device(name: str) -> str:
-            return name
+    with pytest.raises(learned_iqa_module.LearnedBackendUnavailableError, match="unknown or disabled"):
+        learned_iqa_module.PyiqaBackend("qalign")
 
-        class cuda:
-            @staticmethod
-            def is_available() -> bool:
-                return False
+    assert import_calls == []
 
-        class xpu:
-            @staticmethod
-            def is_available() -> bool:
-                return False
 
-    monkeypatch.setattr(learned_iqa_module, "import_pyiqa_runtime", lambda: (FakePyiqa, FakeTorch))
+def test_disabled_model_version_probe_is_rejected_before_runtime_import(monkeypatch: pytest.MonkeyPatch) -> None:
+    import_calls: list[bool] = []
+
+    def fail_if_imported():
+        import_calls.append(True)
+        raise AssertionError("disabled model imported the learned runtime")
+
+    monkeypatch.setattr(learned_iqa_module, "import_pyiqa_runtime", fail_if_imported)
+
+    with pytest.raises(learned_iqa_module.LearnedBackendUnavailableError, match="unknown or disabled"):
+        learned_iqa_module.resolve_learned_model_version("qalign")
+
+    assert import_calls == []
+
+
+def test_model_catalog_contains_only_reviewed_product_models() -> None:
+    from shotsieve import learned_iqa_catalog as catalog_module
+
+    assert catalog_module.SUPPORTED_MODEL_NAMES == ("topiq_nr", "clipiqa")
+    assert [entry["canonical_id"] for entry in catalog_module.model_catalog_payload()] == ["topiq_nr", "clipiqa"]
+    assert all(entry["available"] is False for entry in catalog_module.model_catalog_payload())
+    assert catalog_module.validate_model_name(" TOPIQ-NR ") == "topiq_nr"
+    with pytest.raises(ValueError, match="unknown or disabled"):
+        catalog_module.validate_model_name("qalign")
+
+
+def test_runtime_model_discovery_does_not_readvertise_catalog_on_failure(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         learned_iqa_module,
-        "resolve_device",
-        lambda device, torch_module: types.SimpleNamespace(
-            runtime=runtime,
-            metric_device=runtime,
-            tensor_device=runtime,
-            display_device=runtime,
-        ),
+        "import_pyiqa_runtime",
+        lambda: (_ for _ in ()).throw(RuntimeError("runtime unavailable")),
     )
 
-    with pytest.raises(
-        learned_iqa_module.LearnedBackendUnavailableError,
-        match=f"runtime '{runtime}'",
-    ):
-        learned_iqa_module.PyiqaBackend("qalign", device=runtime)
-
-
-@pytest.mark.parametrize("runtime", ["cpu", "directml"])
-def test_resolve_learned_model_version_blocks_qalign_on_explicit_incompatible_runtime(
-    monkeypatch: pytest.MonkeyPatch,
-    runtime: str,
-) -> None:
-    class FakePyiqa:
-        __version__ = "0.1-test"
-
-        @staticmethod
-        def list_models(metric_mode: str):
-            assert metric_mode == "NR"
-            return ["topiq_nr", "clipiqa", "qalign"]
-
-    class FakeTorch:
-        __version__ = "2.11.0+cpu"
-
-        @staticmethod
-        def device(name: str) -> str:
-            return name
-
-        class cuda:
-            @staticmethod
-            def is_available() -> bool:
-                return False
-
-        class xpu:
-            @staticmethod
-            def is_available() -> bool:
-                return False
-
-    monkeypatch.setattr(learned_iqa_module, "import_pyiqa_runtime", lambda: (FakePyiqa, FakeTorch))
-    monkeypatch.setattr(
-        learned_iqa_module,
-        "resolve_device",
-        lambda device, torch_module: types.SimpleNamespace(
-            runtime=runtime,
-            metric_device=runtime,
-            tensor_device=runtime,
-            display_device=runtime,
-        ),
-    )
-
-    with pytest.raises(
-        learned_iqa_module.LearnedBackendUnavailableError,
-        match=f"runtime '{runtime}'",
-    ):
-        learned_iqa_module.resolve_learned_model_version("qalign", device=runtime)
+    assert learned_iqa_module.runtime_supported_learned_models() == ()
+    assert learned_iqa_module.runtime_curated_learned_models() == ()
 
 
 def test_runtime_compatible_model_names_filters_qalign_from_cpu_and_directml() -> None:
@@ -427,41 +377,11 @@ def test_available_backends_excludes_qalign_on_cpu_runtime_with_new_torch(monkey
     assert "qalign" not in available
 
 
-def test_torch_load_cve_bypass_patches_and_restores_torch_load(monkeypatch: pytest.MonkeyPatch) -> None:
-    call_log: list[dict] = []
+def test_global_torch_load_workaround_is_removed() -> None:
+    from shotsieve import learned_iqa_backend as backend_module
 
-    def fake_load(*args, **kwargs):
-        call_log.append(kwargs.copy())
-        return None
-
-    fake_torch = types.SimpleNamespace(load=fake_load)
-    monkeypatch.setitem(sys.modules, "torch", fake_torch)
-
-    with learned_iqa_module._bypass_torch_load_cve_check():
-        fake_torch.load("dummy.bin")
-
-    assert call_log[0]["weights_only"] is False
-
-    assert fake_torch.load is fake_load
-
-
-def test_torch_load_cve_bypass_respects_explicit_weights_only_argument(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    call_log: list[dict] = []
-
-    def fake_load(*args, **kwargs):
-        call_log.append(kwargs.copy())
-        return None
-
-    fake_torch = types.SimpleNamespace(load=fake_load)
-    monkeypatch.setitem(sys.modules, "torch", fake_torch)
-
-    with learned_iqa_module._bypass_torch_load_cve_check():
-        fake_torch.load("dummy.bin", weights_only=True)
-
-    assert call_log[0]["weights_only"] is True
-    assert fake_torch.load is fake_load
+    assert not hasattr(backend_module, "_bypass_torch_load_cve_check")
+    assert not hasattr(learned_iqa_module, "_bypass_torch_load_cve_check")
 
 
 def test_detect_hardware_capabilities_cache_can_be_invalidated(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -499,7 +419,7 @@ def test_available_backends_fallback_includes_runtime_and_hardware_when_pyiqa_mi
         learned_iqa_module,
         "_runtime_status_text_from_torch_import",
         lambda import_module=learned_iqa_module.importlib.import_module, system_name=None: (
-            "cuda:available,xpu:unavailable,directml:not-installed,mps:unsupported,cpu:available"
+            "cuda:available,xpu:unavailable,directml:missing,mps:unsupported,cpu:available"
         ),
     )
     monkeypatch.setattr(
@@ -511,7 +431,7 @@ def test_available_backends_fallback_includes_runtime_and_hardware_when_pyiqa_mi
     payload = learned_iqa_module.available_learned_backends(resource_profile="normal")
 
     assert payload["pyiqa"] == "not-installed"
-    assert payload["runtime_status"] == "cuda:available,xpu:unavailable,directml:not-installed,mps:unsupported,cpu:available"
+    assert payload["runtime_status"] == "cuda:available,xpu:unavailable,directml:missing,mps:unsupported,cpu:available"
     assert payload["hardware"] == {"cpu_count": 16, "ram_mb": 65536, "vram_mb": 24576}
     assert payload["resource_profile"] == "normal"
     assert isinstance(payload["recommended_batch_sizes"], dict)
@@ -551,7 +471,10 @@ def test_available_backends_tolerates_runtime_probe_exceptions(monkeypatch: pyte
     assert payload["default_device"] == "cpu"
 
 
-def test_runtime_statuses_tolerates_directml_import_runtime_error() -> None:
+def test_runtime_statuses_tolerates_directml_import_runtime_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    from shotsieve import learned_iqa_runtime as runtime_module
+
+    monkeypatch.setattr(runtime_module.sys, "version_info", (3, 12, 0))
     class NoAccelTorch:
         @staticmethod
         def device(name: str) -> str:
@@ -578,7 +501,7 @@ def test_runtime_statuses_tolerates_directml_import_runtime_error() -> None:
         system_name="Windows",
     )
 
-    assert statuses["directml"] == "not-installed"
+    assert statuses["directml"] == "broken"
 
 
 def test_available_backends_tolerates_incomplete_torch_runtime(monkeypatch: pytest.MonkeyPatch) -> None:

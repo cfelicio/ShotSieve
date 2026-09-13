@@ -444,15 +444,7 @@ def test_learned_model_catalog_exposes_all_supported_backends() -> None:
     models = supported_learned_models()
     runtimes = supported_runtime_targets()
 
-    assert "topiq_nr" in models
-    assert "topiq_nr-flive" in models
-    assert "topiq_nr-spaq" in models
-    assert "arniqa" in models
-    assert "arniqa-spaq" in models
-    assert "qalign" in models
-    assert "tres" in models
-    assert "clipiqa" in models
-    assert "qualiclip" in models
+    assert models == ("topiq_nr", "clipiqa")
     assert "musiq" not in models
     assert "musiq-spaq" not in models
     assert "maniqa" not in models
@@ -464,7 +456,10 @@ def test_learned_model_catalog_exposes_all_supported_backends() -> None:
     assert "apple" in runtimes
 
 
-def test_learned_model_aliases_and_runtime_resolution() -> None:
+def test_learned_model_aliases_and_runtime_resolution(monkeypatch: pytest.MonkeyPatch) -> None:
+    from shotsieve import learned_iqa_runtime as runtime_module
+
+    monkeypatch.setattr(runtime_module.sys, "version_info", (3, 12, 0))
     class NoCudaTorch:
         @staticmethod
         def device(name: str) -> str:
@@ -559,7 +554,8 @@ def test_learned_model_aliases_and_runtime_resolution() -> None:
     assert normalize_device_target("Intel") == "intel"
     assert resolve_device(None, torch_module=NoCudaTorch, import_module=import_missing).runtime == "cpu"
     assert resolve_device("auto", torch_module=NoCudaTorch, import_module=import_missing).runtime == "cpu"
-    assert resolve_device("cuda", torch_module=NoCudaTorch, import_module=import_missing).runtime == "cpu"
+    with pytest.raises(learned_iqa_module.LearnedRuntimeUnavailableError, match="runtime 'cuda'"):
+        resolve_device("cuda", torch_module=NoCudaTorch, import_module=import_missing)
     assert resolve_device(None, torch_module=CudaTorch, import_module=import_missing, system_name="Linux").runtime == "cuda"
     assert resolve_device("cpu", torch_module=CudaTorch, import_module=import_missing).runtime == "cpu"
     assert resolve_device("intel", torch_module=XpuTorch, import_module=import_missing).runtime == "xpu"

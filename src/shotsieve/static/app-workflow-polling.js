@@ -80,7 +80,16 @@
       };
     }
 
-    async function pollJob({ jobId, fetchStatus, fetchResult, onProgress, progressMessage, progressTotal, failureMessage }) {
+    async function pollJob({
+      jobId,
+      fetchStatus,
+      fetchResult,
+      onProgress,
+      progressMessage,
+      progressTotal,
+      failureMessage,
+      retainFailedResult = false,
+    }) {
       while (true) {
         const status = await fetchStatus(jobId);
         const progressPayload = status?.progress && typeof status.progress === "object" ? status.progress : null;
@@ -103,6 +112,22 @@
         }
 
         if (status?.status === "failed") {
+          if (retainFailedResult) {
+            try {
+              const result = await fetchResult(jobId);
+              if (result && typeof result === "object") {
+                return {
+                  ...result,
+                  job_status: "failed",
+                  job_error: status.error || failureMessage,
+                };
+              }
+            } catch (resultError) {
+              if (resultError?.name === "AbortError") {
+                throw resultError;
+              }
+            }
+          }
           throw new Error(status.error || failureMessage);
         }
 
@@ -120,6 +145,8 @@
     const fetchScoreJobResult = createResultFetcher("/api/score/result");
     const fetchScanJobStatus = createStatusFetcher("/api/scan/status");
     const fetchScanJobResult = createResultFetcher("/api/scan/result");
+    const fetchModelPreparationJobStatus = createStatusFetcher("/api/models/prepare/status");
+    const fetchModelPreparationJobResult = createResultFetcher("/api/models/prepare/result");
 
     async function pollScoreJob(scoreJobId, { rowsTotal, pipeline = null }) {
       const phaseMap = {
@@ -268,6 +295,35 @@
       });
     }
 
+    async function pollModelPreparationJob(jobId) {
+      return pollJob({
+        jobId,
+        fetchStatus: fetchModelPreparationJobStatus,
+        fetchResult: fetchModelPreparationJobResult,
+        progressMessage: (progress) => {
+          const phase = String(progress?.phase || "preparing_model").replaceAll("_", " ");
+          return `Preparing ${progress?.model_name || "model"} (${phase})`;
+        },
+        progressTotal: null,
+        failureMessage: "Model preparation failed.",
+        retainFailedResult: true,
+        onProgress: ({ progress }) => {
+          const percent = Number.isFinite(Number(progress?.percent)) ? Number(progress.percent) : null;
+          const phase = String(progress?.phase || "preparing_model");
+          const phaseIndex = phase === "complete" ? 3 : phase === "validating_initialization" ? 3 : phase === "preparing_model" ? 2 : 1;
+          return {
+            overallPercent: percent,
+            phaseState: {
+              percent,
+              phaseIndex,
+              phaseCount: 3,
+              phaseLabel: `Preparing model${progress?.model_name ? ` (${progress.model_name})` : ""}`,
+            },
+          };
+        },
+      });
+    }
+
     return {
       createResultFetcher,
       createStatusFetcher,
@@ -275,6 +331,8 @@
       fetchCompareJobStatus,
       fetchScanJobResult,
       fetchScanJobStatus,
+      fetchModelPreparationJobResult,
+      fetchModelPreparationJobStatus,
       fetchScoreJobResult,
       fetchScoreJobStatus,
       percentFromCounts,
@@ -282,6 +340,7 @@
       pollCompareJob,
       pollJob,
       pollScanJob,
+      pollModelPreparationJob,
       pollScoreJob,
       resolvePhase,
     };

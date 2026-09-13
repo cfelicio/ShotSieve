@@ -14,6 +14,25 @@ from shotsieve.scanner import scan_root
 from shotsieve.scoring import score_files
 
 
+def test_score_rejects_disabled_model_before_using_connection_or_backend() -> None:
+    backend_calls: list[str] = []
+
+    def backend_factory(model_name: str):
+        backend_calls.append(model_name)
+        raise AssertionError("disabled model reached the backend factory")
+
+    import pytest
+
+    with pytest.raises(ValueError, match="unknown or disabled"):
+        score_files(
+            None,
+            learned_backend_name="qalign",
+            learned_backend_factory=backend_factory,
+        )
+
+    assert backend_calls == []
+
+
 def _row_value(row: object, key: str) -> object:
     return cast(dict[str, object], row)[key]
 
@@ -197,15 +216,15 @@ def test_score_refreshes_when_switching_backends(tmp_path: Path) -> None:
         ).fetchone()
 
         class SecondBackend:
-            name = "arniqa"
-            model_version = "fake:arniqa"
+            name = "clipiqa"
+            model_version = "fake:clipiqa"
 
             def score_paths(self, image_paths, *, batch_size: int = 4, resource_profile: str | None = None):
                 return [LearnedScoreResult(raw_score=0.9, normalized_score=90.0, confidence=88.0) for _ in image_paths]
 
         summary = score_files(
             connection,
-            learned_backend_name="arniqa",
+            learned_backend_name="clipiqa",
             learned_backend_factory=lambda model_name: SecondBackend(),
         )
         second = connection.execute(
@@ -214,10 +233,10 @@ def test_score_refreshes_when_switching_backends(tmp_path: Path) -> None:
 
     assert summary.learned_scored == 1
     assert first["learned_backend"] == "topiq_nr"
-    assert second["learned_backend"] == "arniqa"
+    assert second["learned_backend"] == "clipiqa"
     assert second["preset_name"] == "learned-only"
     assert second["overall_score"] == second["learned_score_normalized"] == 90.0
-    assert "learned:fake:arniqa" in second["model_version"]
+    assert "learned:fake:clipiqa" in second["model_version"]
     assert "topiq_nr" not in second["model_version"]
 
 

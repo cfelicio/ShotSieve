@@ -52,6 +52,33 @@ def _handle_overview_get_routes(handler: Any, context: WebRouteContext, parsed: 
 def _handle_review_get_routes(handler: Any, context: WebRouteContext, parsed: Any) -> bool:
     deps = cast(WebRouteDependencies, context.dependencies)
     routes = _get_web_routes()
+    if parsed.path == "/api/review/decisions.csv":
+        params = parse_qs(parsed.query)
+        root = deps.first_value(params, "root", None)
+        decision = deps.required_choice(
+            deps.first_value(params, "decision", "both"),
+            name="decision",
+            choices=("approved", "rejected", "both"),
+        )
+        if not root or not root.strip():
+            raise ValueError("root is required")
+        with deps.database(context.db_path) as connection:
+            snapshot_active = _begin_consistent_snapshot(connection)
+            try:
+                body = deps.decision_csv(connection, root=root, decision=decision)
+            except Exception:
+                _finish_consistent_snapshot(connection, active=snapshot_active, success=False)
+                raise
+            else:
+                _finish_consistent_snapshot(connection, active=snapshot_active, success=True)
+        routes.send_bytes(
+            handler,
+            body.encode("utf-8"),
+            content_type="text/csv; charset=utf-8",
+            download_name="shotsieve-decisions.csv",
+        )
+        return True
+
     if parsed.path == "/api/files":
         params = parse_qs(parsed.query)
         formats_raw = deps.first_value(params, "formats", None)

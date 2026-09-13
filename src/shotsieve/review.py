@@ -1,12 +1,29 @@
 from __future__ import annotations
 
+import csv
+import io
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Iterable
 
-from shotsieve.db import normalize_resolved_path
+from shotsieve.db import normalize_resolved_path, root_path_filter
 from shotsieve.performance import log_duration, monotonic_seconds
-
+from shotsieve.review_cache import (
+    _PRUNE_MISSING_CACHE_BATCH_SIZE,
+    _allow_legacy_preview_path_fallback,
+    _is_within_dir,
+    _resolve_ready_preview_path,
+    _resolve_source_path_within_roots,
+    _trusted_delete_roots,
+    apply_missing_cache_entries,
+    clear_cache_scope,
+    delete_files,
+    media_path_for_file,
+    normalize_file_ids,
+    preview_missing_cache_entries,
+    prune_missing_cache_entries,
+    remove_files_from_cache,
+)
 from shotsieve.review_filters import (
     SORT_ORDERS,
     VALID_DECISION_STATES,
@@ -21,20 +38,6 @@ from shotsieve.review_filters import (
     _build_score_filters,
     _build_size_filters,
     _compile_where_clause,
-)
-from shotsieve.review_cache import (
-    _PRUNE_MISSING_CACHE_BATCH_SIZE,
-    _allow_legacy_preview_path_fallback,
-    _is_within_dir,
-    _resolve_ready_preview_path,
-    _resolve_source_path_within_roots,
-    _trusted_delete_roots,
-    clear_cache_scope,
-    delete_files,
-    media_path_for_file,
-    normalize_file_ids,
-    prune_missing_cache_entries,
-    remove_files_from_cache,
 )
 
 __all__ = [
@@ -59,8 +62,10 @@ __all__ = [
     "_resolve_source_path_within_roots",
     "_review_summary",
     "_trusted_delete_roots",
+    "apply_missing_cache_entries",
     "clear_cache_scope",
     "count_review_files",
+    "decision_csv",
     "delete_files",
     "get_review_file_detail",
     "list_analysis_diagnostics",
@@ -72,6 +77,7 @@ __all__ = [
     "media_path_for_file",
     "normalize_file_ids",
     "prune_missing_cache_entries",
+    "preview_missing_cache_entries",
     "remove_files_from_cache",
     "review_overview",
     "review_selection_revision",
@@ -146,6 +152,59 @@ def list_roots(connection) -> list[str]:
         "SELECT DISTINCT root_path FROM scan_runs ORDER BY root_path ASC"
     ).fetchall()
     return [row["root_path"] for row in rows]
+
+
+def _spreadsheet_safe_text(value: object) -> str:
+    """Keep exported text cells from being interpreted as spreadsheet formulas."""
+    text = "" if value is None else str(value)
+    if text.startswith(("=", "+", "-", "@")):
+        return "'" + text
+    return text
+
+
+def decision_csv(connection, *, root: str, decision: str = "both") -> str:
+    """Render all marked decisions in one root from a single database snapshot."""
+    root_text = str(root or "").strip()
+    if not root_text:
+        raise ValueError("root is required")
+    if decision not in {"approved", "rejected", "both"}:
+        raise ValueError("decision must be one of: approved, rejected, both")
+
+    root_path = Path(root_text).expanduser().resolve()
+    root_clause, root_params = root_path_filter("files.path_key", root_path)
+    decision_conditions: list[str] = []
+    if decision in {"approved", "both"}:
+        decision_conditions.append("COALESCE(review_state.export_marked, 0) = 1")
+    if decision in {"rejected", "both"}:
+        decision_conditions.append("COALESCE(review_state.delete_marked, 0) = 1")
+
+    rows = connection.execute(
+        f"""
+        SELECT files.id, files.path, review_state.export_marked,
+               review_state.delete_marked, review_state.updated_time
+        FROM files
+        JOIN review_state ON review_state.file_id = files.id
+        WHERE {root_clause}
+          AND ({" OR ".join(decision_conditions)})
+        ORDER BY files.path_key ASC, files.id ASC
+        """,
+        tuple(root_params),
+    ).fetchall()
+
+    output = io.StringIO(newline="")
+    writer = csv.writer(output, lineterminator="\r\n")
+    writer.writerow(("file_id", "decision", "source_path", "library_root", "decision_updated_time"))
+    library_root = str(root_path)
+    for row in rows:
+        row_decision = "approved" if int(row["export_marked"] or 0) else "rejected"
+        writer.writerow((
+            str(row["id"]),
+            row_decision,
+            _spreadsheet_safe_text(row["path"]),
+            _spreadsheet_safe_text(library_root),
+            str(row["updated_time"] or ""),
+        ))
+    return "\ufeff" + output.getvalue()
 
 
 def list_scan_runs(connection, *, limit: int = 6) -> list[dict[str, object]]:

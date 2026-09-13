@@ -105,7 +105,8 @@ function Test-PythonModuleAvailable {
 function Install-PyInstallerIfMissing {
     param(
         [string]$PythonCommand,
-        [string]$ConstraintsFile
+        [string]$ConstraintsFile,
+        [string]$AdditionalConstraintsFile = ""
     )
 
     if (Test-PythonModuleAvailable -PythonCommand $PythonCommand -ModuleName "PyInstaller") {
@@ -118,7 +119,11 @@ function Install-PyInstallerIfMissing {
         throw "Failed to upgrade pip before installing PyInstaller."
     }
 
-    & $PythonCommand -m pip install pyinstaller -c $ConstraintsFile
+    $constraintArgs = @("-c", $ConstraintsFile)
+    if (-not [string]::IsNullOrWhiteSpace($AdditionalConstraintsFile)) {
+        $constraintArgs += @("-c", $AdditionalConstraintsFile)
+    }
+    & $PythonCommand -m pip install pyinstaller @constraintArgs
     if ($LASTEXITCODE -ne 0) {
         throw "Failed to install PyInstaller for '$PythonCommand'."
     }
@@ -128,18 +133,23 @@ function Install-TorchVariant {
     param(
         [string]$PythonCommand,
         [string]$TorchVariant,
-        [string]$ConstraintsFile
+        [string]$ConstraintsFile,
+        [string]$AdditionalConstraintsFile = ""
     )
 
     $variant = "default"
     if (-not [string]::IsNullOrWhiteSpace($TorchVariant)) {
         $variant = $TorchVariant.ToLowerInvariant()
     }
+    $constraintArgs = @("-c", $ConstraintsFile)
+    if (-not [string]::IsNullOrWhiteSpace($AdditionalConstraintsFile)) {
+        $constraintArgs += @("-c", $AdditionalConstraintsFile)
+    }
 
     switch ($variant) {
         "cpu" {
             Write-Host "Installing CPU Torch runtime..."
-            & $PythonCommand -m pip install --upgrade --force-reinstall --no-cache-dir torch torchvision --index-url https://download.pytorch.org/whl/cpu -c $ConstraintsFile
+            & $PythonCommand -m pip install --upgrade --force-reinstall --no-cache-dir torch torchvision --index-url https://download.pytorch.org/whl/cpu @constraintArgs
             break
         }
         "cuda" {
@@ -147,13 +157,13 @@ function Install-TorchVariant {
             break
         }
         "directml" {
-            Write-Host "Installing default Torch runtime for DirectML target..."
-            & $PythonCommand -m pip install --upgrade --force-reinstall --no-cache-dir torch torchvision -c $ConstraintsFile
+            Write-Host "Installing the pinned Torch/Torchvision/DirectML trio for DirectML target..."
+            & $PythonCommand -m pip install --upgrade --force-reinstall --no-cache-dir torch==2.4.1 torchvision==0.19.1 torch-directml==0.2.5.dev240914 @constraintArgs
             break
         }
         default {
             Write-Host "Installing default Torch runtime..."
-            & $PythonCommand -m pip install --upgrade --force-reinstall --no-cache-dir torch torchvision -c $ConstraintsFile
+            & $PythonCommand -m pip install --upgrade --force-reinstall --no-cache-dir torch torchvision @constraintArgs
             break
         }
     }
@@ -171,13 +181,23 @@ function Install-TargetDependencies {
         [string]$ConstraintsFile
     )
 
+    $targetConstraintsFile = $ConstraintsFile
+    $targetConstraintRelativePath = [string]$Target.constraintsFile
+    if (-not [string]::IsNullOrWhiteSpace($targetConstraintRelativePath)) {
+        $targetConstraintsFile = Join-Path $ProjectRoot $targetConstraintRelativePath
+    }
+    if (-not (Test-Path $targetConstraintsFile)) {
+        throw "Target constraints file not found for '$($Target.id)': '$targetConstraintsFile'"
+    }
+
     Write-Host "Refreshing packaging tools for '$($Target.id)'..."
-    & $PythonCommand -m pip install --upgrade pip setuptools wheel -c $ConstraintsFile
+    & $PythonCommand -m pip install --upgrade pip setuptools wheel -c $targetConstraintsFile -c $ConstraintsFile
     if ($LASTEXITCODE -ne 0) {
         throw "Failed to upgrade packaging tools for target '$($Target.id)'."
     }
 
-    Install-TorchVariant -PythonCommand $PythonCommand -TorchVariant ([string]$Target.torchVariant) -ConstraintsFile $ConstraintsFile
+    $additionalConstraintsFile = if ($targetConstraintsFile -ne $ConstraintsFile) { $ConstraintsFile } else { "" }
+    Install-TorchVariant -PythonCommand $PythonCommand -TorchVariant ([string]$Target.torchVariant) -ConstraintsFile $targetConstraintsFile -AdditionalConstraintsFile $additionalConstraintsFile
 
     $extras = @($Target.extras)
     if ($extras.Count -gt 0) {
@@ -185,7 +205,7 @@ function Install-TargetDependencies {
         Write-Host "Installing ShotSieve extras for '$($Target.id)': $extrasCsv"
         Push-Location $ProjectRoot
         try {
-            & $PythonCommand -m pip install -e ".[${extrasCsv}]" -c $ConstraintsFile
+            & $PythonCommand -m pip install -e ".[${extrasCsv}]" -c $targetConstraintsFile -c $ConstraintsFile
             if ($LASTEXITCODE -ne 0) {
                 throw "Failed to install ShotSieve extras for target '$($Target.id)'."
             }
@@ -195,7 +215,7 @@ function Install-TargetDependencies {
         }
     }
 
-    Install-PyInstallerIfMissing -PythonCommand $PythonCommand -ConstraintsFile $ConstraintsFile
+    Install-PyInstallerIfMissing -PythonCommand $PythonCommand -ConstraintsFile $targetConstraintsFile -AdditionalConstraintsFile $additionalConstraintsFile
 }
 
 function Get-WindowsTargets {

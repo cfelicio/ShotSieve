@@ -1,13 +1,21 @@
 import concurrent.futures
-from datetime import UTC, datetime
 import fnmatch
 import os
+import stat
+from collections.abc import Callable, Iterable, Sequence
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Callable, Iterable, Sequence
 
 from shotsieve.config import DEFAULT_RAW_PREVIEW_MODE
-from shotsieve.db import PREVIEW_CACHE_ROOT_METADATA_KEY, get_metadata_value, infer_preview_cache_roots, normalize_resolved_path, root_path_filter, set_preview_cache_root
-from shotsieve.models import ScanSummary
+from shotsieve.db import (
+    PREVIEW_CACHE_ROOT_METADATA_KEY,
+    attach_scan_run_diagnostic,
+    get_metadata_value,
+    infer_preview_cache_roots,
+    normalize_resolved_path,
+    set_preview_cache_root,
+)
+from shotsieve.models import ScanRunDiagnostic, ScanSummary
 from shotsieve.preview import generate_preview
 
 
@@ -87,6 +95,32 @@ def _is_excluded(path: Path, excluded: set[Path]) -> bool:
     return False
 
 
+class FileDiscoveryError(OSError):
+    """Raised when a scan cannot establish complete filesystem coverage."""
+
+    def __init__(self, path: Path, cause: OSError) -> None:
+        self.path = path
+        self.cause = cause
+        super().__init__(f"Unable to enumerate '{path}': {cause}")
+
+
+def _raise_discovery_error(path: Path, cause: OSError) -> None:
+    if isinstance(cause, FileDiscoveryError):
+        raise cause
+    raise FileDiscoveryError(path, cause) from cause
+
+
+def _preview_marker_exists(path: Path) -> bool:
+    """Check a preview marker without hiding access errors as absence."""
+    try:
+        os.stat(path)
+    except (FileNotFoundError, NotADirectoryError):
+        return False
+    except OSError as exc:
+        _raise_discovery_error(path, exc)
+    return True
+
+
 def discover_files(
     root: Path,
     *,
@@ -102,24 +136,38 @@ def discover_files(
     root_resolved = root.expanduser().resolve()
     ignore_matcher = IgnoreMatcher(root_resolved, ignore_rules)
 
+    try:
+        root_stat = os.stat(root_resolved)
+    except OSError as exc:
+        _raise_discovery_error(root_resolved, exc)
+    if not stat.S_ISDIR(root_stat.st_mode):
+        _raise_discovery_error(root_resolved, NotADirectoryError(str(root_resolved)))
+
     if not recursive:
         try:
-            for entry in os.scandir(root_resolved):
-                if entry.is_file():
-                    path = Path(entry.path)
-                    resolved_path = path.resolve()
-                    if (
-                        path.suffix.casefold() in allowed_extensions
-                        and not _is_excluded(resolved_path, excluded)
-                        and not _is_within_claimed_preview_root(resolved_path, claimed_preview_roots)
-                        and not ignore_matcher.should_ignore(resolved_path)
-                    ):
-                        yield path
-        except OSError:
-            pass
+            with os.scandir(root_resolved) as entries:
+                for entry in entries:
+                    if entry.is_file():
+                        path = Path(entry.path)
+                        resolved_path = path.resolve()
+                        if (
+                            path.suffix.casefold() in allowed_extensions
+                            and not _is_excluded(resolved_path, excluded)
+                            and not _is_within_claimed_preview_root(resolved_path, claimed_preview_roots)
+                            and not ignore_matcher.should_ignore(resolved_path)
+                        ):
+                            yield path
+        except FileDiscoveryError:
+            raise
+        except OSError as exc:
+            _raise_discovery_error(root_resolved, exc)
         return
 
-    for dirpath, dirnames, filenames in os.walk(root_resolved, topdown=True):
+    def on_walk_error(error: OSError) -> None:
+        error_path = Path(getattr(error, "filename", None) or root_resolved)
+        _raise_discovery_error(error_path, error)
+
+    for dirpath, dirnames, filenames in os.walk(root_resolved, topdown=True, onerror=on_walk_error):
         current_dir = Path(dirpath)
         
         for dname in list(dirnames):
@@ -131,16 +179,17 @@ def discover_files(
                     dirnames.remove(dname)
                     continue
                     
-                if (resolved_dpath / ".shotsieve-preview-root").exists():
+                if _preview_marker_exists(resolved_dpath / ".shotsieve-preview-root"):
                     dirnames.remove(dname)
                     continue
                     
                 if ignore_matcher.should_ignore(resolved_dpath):
                     dirnames.remove(dname)
                     continue
-            except OSError:
-                dirnames.remove(dname)
-                continue
+            except FileDiscoveryError:
+                raise
+            except OSError as exc:
+                _raise_discovery_error(dpath, exc)
 
         for fname in filenames:
             fpath = current_dir / fname
@@ -154,8 +203,10 @@ def discover_files(
                     continue
                 if ignore_matcher.should_ignore(resolved_fpath):
                     continue
-            except OSError:
-                continue
+            except FileDiscoveryError:
+                raise
+            except OSError as exc:
+                _raise_discovery_error(fpath, exc)
             yield fpath
 
 
@@ -200,7 +251,15 @@ def scan_root(
     requested_offset = max(0, int(offset))
     remaining_offset = requested_offset
     last_error: str | None = None
-    seen_path_keys: set[str] = set()
+
+    cursor = connection.execute(
+        """
+        INSERT INTO scan_runs(started_time, root_path, status)
+        VALUES(?, ?, 'running')
+        """,
+        (started_time, str(root.resolve())),
+    )
+    scan_run_id = cursor.lastrowid
 
     stored_preview_root = get_metadata_value(connection, PREVIEW_CACHE_ROOT_METADATA_KEY)
     existing_preview_roots = []
@@ -222,14 +281,6 @@ def scan_root(
     excluded_preview_dirs = [preview_dir]
     excluded_preview_dirs.extend(existing_preview_roots)
 
-    cursor = connection.execute(
-        """
-        INSERT INTO scan_runs(started_time, root_path, status)
-        VALUES(?, ?, 'running')
-        """,
-        (started_time, str(root.resolve())),
-    )
-    scan_run_id = cursor.lastrowid
     shared_executor: concurrent.futures.ProcessPoolExecutor | None = None
 
     try:
@@ -271,7 +322,6 @@ def scan_root(
                     processed_count = max(0, processed_count - 1)
                     summary.files_seen = max(0, summary.files_seen - 1)
                     raise
-            seen_path_keys.add(canonical_path_key(path))
             pending_paths.append(path)
 
             # Flush in batches to keep memory low.  The batch is processed
@@ -346,10 +396,6 @@ def scan_root(
             final_total = total_hint or processed_count
             progress_callback(processed_count, final_total, "scanning")
 
-        if limit is None and requested_offset == 0:
-            _run_cancel_check(cancel_check)
-            summary.files_removed += purge_missing_files(connection, root=root, seen_path_keys=seen_path_keys)
-
         connection.execute(
             """
             UPDATE scan_runs
@@ -387,32 +433,54 @@ def scan_root(
                 progress_callback(processed_count, final_total, "failed")
             except InterruptedError:
                 pass
-        connection.execute(
-            """
-            UPDATE scan_runs
-            SET completed_time = ?,
-                files_seen = ?,
-                files_added = ?,
-                files_updated = ?,
-                files_unchanged = ?,
-                files_removed = ?,
-                status = 'failed',
-                error_text = ?
-            WHERE id = ?
-            """,
-            (
-                utc_now(),
-                summary.files_seen,
-                summary.files_added,
-                summary.files_updated,
-                summary.files_unchanged,
-                summary.files_removed,
-                str(exc),
-                scan_run_id,
-            ),
+        completed_time = utc_now()
+        error_text = str(exc) or exc.__class__.__name__
+        diagnostic = ScanRunDiagnostic(
+            root_path=str(root.resolve()),
+            started_time=started_time,
+            completed_time=completed_time,
+            status="failed",
+            files_seen=summary.files_seen,
+            files_added=summary.files_added,
+            files_updated=summary.files_updated,
+            files_unchanged=summary.files_unchanged,
+            files_removed=summary.files_removed,
+            error_text=error_text,
         )
+        try:
+            connection.execute(
+                """
+                UPDATE scan_runs
+                SET completed_time = ?,
+                    files_seen = ?,
+                    files_added = ?,
+                    files_updated = ?,
+                    files_unchanged = ?,
+                    files_removed = ?,
+                    status = 'failed',
+                    error_text = ?
+                WHERE id = ?
+                """,
+                (
+                    completed_time,
+                    summary.files_seen,
+                    summary.files_added,
+                    summary.files_updated,
+                    summary.files_unchanged,
+                    summary.files_removed,
+                    error_text,
+                    scan_run_id,
+                ),
+            )
+        except Exception as diagnostic_update_error:
+            attach_scan_run_diagnostic(diagnostic_update_error, diagnostic)
+            raise exc from diagnostic_update_error
+        finally:
+            attach_scan_run_diagnostic(exc, diagnostic)
         if isinstance(exc, InterruptedError):
-            raise ScanInterrupted(str(exc), processed_count=processed_count) from exc
+            interrupted = ScanInterrupted(error_text, processed_count=processed_count)
+            attach_scan_run_diagnostic(interrupted, diagnostic)
+            raise interrupted from exc
         raise
     finally:
         if shared_executor is not None:
@@ -815,30 +883,6 @@ def commit_batch(connection, batch: list[dict], summary: ScanSummary, *, existin
                 summary.last_batch_error = item["last_error"]
 
 
-def purge_missing_files(connection, *, root: Path, seen_path_keys: set[str]) -> int:
-    root_path = root.resolve()
-    where_clause, params = root_path_filter("path_key", root_path)
-    rows = connection.execute(
-        f"SELECT id, path_key FROM files WHERE {where_clause}",
-        tuple(params),
-    ).fetchall()
-
-    removed_ids = [
-        row["id"]
-        for row in rows
-        if row["path_key"] not in seen_path_keys
-    ]
-
-    if not removed_ids:
-        return 0
-
-    connection.executemany(
-        "DELETE FROM files WHERE id = ?",
-        [(file_id,) for file_id in removed_ids],
-    )
-    return len(removed_ids)
-
-
 def utc_now() -> str:
     return datetime.now(UTC).isoformat()
 
@@ -855,7 +899,7 @@ def _is_within_claimed_preview_root(path: Path, claimed_preview_roots: set[Path]
     for parent in path.parents:
         if parent in claimed_preview_roots:
             return True
-        if (parent / ".shotsieve-preview-root").exists():
+        if _preview_marker_exists(parent / ".shotsieve-preview-root"):
             claimed_preview_roots.add(parent)
             return True
     return False

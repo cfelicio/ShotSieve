@@ -2,58 +2,84 @@
 
 ShotSieve is licensed under the [GNU Affero General Public License v3.0 or later](LICENSE).
 
-ShotSieve depends on third-party libraries and AI model weights that are
-distributed under their own licenses. **These licenses restrict usage to
-non-commercial purposes.** By using ShotSieve with learned IQA scoring, you
-agree to comply with the terms of each upstream license listed below.
+The learned-IQA path is optional. ShotSieve does not bundle model weights or
+private photographs. When a supported model is prepared, its upstream assets
+may be retrieved into the configured caches. The caches are deliberately split:
+`HF_HOME`/`HF_HUB_CACHE` are used for Hugging Face assets and `TORCH_HOME` is
+used by Torch Hub and the OpenAI CLIP loader. A cache root supplied with
+`--model-cache-dir` only supplies defaults for those locations; it does not
+move existing caches.
 
-No model weights are bundled with ShotSieve. Weights are downloaded on
-first use from Hugging Face and cached locally in `~/.cache/torch/hub/pyiqa/`.
+The entries below identify the current supported product boundary. They are
+not a blanket permission for every upstream asset: package code, checkpoint
+files, and any base model can have different terms. The exact package versions
+used by a release must be taken from that release's target constraints and
+audited before publication.
 
 ---
 
 ## pyiqa (IQA-PyTorch)
 
+- **Pinned project version:** `pyiqa==0.1.16` in the learned-IQA extras
 - **Repository:** https://github.com/chaofengc/IQA-PyTorch
-- **License:** NTU S-Lab License 1.0 + Creative Commons Attribution-NonCommercial-ShareAlike 4.0 International (CC BY-NC-SA 4.0)
-- **Usage:** Non-commercial only. Attribution required. Derivative works must use the same license.
+- **License:** [PolyForm Noncommercial License 1.0.0](https://github.com/chaofengc/IQA-PyTorch/blob/v0.1.16/LICENSE), with the repository's additional `LICENSE-S-Lab` notice file
+- **Required notice:** retain the upstream license and notice files when distributing a bundle containing pyiqa code
 - **Authors:** Chaofeng Chen et al.
 
-## TOPIQ (topiq_nr)
+The pyiqa license changed over time. Do not copy the terms from an older
+release into a current package audit.
 
-- **Paper:** "TOPIQ: A Top-down Approach from Semantics to Distortions for Image Quality Assessment" (2024)
-- **Repository:** https://github.com/chaofengc/IQA-PyTorch
-- **License:** NTU S-Lab License 1.0 / CC BY-NC-SA 4.0 (via pyiqa)
-- **Usage:** Non-commercial only.
-- **Authors:** Chaofeng Chen, Jiadi Mo, Jingwen Hou, Haoning Wu, Liang Liao, Wenxiu Sun, Qiong Yan, Weisi Lin
+## TOPIQ (`topiq_nr`)
 
-## CLIP-IQA (clipiqa)
+- **Paper:** [TOPIQ: A Top-down Approach from Semantics to Distortions for Image Quality Assessment](https://arxiv.org/abs/2308.03060)
+- **Implementation:** pyiqa's `CFANet` configuration `cfanet_nr_koniq_res50`
+- **Checkpoint identifier:** `cfanet_nr_koniq_res50-9a73138b.pth`
+- **Upstream source:** [IQA-PyTorch-Weights](https://huggingface.co/chaofengc/IQA-PyTorch-Weights)
+- **Terms:** the checkpoint and ResNet-50 semantic backbone must be audited under their own upstream terms in the exact release environment; they are not automatically licensed by ShotSieve or by the pyiqa package metadata
 
-- **Paper:** "Exploring CLIP for Assessing the Look and Feel of Images" (AAAI 2023)
-- **Repository:** https://github.com/IceClear/CLIP-IQA
-- **License:** NTU S-Lab License 1.0
-- **Usage:** Non-commercial only. Contact authors for commercial use.
-- **Authors:** Jianyi Wang, Kelvin C.K. Chan, Chen Change Loy
+## CLIPIQA (`clipiqa`)
 
-## Q-Align (qalign)
+- **Paper:** [Exploring CLIP for Assessing the Look and Feel of Images](https://github.com/IceClear/CLIP-IQA)
+- **Implementation:** pyiqa's plain `CLIPIQA` configuration, using the OpenAI CLIP `RN50` backbone and packaged prompt pairs
+- **Checkpoint identifier:** `RN50.pt`
+- **Reference URL and embedded SHA-256:** `https://openaipublic.azureedge.net/clip/models/afeb0e10f9e5a86da6080e35cf09123aca3b358a0c3e3b6c78a7b63bc04b6762/RN50.pt`
+- **Terms:** review the [CLIP source license](https://github.com/openai/CLIP/blob/main/LICENSE) and the applicable checkpoint/model terms before redistribution or commercial use
 
-- **Paper:** "Q-Align: Teaching LMMs for Visual Scoring via Discrete Text-Defined Levels" (ICML 2024)
-- **Repository:** https://github.com/Q-Future/Q-Align
-- **License:** Subject to the licenses of the underlying base models (LLaVA). No explicit open-source license in the Q-Align repository. Users should treat the model weights as research-use only unless the authors clarify otherwise.
-- **Authors:** Haoning Wu, Zicheng Zhang, Weixia Zhang, Chaofeng Chen, Liang Liao, Chunyi Li, Yixuan Gao, Annan Wang, Erli Zhang, Wenxiu Sun, Qiong Yan, Xiongkuo Min, Guangtao Zhai, Weisi Lin
+The supported plain `clipiqa` model does not download a separate learned
+CLIPIQA prompt checkpoint. The optional `clipiqa+` variants are outside the
+ShotSieve product catalog.
+
+## Retired Q-Align (`qalign`)
+
+Q-Align remains recognizable only so historical score rows can be displayed.
+It is disabled for new ShotSieve runs and is not part of the current asset or
+bundle set. No Q-Align weights are bundled or downloaded by the supported
+product workflow. If an old installation still contains Q-Align assets, audit
+their original model-card and base-model terms separately.
 
 ---
 
-## Summary
+## Release audit
 
-| Component | License | Commercial use |
+The source project intentionally does not claim that a lower-bound transitive
+dependency set is an exact license inventory. For each release target, record
+the resolved versions and license metadata from the isolated build environment,
+inspect all license/notice files in the staged bundle, and verify that no
+weights are present. A minimal metadata check is:
+
+```bash
+python -m pip show pyiqa torch torchvision timm huggingface-hub transformers Pillow numpy
+```
+
+Handle missing optional packages explicitly; the command reports warnings for
+packages not selected by a target. The audit must also review the
+model-specific sources above, because package license metadata alone is
+insufficient.
+
+| Component | Current status | Commercial-use decision |
 |---|---|---|
-| ShotSieve | AGPL-3.0-or-later | Allowed (copyleft) |
-| pyiqa | NTU S-Lab + CC BY-NC-SA 4.0 | Non-commercial only |
-| TOPIQ weights | NTU S-Lab + CC BY-NC-SA 4.0 | Non-commercial only |
-| CLIP-IQA weights | NTU S-Lab License 1.0 | Non-commercial only |
-| Q-Align weights | No explicit OSS license | Research use only |
-
-If you intend to use ShotSieve or its AI scoring components in a commercial
-context, you must obtain separate commercial licenses from the respective
-authors of pyiqa and each model listed above.
+| ShotSieve | AGPL-3.0-or-later | Follow AGPL obligations |
+| pyiqa 0.1.16 | PolyForm Noncommercial 1.0.0 plus included notices | Do not assume commercial permission |
+| TOPIQ assets | Package, checkpoint, and backbone terms are separate | Verify each asset before use |
+| CLIPIQA assets | pyiqa code plus OpenAI CLIP RN50 terms | Verify both code and checkpoint terms |
+| Q-Align assets | Retired and not shipped by the supported workflow | Not supported for new runs |

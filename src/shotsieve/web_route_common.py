@@ -7,9 +7,10 @@ import sys
 from dataclasses import dataclass
 from http import HTTPStatus
 from pathlib import Path
-from typing import Any, Callable, TypedDict
+from typing import Any, Callable, NotRequired, TypedDict
 
 from shotsieve.job_registry import JobRegistry
+from shotsieve.models import FileOperationSummary
 from shotsieve.web_request import CompareRequest, ScanRequest, try_parse_http_status
 
 _SELECTION_BATCH_SIZE = 500
@@ -25,19 +26,41 @@ class DeleteResultPayload(TypedDict):
     failed: list[object]
     failed_count: int
     delete_from_disk: bool
+    action: NotRequired[str]
+    items: NotRequired[list[object]]
+    completed_count: NotRequired[int]
+    partial_count: NotRequired[int]
+    unprocessed_count: NotRequired[int]
+    safe_retry_ids: NotRequired[list[int]]
+    warnings: NotRequired[list[object]]
+    cancelled: NotRequired[bool]
+    fatal_error: NotRequired[str | None]
+    outcome: NotRequired[str]
 
 
 class ExportResultPayload(TypedDict):
     copied: int
     moved: int
     failed: list[object]
+    action: NotRequired[str]
+    deleted_ids: NotRequired[list[int]]
+    deleted_count: NotRequired[int]
+    delete_from_disk: NotRequired[bool]
+    items: NotRequired[list[object]]
+    completed_count: NotRequired[int]
+    failed_count: NotRequired[int]
+    partial_count: NotRequired[int]
+    unprocessed_count: NotRequired[int]
+    safe_retry_ids: NotRequired[list[int]]
+    warnings: NotRequired[list[object]]
+    cancelled: NotRequired[bool]
+    fatal_error: NotRequired[str | None]
+    outcome: NotRequired[str]
 
 
 @dataclass(slots=True)
-class ExportAggregate:
-    copied: int
-    moved: int
-    failed: list[object]
+class ExportAggregate(FileOperationSummary):
+    action: str = "export"
 
 
 def _is_ignorable_client_disconnect(exc: BaseException) -> bool:
@@ -75,6 +98,7 @@ class WebRouteDependencies:
     list_review_browser_file_ids: Callable[..., list[int]]
     list_review_state_file_ids: Callable[..., list[int]]
     list_analysis_diagnostics: Callable[..., dict[str, object]]
+    decision_csv: Callable[..., str]
     get_review_file_detail: Callable[[Any, int], object | None]
     update_review_state: Callable[..., None]
     update_review_state_batch: Callable[..., int]
@@ -92,12 +116,14 @@ class WebRouteDependencies:
     get_preview_cache_root: Callable[..., Path]
     count_score_rows: Callable[..., int]
     clear_cache_scope: Callable[..., dict[str, int]]
-    prune_missing_cache_entries: Callable[..., int]
+    preview_missing_cache_entries: Callable[..., dict[str, object]]
+    apply_missing_cache_entries: Callable[..., dict[str, object]]
     reveal_in_file_manager: Callable[[Path], str]
     delete_files: Callable[..., object]
     export_files: Callable[..., Any]
     default_batch_size: Callable[[], int]
     thread_factory: Callable[..., Any]
+    prepare_model: Callable[..., dict[str, object]] | None = None
 
 
 @dataclass(frozen=True)
@@ -112,6 +138,7 @@ class WebRouteContext:
     media_mime_fallbacks: dict[str, str]
     dependencies: object
     operation_registry: JobRegistry | None = None
+    model_registry: JobRegistry | None = None
 
 
 def _require_registry(registry: JobRegistry | None, *, label: str) -> JobRegistry:
@@ -151,16 +178,40 @@ def _delete_result_payload(result: object) -> DeleteResultPayload:
     deleted_ids = [int(file_id) for file_id in raw_deleted_ids] if isinstance(raw_deleted_ids, list) else []
     raw_failed = result.get("failed", [])
     failed = list(raw_failed) if isinstance(raw_failed, list) else []
-    return {
+    payload: DeleteResultPayload = {
         "deleted_ids": deleted_ids,
         "deleted_count": int(result.get("deleted_count", 0) or 0),
         "failed": failed,
         "failed_count": int(result.get("failed_count", 0) or 0),
         "delete_from_disk": bool(result.get("delete_from_disk", False)),
     }
+    if "items" in result:
+        for key in (
+            "action",
+            "items",
+            "completed_count",
+            "partial_count",
+            "unprocessed_count",
+            "safe_retry_ids",
+            "warnings",
+            "cancelled",
+            "fatal_error",
+            "outcome",
+        ):
+            if key in result:
+                payload[key] = result[key]  # type: ignore[literal-required]
+    return payload
 
 
 def _export_result_payload(result: object) -> ExportResultPayload:
+    if isinstance(result, FileOperationSummary):
+        if not result.contract_enabled:
+            return {
+                "copied": result.copied,
+                "moved": result.moved,
+                "failed": result.failed,
+            }
+        return result.to_dict()  # type: ignore[return-value]
     raw_failed = getattr(result, "failed", [])
     failed = list(raw_failed) if isinstance(raw_failed, list) else []
     return {
@@ -490,6 +541,28 @@ def send_json(handler: Any, payload: object) -> None:
     handler.send_response(HTTPStatus.OK)
     handler.send_header("Content-Type", "application/json; charset=utf-8")
     handler.send_header("Content-Length", str(len(body)))
+    handler.end_headers()
+    try:
+        handler.wfile.write(body)
+    except Exception as exc:
+        if _is_ignorable_client_disconnect(exc):
+            return
+        raise
+
+
+def send_bytes(
+    handler: Any,
+    body: bytes,
+    *,
+    content_type: str,
+    download_name: str | None = None,
+) -> None:
+    handler.send_response(HTTPStatus.OK)
+    handler.send_header("Content-Type", content_type)
+    handler.send_header("Content-Length", str(len(body)))
+    handler.send_header("Cache-Control", "no-cache, must-revalidate")
+    if download_name:
+        handler.send_header("Content-Disposition", f'attachment; filename="{download_name}"')
     handler.end_headers()
     try:
         handler.wfile.write(body)

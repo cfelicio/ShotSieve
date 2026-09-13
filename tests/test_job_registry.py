@@ -34,6 +34,24 @@ def test_pop_result_rejects_non_dict_summary_payloads() -> None:
     assert result is None
 
 
+def test_failed_job_retains_operation_summary_for_status_polling() -> None:
+    registry = JobRegistry(max_jobs=10)
+    job_id = registry.create(initial_progress={"files_processed": 1})
+    summary = {
+        "outcome": "cancelled",
+        "completed_count": 1,
+        "unprocessed_count": 2,
+    }
+
+    registry.fail(job_id, error="operation stopped", summary=summary)
+
+    payload = registry.status(job_id)
+    assert payload is not None
+    assert payload["status"] == "failed"
+    assert payload["error"] == "operation stopped"
+    assert payload["summary"] == summary
+
+
 
 def test_evict_stale_tolerates_invalid_finished_timestamps() -> None:
     registry = JobRegistry(max_jobs=1)

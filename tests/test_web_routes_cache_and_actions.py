@@ -1,9 +1,8 @@
 from __future__ import annotations
 
 import threading
-
-from types import SimpleNamespace
 from pathlib import Path
+from types import SimpleNamespace
 from urllib.parse import urlparse
 
 import pytest
@@ -18,39 +17,17 @@ def _captured_list(store: dict[str, object], key: str) -> list[object]:
     return bucket
 
 
-def test_cache_post_route_family_handles_missing_scope(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+def test_cache_post_route_family_rejects_missing_scope(tmp_path: Path):
     from shotsieve import web_routes as route_module
 
-    captured: dict[str, object] = {}
-    connection = object()
-    preview_root = (tmp_path / "previews").resolve()
-
-    class _DatabaseContext:
-        def __enter__(self):
-            return connection
-
-        def __exit__(self, exc_type, exc, tb):
-            return False
-
-    def fake_send_json(_handler, payload: object) -> None:
-        captured["payload"] = payload
-
-    def fake_clear_cache_scope(*_args, **_kwargs):
-        raise AssertionError("clear_cache_scope should not run for missing scope")
-
-    monkeypatch.setattr(route_module, "send_json", fake_send_json)
-
-    def fake_prune_missing_cache_entries(_connection, *, preview_cache_root):
-        captured["preview_cache_root"] = preview_cache_root
-        return 7
+    def required_choice(value, *, name, choices):
+        if value not in choices:
+            raise ValueError(f"{name} must be one of: {', '.join(choices)}")
+        return value
 
     deps = SimpleNamespace(
         read_json_body=lambda _handler, *, max_body_size: {"scope": "missing"},
-        required_choice=lambda value, *, name, choices: value,
-        database=lambda _path: _DatabaseContext(),
-        get_preview_cache_root=lambda _connection, *, db_path, persist: preview_root,
-        prune_missing_cache_entries=fake_prune_missing_cache_entries,
-        clear_cache_scope=fake_clear_cache_scope,
+        required_choice=required_choice,
     )
     context = route_module.WebRouteContext(
         db_path=tmp_path / "shotsieve.db",
@@ -65,11 +42,104 @@ def test_cache_post_route_family_handles_missing_scope(tmp_path: Path, monkeypat
     )
     handler = SimpleNamespace(path="/api/cache/clear", headers={"Content-Length": "20"})
 
+    with pytest.raises(ValueError, match="scope must be one of: scores, review, all"):
+        route_module._handle_cache_post_routes(handler, context, urlparse(handler.path))
+
+
+def test_missing_cache_preview_route_is_root_scoped(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    from shotsieve import web_routes as route_module
+
+    captured: dict[str, object] = {}
+
+    class _DatabaseContext:
+        def __enter__(self):
+            return object()
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    def fake_send_json(_handler, payload: object) -> None:
+        captured["payload"] = payload
+
+    def fake_preview(_connection, *, root: Path) -> dict[str, object]:
+        captured["root"] = root
+        return {"status": "empty", "root": str(root), "candidate_count": 0}
+
+    monkeypatch.setattr(route_module, "send_json", fake_send_json)
+    deps = SimpleNamespace(
+        first_value=lambda params, key, default: params.get(key, [default])[0],
+        optional_string=lambda value: value if isinstance(value, str) else None,
+        database=lambda _path: _DatabaseContext(),
+        preview_missing_cache_entries=fake_preview,
+    )
+    context = route_module.WebRouteContext(
+        db_path=tmp_path / "shotsieve.db",
+        operation_lock=threading.Lock(),
+        scan_registry=None,
+        score_registry=None,
+        compare_registry=None,
+        max_request_body_size=1024,
+        static_dir=tmp_path,
+        media_mime_fallbacks={},
+        dependencies=deps,
+    )
+    handler = SimpleNamespace(
+        path=f"/api/cache/missing/preview?root={str(tmp_path).replace(' ', '%20')}",
+        headers={},
+    )
+
+    handled = route_module._handle_filesystem_get_routes(handler, context, urlparse(handler.path))
+
+    assert handled is True
+    assert captured["root"] == tmp_path.resolve()
+    assert captured["payload"] == {"status": "empty", "root": str(tmp_path.resolve()), "candidate_count": 0}
+
+
+def test_missing_cache_apply_route_passes_confirmation_token_and_ids(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    from shotsieve import web_routes as route_module
+
+    captured: dict[str, object] = {}
+
+    def fake_send_json(_handler, payload: object) -> None:
+        captured["response"] = payload
+
+    def fake_apply(context, payload):
+        captured["context"] = context
+        captured["payload"] = payload
+        return {"status": "applied", "removed_count": 2}
+
+    monkeypatch.setattr(route_module, "send_json", fake_send_json)
+    monkeypatch.setattr(route_module, "_execute_missing_cache_apply_request", fake_apply)
+    deps = SimpleNamespace(
+        read_json_body=lambda _handler, *, max_body_size: {
+            "root": str(tmp_path),
+            "token": "preview-token",
+            "candidate_ids": [4, 9],
+        },
+    )
+    context = route_module.WebRouteContext(
+        db_path=tmp_path / "shotsieve.db",
+        operation_lock=threading.Lock(),
+        scan_registry=None,
+        score_registry=None,
+        compare_registry=None,
+        max_request_body_size=1024,
+        static_dir=tmp_path,
+        media_mime_fallbacks={},
+        dependencies=deps,
+    )
+    handler = SimpleNamespace(path="/api/cache/missing/apply", headers={})
+
     handled = route_module._handle_cache_post_routes(handler, context, urlparse(handler.path))
 
     assert handled is True
-    assert captured["preview_cache_root"] == preview_root
-    assert captured["payload"] == {"files": 7, "scores": 0, "review": 0, "scan_runs": 0}
+    assert captured["context"] is context
+    assert captured["payload"] == {
+        "root": str(tmp_path),
+        "token": "preview-token",
+        "candidate_ids": [4, 9],
+    }
+    assert captured["response"] == {"status": "applied", "removed_count": 2}
 
 
 def test_files_delete_route_accepts_review_state_selection_payload(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
@@ -263,6 +333,110 @@ def test_files_export_route_accepts_review_browser_selection_payload(tmp_path: P
     assert handled is True
     assert captured["export_batches"] == [[21, 22], [23]]
     assert captured["payload"] == {"copied": 3, "moved": 0, "failed": []}
+
+
+def test_files_export_bulk_failure_retains_current_and_later_batch_ids(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    from shotsieve import web_routes as route_module
+    from shotsieve.models import FileOperationResult, FileOperationSummary, attach_file_operation_summary
+
+    connection = object()
+    batches = [list(range(1, 501)), [501, 502], []]
+    calls = 0
+
+    def fake_list_review_browser_file_ids(_connection, **kwargs):
+        return batches.pop(0)
+
+    def fake_export_files(_connection, **kwargs):
+        nonlocal calls
+        calls += 1
+        file_ids = list(kwargs["file_ids"])
+        if calls == 1:
+            result = FileOperationSummary(action="copy", contract_enabled=True)
+            for file_id in file_ids:
+                result.add(
+                    FileOperationResult(
+                        file_id=file_id,
+                        source=f"photo-{file_id}.jpg",
+                        destination=f"export/photo-{file_id}.jpg",
+                        action="copy",
+                        outcome="success",
+                        stage="transfer",
+                    )
+                )
+            result.copied = len(file_ids)
+            return result
+
+        result = FileOperationSummary(action="copy", contract_enabled=True)
+        result.add(
+            FileOperationResult(
+                file_id=file_ids[0],
+                source=f"photo-{file_ids[0]}.jpg",
+                destination=f"export/photo-{file_ids[0]}.jpg",
+                action="copy",
+                outcome="failed",
+                stage="transfer",
+                error_text="simulated batch failure",
+                retry_safe=False,
+            )
+        )
+        error = RuntimeError("simulated batch failure")
+        attach_file_operation_summary(error, result)
+        raise error
+
+    class _DatabaseContext:
+        def __enter__(self):
+            return connection
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    deps = SimpleNamespace(
+        optional_string=lambda value: value if isinstance(value, str) else None,
+        required_choice=lambda value, *, name, choices: value,
+        float_or_none=lambda value: None if value is None else float(value),
+        coerce_bool=lambda value, *, default: default if value is None else bool(value),
+        database=lambda _path: _DatabaseContext(),
+        review_selection_revision=lambda _connection, **kwargs: "rev-1",
+        list_review_browser_file_ids=fake_list_review_browser_file_ids,
+        get_preview_cache_root=lambda _connection, *, db_path, persist: tmp_path / "previews",
+        export_files=fake_export_files,
+    )
+    context = route_module.WebRouteContext(
+        db_path=tmp_path / "shotsieve.db",
+        operation_lock=threading.Lock(),
+        scan_registry=None,
+        score_registry=None,
+        compare_registry=None,
+        max_request_body_size=1024,
+        static_dir=tmp_path,
+        media_mime_fallbacks={},
+        dependencies=deps,
+    )
+
+    with pytest.raises(RuntimeError, match="simulated batch failure") as exc_info:
+        route_module._execute_export_request(
+            context,
+            {
+                "selection": {
+                    "scope": "review-browser",
+                    "marked": "all",
+                    "root": "C:/photos",
+                },
+                "selection_revision": "rev-1",
+                "destination": str(tmp_path / "export"),
+                "mode": "copy",
+            },
+            progress_callback=None,
+            cancel_check=None,
+        )
+
+    summary = exc_info.value.file_operation_summary
+    assert {item["file_id"] for item in summary["items"]} == set(range(1, 503))
+    assert summary["completed_count"] == 500
+    assert summary["failed_count"] == 1
+    assert summary["unprocessed_count"] == 1
 
 
 def test_files_delete_route_accepts_file_ids_with_matching_page_revision(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):

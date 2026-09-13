@@ -16,9 +16,11 @@
       analyzeLibrary,
       runScan,
       runScore,
+      prepareSelectedModel,
       runModelComparison,
       renderComparisonResults,
       clearCache,
+      reviewMissingEntries,
       openBrowser,
       browseDirectory,
       chooseBrowserPath,
@@ -40,6 +42,7 @@
       resetReviewToActiveLibrary,
       setReviewScope,
       renderLibraryRoots,
+      installDecisionCsvEvents,
       loadAnalysisDiagnostics,
     } = deps;
 
@@ -553,6 +556,7 @@
       });
       document.getElementById("scan-library").addEventListener("click", () => withBusy("Scanning selected folder...", () => runScan(null, { generatePreviews: false })).catch(handleError));
       document.getElementById("score-library").addEventListener("click", () => withBusy("Scoring selected folder...", () => runScore()).catch(handleError));
+      document.getElementById("prepare-model")?.addEventListener("click", () => withBusy("Preparing selected model...", () => prepareSelectedModel()).catch(handleError));
       document.getElementById("compare-run").addEventListener("click", () => withBusy("Comparing learned models...", () => runModelComparison(), { operationType: "compare" }).catch(handleError));
       document.getElementById("compare-row-sort").addEventListener("change", (event) => {
         state.compareRowSort = event.target.value || "topiq_nr:desc";
@@ -573,7 +577,6 @@
         loadAnalysisDiagnostics().catch(handleError);
       });
 
-      confirmAndRun("prune-missing-cache", "Cleaning up missing files...", "missing", "Cleaned up missing files");
       confirmAndRun("clear-scores", "Clearing scores...", "scores", "Cleared score cache");
       confirmAndRun("clear-review", "Clearing review marks...", "review", "Cleared review marks");
       confirmAndRun(
@@ -583,6 +586,10 @@
         "Cleared entire cache",
         { onSuccess: resetPersistedUiStateAfterFullReset },
       );
+
+      document.getElementById("review-missing-entries")?.addEventListener("click", () => {
+        withBusy("Checking selected library for missing entries...", () => reviewMissingEntries()).catch(handleError);
+      });
 
       // Resource profile selector
       const profileSelect = document.getElementById("resource-profile-select");
@@ -692,6 +699,7 @@
       });
 
       installRejectedActionEvents();
+      installDecisionCsvEvents();
 
       const preferredTheme = window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
       const savedTheme = localStorage.getItem("shotsieve-theme") || preferredTheme;

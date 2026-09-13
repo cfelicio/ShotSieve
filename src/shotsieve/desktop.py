@@ -13,6 +13,7 @@ from pathlib import Path
 from shotsieve import runtime_support
 from shotsieve.bootstrap import install_learned_iqa_sidecar, install_torch_sidecar, sidecar_site_packages_dir
 from shotsieve.learned_iqa import invalidate_hw_cache
+from shotsieve.model_assets import apply_model_cache_dir
 from shotsieve.web import serve_review_ui
 
 
@@ -386,6 +387,11 @@ def maybe_prepare_cuda_torch_runtime(data_dir: Path, *, target_id: str | None = 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="shotsieve-desktop")
     parser.add_argument("--data-dir", default=None, help="Directory for the local ShotSieve cache and previews")
+    parser.add_argument(
+        "--model-cache-dir",
+        default=None,
+        help="Optional root for model downloads (preserves explicit HF_HOME, HF_HUB_CACHE, and TORCH_HOME)",
+    )
     parser.add_argument("--host", default="127.0.0.1", help="Host interface for the local review server")
     parser.add_argument("--port", type=int, default=8765, help="Port for the local review server")
     parser.add_argument("--no-browser", action="store_true", help="Do not automatically open the default browser")
@@ -399,6 +405,7 @@ def main() -> None:
     parser = build_parser()
     args = parser.parse_args()
 
+    apply_model_cache_dir(args.model_cache_dir)
     data_dir = Path(args.data_dir).expanduser().resolve() if args.data_dir else default_data_dir()
     data_dir.mkdir(parents=True, exist_ok=True)
     installed_torch_runtime = maybe_prepare_cuda_torch_runtime(data_dir)

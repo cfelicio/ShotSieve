@@ -17,6 +17,7 @@ class ReleaseTarget:
     archiveName: str
     buildProfile: str = "runtime-pack"
     specPath: str = "shotsieve.spec"
+    constraintsFile: str = "scripts/release-constraints.txt"
 
     def to_json(self) -> dict[str, object]:
         payload = asdict(self)
@@ -67,6 +68,7 @@ def runtime_pack_release_targets() -> tuple[ReleaseTarget, ...]:
             archiveName="ShotSieve-windows-dml-x64.zip",
             buildProfile="runtime-pack",
             specPath="shotsieve.spec",
+            constraintsFile="scripts/release-constraints-windows-dml.txt",
         ),
         ReleaseTarget(
             id="linux-cpu",

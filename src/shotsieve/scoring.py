@@ -9,7 +9,7 @@ from typing import Callable, Protocol, Sequence, runtime_checkable
 from shotsieve.config import ALL_PREVIEWABLE_EXTENSIONS, DEFAULT_RAW_PREVIEW_MODE, PIL_ANALYSIS_EXTENSIONS, PREVIEW_PRIORITY_EXTENSIONS
 from shotsieve.db import roots_path_filter, set_preview_cache_root
 from shotsieve.performance import log_duration, monotonic_seconds
-from shotsieve.learned_iqa import DEFAULT_BATCH_SIZE, DEFAULT_MODEL_NAME, LearnedIqaBackend, LearnedScoreResult, build_learned_backend, normalize_model_name, release_learned_backend, recommended_batch_size, recommended_cpu_workers, detect_hardware_capabilities, resolve_learned_model_version
+from shotsieve.learned_iqa import DEFAULT_BATCH_SIZE, DEFAULT_MODEL_NAME, LearnedIqaBackend, LearnedScoreResult, build_learned_backend, release_learned_backend, recommended_batch_size, recommended_cpu_workers, detect_hardware_capabilities, resolve_learned_model_version, validate_model_name
 from shotsieve.preview import PreviewResult, generate_previews_parallel
 from shotsieve.scanner import utc_now
 
@@ -271,7 +271,7 @@ def score_files(
     resource_profile: str | None = None,
 ) -> ScoreSummary:
     summary = ScoreSummary()
-    selected_backend = normalize_model_name(learned_backend_name or DEFAULT_MODEL_NAME)
+    selected_backend = validate_model_name(learned_backend_name or DEFAULT_MODEL_NAME)
 
     rows = fetch_score_rows(connection, raw_root=raw_root, limit=limit, offset=offset)
     summary.rows_loaded = len(rows)
@@ -581,7 +581,11 @@ def compare_learned_models(
     resource_profile: str | None = None,
 ) -> ModelComparisonSummary:
     started_at = time.perf_counter()
-    normalized_models = [normalize_model_name(model_name) for model_name in model_names if model_name.strip()]
+    normalized_models = [
+        validate_model_name(model_name)
+        for model_name in model_names
+        if model_name.strip()
+    ]
     unique_models = list(dict.fromkeys(normalized_models))
     summary = ModelComparisonSummary(model_names=unique_models)
 

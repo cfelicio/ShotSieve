@@ -708,13 +708,23 @@ class TestStaticAssetHeaders:
         body = self._combined_js(base_url)
         controller_body = urlopen(f"{base_url}/app-controller.js").read().decode("utf-8")
 
-        assert 'const DEFAULT_MODEL_CATALOG = ["topiq_nr", "clipiqa", "qalign"]' in body
-        assert 'const HIDDEN_MODEL_NAMES = ["arniqa", "arniqa-spaq"]' in body
-        assert "availableLearnedModelsUtil(options, stateModule.DEFAULT_MODEL_CATALOG, stateModule.HIDDEN_MODEL_NAMES)" in controller_body
+        assert "const DEFAULT_MODEL_CATALOG" not in body
+        assert "const HIDDEN_MODEL_NAMES" not in body
+        assert "availableLearnedModelsUtil(options)" in controller_body
+        assert "model_catalog" in body
         assert "function availableLearnedModels(options)" not in controller_body
         assert "advanced-reset-defaults" not in body
         assert "applyRecommendedDefaults" not in body
         assert "applyCompareTabVisibility" not in body
+
+    def test_static_js_explains_retired_saved_model_normalization(self, test_server):
+        base_url, _, _ = test_server
+        body = urlopen(f"{base_url}/app-controller.js").read().decode("utf-8")
+
+        assert "catalogModelFor" in body
+        assert "Saved model \"${persistedModel}\" is no longer supported" in body
+        assert "Historical scores remain readable." in body
+        assert 'saveUiState({ immediate: true });' in body
 
     def test_static_js_scan_only_uses_fast_metadata_path(self, test_server):
         base_url, _, _ = test_server
@@ -809,8 +819,9 @@ class TestStaticAssetHeaders:
     def test_static_js_compare_model_cards_include_model_specific_descriptions(self, test_server):
         base_url, _, _ = test_server
         body = self._combined_js(base_url)
-        assert 'modelDescriptions[modelName] || "No detailed notes available for this model."' in body
-        assert "Best all-rounder and recommended starting point" in body
+        assert "function modelDescription(modelName)" in body
+        assert "modelMetadata(modelName)?.description" in body
+        assert "model_catalog" in body
 
     def test_static_js_compare_omits_confidence_na_placeholder(self, test_server):
         base_url, _, _ = test_server
@@ -859,12 +870,11 @@ class TestStaticAssetHeaders:
         assert 'id="refresh-analysis-diagnostics"' in html_body
         assert "/api/analysis-diagnostics" in js_body
 
-    def test_static_js_surfaces_qalign_cpu_and_directml_unavailable_notice(self, test_server):
+    def test_static_js_surfaces_runtime_model_unavailability_notice(self, test_server):
         base_url, _, _ = test_server
         body = self._combined_js(base_url)
-        assert "Q-Align is unavailable for the active runtime" in body
-        assert "Use TOPIQ or CLIPIQA" in body
-        assert "works on CPU but is VERY slow there" not in body
+        assert "No supported learned-IQA model is ready in this runtime" in body
+        assert "Auto mode is using CPU because an accelerator was unavailable" in body
         assert "runtime-model-warning" in body
         assert "default_runtime" in body
 

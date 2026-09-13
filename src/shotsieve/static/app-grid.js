@@ -216,7 +216,6 @@
     function renderDetail() {
       renderDetailView({
         state,
-        modelDisplayNames: stateModule.MODEL_DISPLAY_NAMES,
         pathLeaf,
         escapeHtml,
         formatNumber,

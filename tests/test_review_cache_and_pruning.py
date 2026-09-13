@@ -2,15 +2,20 @@ from pathlib import Path
 from typing import cast
 
 import pytest
-from PIL import Image
-from PIL import ImageDraw
-from PIL import ImageFilter
+from PIL import Image, ImageDraw, ImageFilter
 
-from shotsieve.db import connect, get_preview_cache_root, initialize_database, resolve_preview_cache_root
+from shotsieve.db import (
+    connect,
+    get_preview_cache_root,
+    initialize_database,
+    resolve_preview_cache_root,
+)
 from shotsieve.learned_iqa import LearnedScoreResult
 from shotsieve.review import (
+    apply_missing_cache_entries,
     clear_cache_scope,
     media_path_for_file,
+    preview_missing_cache_entries,
     prune_missing_cache_entries,
     remove_files_from_cache,
 )
@@ -117,6 +122,121 @@ def test_prune_missing_cache_entries_processes_rows_in_batches(
     assert removed == 1
     assert batch_sizes == [2, 1]
     assert remaining_paths == ["a.jpg", "c.jpg"]
+
+
+def test_missing_cache_preview_reports_candidates_and_review_impact(tmp_path: Path) -> None:
+    db_path = tmp_path / "data" / "shotsieve.db"
+    preview_dir = tmp_path / "previews"
+    photo_dir = tmp_path / "photos"
+    photo_dir.mkdir()
+    source_path = photo_dir / "sample.jpg"
+    create_image(source_path)
+
+    initialize_database(db_path)
+
+    with connect(db_path) as connection:
+        scan_root(connection, root=photo_dir, recursive=True, extensions=(".jpg",), preview_dir=preview_dir)
+        row = connection.execute("SELECT id FROM files LIMIT 1").fetchone()
+        connection.execute(
+            """
+            INSERT INTO review_state(file_id, decision_state, delete_marked, export_marked, updated_time)
+            VALUES (?, 'keep', 0, 1, '2026-09-12T00:00:00Z')
+            """,
+            (row["id"],),
+        )
+        source_path.unlink()
+
+        result = preview_missing_cache_entries(connection, root=photo_dir)
+
+    assert result["status"] == "ready"
+    assert result["candidate_count"] == 1
+    assert result["affected_review_count"] == 1
+    assert result["revision"] == result["token"]
+    assert result["candidates"] == [{
+        "id": row["id"],
+        "path": str(source_path.resolve()),
+        "review_count": 1,
+        "decision_state": "keep",
+        "delete_marked": 0,
+        "export_marked": 1,
+    }]
+
+
+def test_missing_cache_apply_requires_fresh_preview_and_removes_only_catalog_entry(tmp_path: Path) -> None:
+    db_path = tmp_path / "data" / "shotsieve.db"
+    preview_dir = tmp_path / "previews"
+    photo_dir = tmp_path / "photos"
+    photo_dir.mkdir()
+    source_path = photo_dir / "sample.jpg"
+    create_image(source_path)
+
+    initialize_database(db_path)
+
+    with connect(db_path) as connection:
+        scan_root(connection, root=photo_dir, recursive=True, extensions=(".jpg",), preview_dir=preview_dir)
+        row = connection.execute("SELECT id, preview_path FROM files LIMIT 1").fetchone()
+        file_id = row["id"]
+        preview_path = Path(row["preview_path"])
+        source_path.unlink()
+        preview = preview_missing_cache_entries(connection, root=photo_dir)
+
+        source_path.write_bytes(b"recreated")
+        stale = apply_missing_cache_entries(
+            connection,
+            root=photo_dir,
+            token=str(preview["token"]),
+            candidate_ids=[file_id],
+            preview_cache_root=preview_dir,
+        )
+        assert stale["status"] == "refresh_required"
+        assert connection.execute("SELECT COUNT(*) AS count FROM files").fetchone()["count"] == 1
+
+        source_path.unlink()
+        applied = apply_missing_cache_entries(
+            connection,
+            root=photo_dir,
+            token=str(preview["token"]),
+            candidate_ids=[file_id],
+            preview_cache_root=preview_dir,
+        )
+
+    assert applied["status"] == "applied"
+    assert applied["removed_count"] == 1
+    assert not preview_path.exists()
+    assert not source_path.exists()
+
+
+def test_missing_cache_preview_treats_unavailable_root_as_unknown(tmp_path: Path) -> None:
+    db_path = tmp_path / "data" / "shotsieve.db"
+    initialize_database(db_path)
+
+    with connect(db_path) as connection:
+        result = preview_missing_cache_entries(connection, root=tmp_path / "not-present")
+
+    assert result["status"] == "unknown"
+    assert result["candidate_count"] == 0
+
+
+def test_missing_cache_preview_treats_child_enumeration_error_as_unknown(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    db_path = tmp_path / "data" / "shotsieve.db"
+    photo_dir = tmp_path / "photos"
+    photo_dir.mkdir()
+    initialize_database(db_path)
+
+    def denied_walk(_root, *, onerror):
+        onerror(PermissionError("access denied"))
+        yield str(photo_dir), [], []
+
+    monkeypatch.setattr("shotsieve.review_cache.os.walk", denied_walk)
+
+    with connect(db_path) as connection:
+        result = preview_missing_cache_entries(connection, root=photo_dir)
+
+    assert result["status"] == "unknown"
+    assert "access denied" in str(result["error"])
 
 
 def test_remove_files_from_cache_removes_managed_preview(tmp_path: Path) -> None:

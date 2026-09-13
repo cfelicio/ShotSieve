@@ -22,6 +22,7 @@ MODEL_WEIGHT_MB = learned_iqa_catalog.MODEL_WEIGHT_MB
 PER_IMAGE_ACTIVATION_MB = learned_iqa_catalog.PER_IMAGE_ACTIVATION_MB
 DEVICE_TARGET_ALIASES = learned_iqa_catalog.DEVICE_TARGET_ALIASES
 MODEL_NAME_ALIASES = learned_iqa_catalog.MODEL_NAME_ALIASES
+MODEL_CATALOG = learned_iqa_catalog.MODEL_CATALOG
 SUPPORTED_MODEL_NAMES = learned_iqa_catalog.SUPPORTED_MODEL_NAMES
 MODERN_MODEL_NAMES = learned_iqa_catalog.MODERN_MODEL_NAMES
 UI_MODEL_CATALOG = learned_iqa_catalog.UI_MODEL_CATALOG
@@ -38,6 +39,8 @@ RESOURCE_PROFILES = learned_iqa_runtime.RESOURCE_PROFILES
 DEFAULT_RESOURCE_PROFILE = learned_iqa_runtime.DEFAULT_RESOURCE_PROFILE
 
 ResolvedDevice = learned_iqa_runtime.ResolvedDevice
+DirectMLProbe = learned_iqa_runtime.DirectMLProbe
+LearnedRuntimeUnavailableError = learned_iqa_runtime.LearnedRuntimeUnavailableError
 LearnedBackendUnavailableError = backend_core.LearnedBackendUnavailableError
 LearnedScoreResult = backend_core.LearnedScoreResult
 LearnedIqaBackend = backend_core.LearnedIqaBackend
@@ -46,6 +49,9 @@ normalize_model_name = learned_iqa_catalog.normalize_model_name
 supported_learned_models = learned_iqa_catalog.supported_learned_models
 supported_runtime_targets = learned_iqa_catalog.supported_runtime_targets
 preferred_model_names = learned_iqa_catalog.preferred_model_names
+is_supported_model_name = learned_iqa_catalog.is_supported_model_name
+model_catalog_payload = learned_iqa_catalog.model_catalog_payload
+validate_model_name = learned_iqa_catalog.validate_model_name
 is_model_runtime_compatible = learned_iqa_catalog.is_model_runtime_compatible
 runtime_compatible_model_names = learned_iqa_catalog.runtime_compatible_model_names
 
@@ -57,6 +63,7 @@ has_cuda = learned_iqa_runtime.has_cuda
 has_xpu = learned_iqa_runtime.has_xpu
 has_mps = learned_iqa_runtime.has_mps
 load_directml_device = learned_iqa_runtime.load_directml_device
+probe_directml_device = learned_iqa_runtime.probe_directml_device
 resolve_device = learned_iqa_runtime.resolve_device
 runtime_statuses = learned_iqa_runtime.runtime_statuses
 
@@ -80,9 +87,6 @@ flatten_tensor = learned_iqa_preprocessing.flatten_tensor
 confidence_values = learned_iqa_preprocessing.confidence_values
 normalize_score = learned_iqa_preprocessing.normalize_score
 parse_score_range = learned_iqa_preprocessing.parse_score_range
-
-_bypass_torch_load_cve_check = backend_core._bypass_torch_load_cve_check
-
 
 log = logging.getLogger(__name__)
 _cached_hw_capabilities: dict[str, object] | None = None
@@ -137,15 +141,14 @@ def runtime_supported_learned_models() -> tuple[str, ...]:
             )
         )
         filtered = tuple(model for model in SUPPORTED_MODEL_NAMES if model in compatible_models)
-        return filtered or SUPPORTED_MODEL_NAMES
+        return filtered
     except Exception:
-        return SUPPORTED_MODEL_NAMES
+        return ()
 
 
 def runtime_curated_learned_models() -> tuple[str, ...]:
     available_models = set(runtime_supported_learned_models())
-    curated = tuple(model for model in UI_MODEL_CATALOG if model in available_models)
-    return curated or UI_MODEL_CATALOG
+    return tuple(model for model in UI_MODEL_CATALOG if model in available_models)
 
 
 def detect_gpu_vram_mb(*, torch_module=None, import_module=importlib.import_module) -> int | None:
@@ -249,12 +252,14 @@ def unavailable_backend_payload(
         "device_policy": DEFAULT_DEVICE_POLICY,
         "default_device": "cpu",
         "default_runtime": "cpu",
+        "runtime_fallback_reason": None,
         "runtime_targets": runtime_targets,
         "runtime_status": runtime_status_text,
         "auto_runtime_priority": auto_priority,
         "vendor_aliases": vendor_aliases,
         "modern_model_catalog": catalog,
         "modern_models_available": "",
+        "model_catalog": model_catalog_payload(),
         "hardware": hardware,
         "recommended_batch_sizes": batch_recommendations,
         "resource_profile": profile,
@@ -359,6 +364,7 @@ def available_learned_backends(*, resource_profile: str | None = None) -> dict[s
         supported_runtime_targets_fn=supported_runtime_targets,
         auto_runtime_order_fn=auto_runtime_order,
         runtime_status_order=RUNTIME_STATUS_ORDER,
+        model_catalog_payload_fn=model_catalog_payload,
     )
 
 
@@ -370,11 +376,14 @@ __all__ = [
     "DEFAULT_MODEL_NAME",
     "DEFAULT_RESOURCE_PROFILE",
     "DEFAULT_RUNTIME_STATUS_TEXT",
+    "DirectMLProbe",
     "DEVICE_TARGET_ALIASES",
     "HF_UNAUTHENTICATED_REQUEST_WARNING_PATTERN",
     "LearnedBackendUnavailableError",
     "LearnedIqaBackend",
+    "LearnedRuntimeUnavailableError",
     "LearnedScoreResult",
+    "MODEL_CATALOG",
     "MAX_BATCH_SIZES",
     "MODEL_NAME_ALIASES",
     "MODEL_WEIGHT_MB",
@@ -392,7 +401,6 @@ __all__ = [
     "TRANSFORMERS_RETURN_DICT_DEPRECATION_PATTERN",
     "UI_MODEL_CATALOG",
     "_arrays_to_tensor",
-    "_bypass_torch_load_cve_check",
     "_cached_hw_capabilities",
     "_detect_vram_linux_amd",
     "_detect_vram_linux_amd_sysfs",
@@ -422,6 +430,8 @@ __all__ = [
     "install_runtime_warning_filters",
     "invalidate_hw_cache",
     "is_model_runtime_compatible",
+    "is_supported_model_name",
+    "model_catalog_payload",
     "load_batch_tensor",
     "load_directml_device",
     "normalize_device_target",
@@ -429,6 +439,7 @@ __all__ = [
     "normalize_score",
     "parse_score_range",
     "preferred_model_names",
+    "probe_directml_device",
     "recommended_batch_size",
     "recommended_cpu_workers",
     "release_learned_backend",
@@ -441,5 +452,6 @@ __all__ = [
     "runtime_supported_learned_models",
     "supported_learned_models",
     "supported_runtime_targets",
+    "validate_model_name",
     "unavailable_backend_payload",
 ]

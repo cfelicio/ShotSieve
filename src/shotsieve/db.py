@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Iterator, Sequence
 
 from shotsieve.config import resolve_preview_dir
+from shotsieve.models import ScanRunDiagnostic
 from shotsieve.schema import SCHEMA_MIGRATIONS, SCHEMA_SQL
 
 
@@ -14,6 +15,29 @@ PATH_KEY_NORMALIZATION_METADATA_KEY = "path_key_normalization_policy"
 PREVIEW_CACHE_ROOT_METADATA_KEY = "preview_cache_root"
 CASE_INSENSITIVE_PATH_PLATFORMS = {"Windows"}
 TEXT_PREFIX_UPPER_BOUND = "\U0010FFFF"
+_SCAN_DIAGNOSTIC_ATTRIBUTE = "_shotsieve_scan_diagnostic"
+_SCAN_DIAGNOSTIC_PERSISTED_ATTRIBUTE = "_shotsieve_scan_diagnostic_persisted"
+
+
+class _ShotSieveConnection(sqlite3.Connection):
+    """SQLite connection that preserves scan diagnostics on rollback.
+
+    Most callers use :func:`database`, but scanner tests and library helpers
+    also use ``with connect(...)`` directly.  Keeping the rollback hook on the
+    connection makes both transaction owners behave consistently.
+    """
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        try:
+            if exc_value is None:
+                self.commit()
+            else:
+                self.rollback()
+                _persist_scan_diagnostic_after_rollback(self, exc_value)
+        except BaseException:
+            self.rollback()
+            raise
+        return False
 
 
 def platform_uses_case_insensitive_paths() -> bool:
@@ -35,7 +59,7 @@ def current_path_key_normalization_policy() -> str:
 
 
 def connect(db_path: Path) -> sqlite3.Connection:
-    connection = sqlite3.connect(db_path, timeout=30.0)
+    connection = sqlite3.connect(db_path, timeout=30.0, factory=_ShotSieveConnection)
     connection.row_factory = sqlite3.Row
     connection.create_function("unicode_casefold", 1, sqlite_unicode_casefold, deterministic=True)
     connection.execute("PRAGMA foreign_keys=ON")
@@ -70,11 +94,96 @@ def database(db_path: Path) -> Iterator[sqlite3.Connection]:
     try:
         yield connection
         connection.commit()
-    except BaseException:
+    except BaseException as exc:
         connection.rollback()
+        _persist_scan_diagnostic_after_rollback(connection, exc)
         raise
     finally:
         connection.close()
+
+
+def attach_scan_run_diagnostic(exc: BaseException, diagnostic: ScanRunDiagnostic) -> None:
+    """Attach rollback-safe scan details without changing the public error."""
+    try:
+        setattr(exc, _SCAN_DIAGNOSTIC_ATTRIBUTE, diagnostic)
+    except Exception:
+        # Exception implementations supplied by callers may not allow custom
+        # attributes.  The ordinary in-transaction diagnostic remains intact.
+        pass
+
+
+def scan_run_diagnostic_from_exception(exc: BaseException) -> ScanRunDiagnostic | None:
+    diagnostic = getattr(exc, _SCAN_DIAGNOSTIC_ATTRIBUTE, None)
+    return diagnostic if isinstance(diagnostic, ScanRunDiagnostic) else None
+
+
+def scan_run_diagnostic_was_persisted(exc: BaseException) -> bool:
+    return bool(getattr(exc, _SCAN_DIAGNOSTIC_PERSISTED_ATTRIBUTE, False))
+
+
+def mark_scan_run_diagnostic_persisted(exc: BaseException) -> None:
+    try:
+        setattr(exc, _SCAN_DIAGNOSTIC_PERSISTED_ATTRIBUTE, True)
+    except (AttributeError, TypeError):
+        return
+
+
+def persist_scan_run_diagnostic(db_path: Path, diagnostic: ScanRunDiagnostic) -> None:
+    """Insert a scan diagnostic in a short independent transaction."""
+    diagnostic_connection = connect(db_path)
+    try:
+        existing_row = diagnostic_connection.execute(
+            "SELECT 1 FROM scan_runs WHERE root_path = ? AND started_time = ? LIMIT 1",
+            (diagnostic.root_path, diagnostic.started_time),
+        ).fetchone()
+        if existing_row is not None:
+            return
+
+        diagnostic_connection.execute(
+            """
+            INSERT INTO scan_runs(
+                started_time, completed_time, root_path,
+                files_seen, files_added, files_updated, files_unchanged,
+                files_removed, status, error_text
+            )
+            VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                diagnostic.started_time,
+                diagnostic.completed_time,
+                diagnostic.root_path,
+                diagnostic.files_seen,
+                diagnostic.files_added,
+                diagnostic.files_updated,
+                diagnostic.files_unchanged,
+                diagnostic.files_removed,
+                diagnostic.status,
+                diagnostic.error_text,
+            ),
+        )
+        diagnostic_connection.commit()
+    finally:
+        diagnostic_connection.close()
+
+
+def _persist_scan_diagnostic_after_rollback(
+    connection: sqlite3.Connection,
+    exc: BaseException,
+) -> None:
+    diagnostic = scan_run_diagnostic_from_exception(exc)
+    if diagnostic is None or scan_run_diagnostic_was_persisted(exc):
+        return
+
+    try:
+        db_path = get_connection_db_path(connection)
+        persist_scan_run_diagnostic(db_path, diagnostic)
+    except Exception:
+        # Never replace the original scan failure with a secondary diagnostic
+        # persistence error.  The failed scan remains visible through the job
+        # error even if the database is unavailable at this point.
+        return
+
+    mark_scan_run_diagnostic_persisted(exc)
 
 
 def apply_schema_migrations(connection: sqlite3.Connection) -> None:

@@ -23,8 +23,8 @@ Optional extras:
 - Test dependencies: `python -m pip install -e .[test]`
 - Lint dependencies: `python -m pip install -e .[lint]`
 - Format loaders for HEIF and RAW workflows: `python -m pip install -e .[format-loaders]`
-- Learned IQA support: `python -m pip install -e .[learned-iqa]`
-- DirectML learned IQA support on supported Windows Python versions: `python -m pip install -e .[learned-iqa-directml]`
+- Learned IQA support: `python -m pip install -e .[learned-iqa]` (`pyiqa==0.1.16`)
+- DirectML learned IQA support on Python 3.11–3.12: `python -m pip install -e .[learned-iqa-directml]` (the supported target pins `torch==2.4.1`, `torchvision==0.19.1`, and `torch-directml==0.2.5.dev240914` together)
 - Windows build tooling: `python -m pip install -e .[windows-build]`
 
 ## Desktop entry point
@@ -51,6 +51,7 @@ Useful flags:
 
 ```bash
 shotsieve-desktop --data-dir ./shot-data
+shotsieve-desktop --model-cache-dir ./model-cache
 shotsieve-desktop --host 127.0.0.1 --port 9001 --no-browser
 ```
 
@@ -69,6 +70,30 @@ On startup, `shotsieve-desktop` may attempt sidecar installation or repair for m
 - `SHOTSIEVE_BOOTSTRAP_AUTO_INSTALL_LEARNED_IQA=0` to skip learned-IQA auto-install
 
 Portable and frozen builds prefer the bundled pip-based installer paths from `shotsieve.bootstrap`; if that installer is unavailable, ShotSieve keeps running but learned backends may stay disabled.
+
+The supported learned-model catalog is `topiq_nr` and `clipiqa`, with TOPIQ as the default. PyIQA discovery is not an allowlist: if the two product models are not discoverable or cannot initialize, Settings shows an unavailable/empty model state. Older stored model names remain displayable by their raw name, but retired names cannot be selected for new scoring or comparison runs. No process-wide `torch.load` override is used.
+
+The Settings **Prepare selected model** action uses the ordinary backend on CPU for the selected model and runs a tiny generated-image inference check. It may download the model's upstream assets on first use; TOPIQ can require its ResNet backbone and CFANet checkpoint, while CLIPIQA can require the CLIP RN50 dependency. Preparation records coarse phases, effective cache paths, dependency versions/fingerprint, tested CPU runtime, and sanitized error/recovery details in a small atomic JSON file under the app data directory. A later `/api/options` call reads that record only; it does not scan caches, download assets, or construct models. Missing or changed cache context invalidates a previous `prepared` state, and scoring still validates its selected runtime at use time.
+
+`--model-cache-dir ROOT` sets default `HF_HOME=ROOT/huggingface`, `HF_HUB_CACHE=ROOT/huggingface/hub`, and `TORCH_HOME=ROOT/torch` before learned-IQA runtime preparation. Explicit environment values win, including Hub endpoints, proxy/certificate, and offline settings, so the resulting cache paths may be split. For an offline portable setup, prepare the selected model into the intended compatible cache tree, shut down the app, copy that tree with the app-data readiness record, and validate it in a fresh offline process. ShotSieve does not migrate or remove caches automatically.
+
+For a Windows DirectML sidecar, the embedded installer resolves the pinned Torch/Torchvision/DirectML trio in one install step. Release builds use `scripts/release-constraints-windows-dml.txt` in addition to the common build constraints; CPU, CUDA, and macOS targets do not inherit those DirectML pins.
+
+Pull requests run the offline test workflow in `.github/workflows/ci.yml`; it sets the learned-model offline flags so an accidental model download fails rather than silently reaching the Hub. The separate `.github/workflows/model-smoke.yml` workflow is manual/weekly and prepares TOPIQ and CLIPIQA in fresh isolated caches, then repeats the CPU check in a new process with socket access disabled. It does not upload caches or generated images.
+
+## Scan and catalog safety
+
+Ordinary scans only update files discovered during that run. They do not remove cached rows, scores, or review decisions for files outside the selected recursion, extension, or ignore-rule coverage. Root and child-directory enumeration errors are reported with their path and operating-system detail rather than being treated as an empty scan.
+
+Verified missing-entry cleanup is intentionally separate from scanning. The Settings **Review Missing Entries** action previews all missing candidates below each selected root, shows affected review decisions, and requires explicit confirmation before applying. A root that cannot be fully enumerated is reported as unknown, never as an empty or missing-file result; a stale preview must be refreshed before it can apply. Do not use the removed unchecked “missing” cache action in scripts or clients.
+
+Scan failures and cancellations are recorded as failed scan diagnostics even when the catalog transaction rolls back, including the root, timestamps, error text, and counts processed before the failure. Each root in a multi-root job has its own transaction: earlier successful roots remain committed, while failed and not-processed roots are reported in the scan job status. Existing cancellation behavior remains best-effort and retains work completed before cancellation.
+
+Copy, move, and delete workers expose one shared per-file result contract in their synchronous and asynchronous responses. Results retain source/destination paths, the operation stage, OS error details, guarded present/missing/unknown filesystem state, observation errors, retry safety, and partial/unprocessed outcomes; preview cleanup warnings do not inflate transfer failures. When a transfer or unlink may have mutated the filesystem, the result retains both paths and is never marked safe for automatic retry. Catalog failures are rolled back and read back before a move is compensated, and failed bulk jobs retain every untouched ID, including the remainder of the current batch. Completed file mutations are committed independently so cancellation or a later fatal row does not erase earlier work. Failed operation jobs retain their summary for the existing status and result endpoints, while partial or uncertain files are left for manual inspection rather than automatically retried.
+
+The Library UI retains the latest operation result, keeps unsuccessful/unprocessed IDs selected, bounds the on-screen result list, and provides Copy details, Download JSON, safe retry, and Check status actions. Rejected deletion goes through the same tracked async operation path as selected deletion. Settings includes a read-only root-scoped decision CSV export for approved, rejected, or both decisions; it includes all matching rows across Review pages and uses spreadsheet-safe UTF-8 CSV escaping.
+
+The folder browser accepts a full local path or UNC path such as `\\server\share\folder`; press Enter after editing the path to open it. The browser does not enumerate network servers or probe write/delete permissions against user photos.
 
 ## Testing and verification
 

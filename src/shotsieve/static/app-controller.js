@@ -244,7 +244,7 @@
 
       if (tab === "compare" && workflows?.renderComparisonModelOptions && state.options) {
         const persisted = loadUiState();
-        const scoringModes = availableLearnedModelsUtil(state.options, stateModule.DEFAULT_MODEL_CATALOG, stateModule.HIDDEN_MODEL_NAMES);
+        const scoringModes = availableLearnedModelsUtil(state.options);
         workflows.renderComparisonModelOptions(state.options, scoringModes, persisted);
       }
     }
@@ -418,16 +418,29 @@
 
       const modelSelect = document.getElementById("model-select");
       const previousModel = modelSelect.value;
-      const scoringModes = availableLearnedModelsUtil(options, stateModule.DEFAULT_MODEL_CATALOG, stateModule.HIDDEN_MODEL_NAMES);
-      modelSelect.innerHTML = scoringModes.map((model) => `<option value="${escapeHtml(model)}">${escapeHtml(stateModule.MODEL_DISPLAY_NAMES[model] || model)}</option>`)
+      const scoringModes = availableLearnedModelsUtil(options);
+      const modelCatalog = Array.isArray(options.learned?.model_catalog) ? options.learned.model_catalog : [];
+      const modelLabels = new Map(modelCatalog.map((entry) => [entry?.canonical_id, entry?.label]));
+      const catalogModelFor = (value) => {
+        const normalized = String(value || "").trim().toLowerCase().replace(/\s+/g, "");
+        if (!normalized) {
+          return null;
+        }
+        return modelCatalog.find((entry) => [entry?.canonical_id, ...(Array.isArray(entry?.aliases) ? entry.aliases : [])]
+          .some((alias) => String(alias || "").trim().toLowerCase().replace(/\s+/g, "") === normalized)) || null;
+      };
+      const persistedModel = typeof persisted.model === "string" ? persisted.model.trim() : "";
+      const persistedModelEntry = catalogModelFor(persistedModel);
+      const persistedModelWasRetired = Boolean(persistedModel && !persistedModelEntry);
+      modelSelect.innerHTML = scoringModes.map((model) => `<option value="${escapeHtml(model)}">${escapeHtml(modelLabels.get(model) || model)}</option>`)
         .join("");
 
-      const preferredModel = previousModel || persisted.model || options.default_scoring_mode || scoringModes[0] || "topiq_nr";
+      const preferredModel = previousModel || persistedModelEntry?.canonical_id || options.default_scoring_mode || scoringModes[0] || "";
       modelSelect.value = scoringModes.includes(preferredModel)
         ? preferredModel
         : (options.default_scoring_mode && scoringModes.includes(options.default_scoring_mode)
           ? options.default_scoring_mode
-          : (scoringModes[0] || "topiq_nr"));
+          : (scoringModes[0] || ""));
 
       const deviceSelect = document.getElementById("device-select");
       const previousDevice = deviceSelect.value;
@@ -466,18 +479,35 @@
 
       modelSelect.onchange = () => {
         const val = modelSelect.value;
-        document.getElementById("model-detail-hint").textContent = stateModule.MODEL_DESCRIPTIONS[val] || "No detailed notes available for this model.";
+        const catalogEntry = modelCatalog.find((entry) => entry?.canonical_id === val);
+        document.getElementById("model-detail-hint").textContent = catalogEntry?.description || "No detailed notes available for this model.";
+        const preparation = options.learned?.model_preparation || {};
+        const preparationStatus = document.getElementById("model-preparation-status");
+        if (preparationStatus) {
+          const preparedModel = String(preparation.model || "");
+          const state = String(preparation.state || "not_checked");
+          const error = String(preparation.error || preparation.error_report?.cause || "");
+          if (state === "prepared" && preparedModel === val) {
+            preparationStatus.textContent = `Prepared on CPU${preparation.finished_at ? ` · ${preparation.finished_at}` : ""}. Scoring validates the selected runtime at use time.`;
+          } else if (["failed", "runtime_unavailable"].includes(state) && preparedModel === val) {
+            preparationStatus.textContent = `Last preparation ${state.replaceAll("_", " ")}${error ? `: ${error}` : ". Retry preparation for details."}`;
+          } else if (state === "not_checked") {
+            preparationStatus.textContent = "Model readiness has not been checked for the current runtime/cache context.";
+          } else {
+            preparationStatus.textContent = "The selected model has not been prepared in this runtime/cache context.";
+          }
+        }
       };
       modelSelect.onchange();
 
       const runtimeModelWarning = document.getElementById("runtime-model-warning");
       if (runtimeModelWarning) {
-        const activeRuntime = String(options.learned?.default_runtime || "").toLowerCase();
-        const modelSet = new Set(options.learned_models || []);
-        const qalignBlockedRuntimes = new Set(["cpu", "directml"]);
-        const qalignUnavailableOnActiveRuntime = qalignBlockedRuntimes.has(activeRuntime) && !modelSet.has("qalign");
-        if (qalignUnavailableOnActiveRuntime) {
-          runtimeModelWarning.textContent = "Q-Align is unavailable for the active runtime. Use TOPIQ or CLIPIQA, or switch to another supported accelerator runtime.";
+        const fallbackReason = String(options.learned?.runtime_fallback_reason || "").trim();
+        if (fallbackReason) {
+          runtimeModelWarning.textContent = `Auto mode is using CPU because an accelerator was unavailable: ${fallbackReason}`;
+          runtimeModelWarning.classList.remove("hidden");
+        } else if (!scoringModes.length) {
+          runtimeModelWarning.textContent = "No supported learned-IQA model is ready in this runtime. Install or repair the learned-IQA dependencies, then refresh Settings.";
           runtimeModelWarning.classList.remove("hidden");
         } else {
           runtimeModelWarning.textContent = "";
@@ -487,6 +517,14 @@
 
       if (workflows?.renderComparisonModelOptions) {
         workflows.renderComparisonModelOptions(options, scoringModes, persisted);
+      }
+      if (persistedModelWasRetired && modelSelect.value) {
+        const selectedLabel = modelLabels.get(modelSelect.value) || modelSelect.value;
+        showToast(
+          `Saved model "${persistedModel}" is no longer supported; using ${selectedLabel}. Historical scores remain readable.`,
+          "warning",
+        );
+        saveUiState({ immediate: true });
       }
       if (workflows?.renderComparisonSummary) {
         workflows.renderComparisonSummary();

@@ -19,6 +19,11 @@ DEFAULT_TORCH_AUTO_INSTALL_ENV = "SHOTSIEVE_BOOTSTRAP_AUTO_INSTALL_TORCH"
 DEFAULT_TORCH_SITE_PACKAGES_DIRNAME = "site-packages"
 DISTUTILS_REPLACEMENT_WARNING_PATTERN = r"Setuptools is replacing distutils\..*"
 PIP_UNEXPECTED_IMPORT_WARNING_PATTERN = r"DEPRECATION: Unexpected import of '.*' after pip install started\..*"
+DIRECTML_TORCH_REQUIREMENTS = (
+    "torch==2.4.1",
+    "torchvision==0.19.1",
+    "torch-directml==0.2.5.dev240914",
+)
 
 
 def _battr(name: str, fallback: Any) -> Any:
@@ -110,6 +115,12 @@ def _torch_install_index_args(runtime: str) -> list[str]:
             "download.pytorch.org",
         ]
     return []
+
+
+def _torch_packages_for_runtime(runtime: str) -> tuple[str, ...]:
+    if runtime.casefold() == "directml":
+        return DIRECTML_TORCH_REQUIREMENTS
+    return ("torch", "torchvision")
 
 
 def _patch_distlib_finder_for_frozen() -> None:
@@ -297,7 +308,8 @@ def _install_torch_sidecar_with_embedded_pip(
         except OSError:
             pass
 
-    def _run_pip_install(package_name: str) -> int:
+    def _run_pip_install(package_names: tuple[str, ...]) -> int:
+        package_label = " ".join(package_names)
         idx_args_func = _battr("_torch_install_index_args", _torch_install_index_args)
         install_args = [
             "install",
@@ -309,7 +321,7 @@ def _install_torch_sidecar_with_embedded_pip(
             str(pip_log_path),
             "--target",
             str(site_packages),
-            package_name,
+            *package_names,
             *idx_args_func(runtime),
         ]
         if force_reinstall:
@@ -335,7 +347,7 @@ def _install_torch_sidecar_with_embedded_pip(
             exception_text = traceback.format_exc()
 
         _append_debug_log(
-            package_name=package_name,
+            package_name=package_label,
             install_args=install_args,
             return_code=return_code,
             stdout_text=stdout_buffer.getvalue(),
@@ -345,7 +357,7 @@ def _install_torch_sidecar_with_embedded_pip(
         return return_code
 
     has_torch_func = _battr("_path_has_torch", _path_has_torch)
-    torch_return_code = _run_pip_install("torch")
+    torch_return_code = _run_pip_install(_torch_packages_for_runtime(runtime))
     if torch_return_code != 0:
         if has_torch_func(site_packages):
             output_func(
@@ -355,19 +367,11 @@ def _install_torch_sidecar_with_embedded_pip(
             return True
 
         output_func(
-            "PyTorch installation step 'torch' failed with exit code "
+            "PyTorch runtime installation failed with exit code "
             f"{torch_return_code}. Check {pip_log_path} for details."
         )
         output_func("PyTorch installation failed. The app will continue without GPU-accelerated learned models.")
         return False
-
-    torchvision_return_code = _run_pip_install("torchvision")
-    if torchvision_return_code != 0:
-        output_func(
-            "Torchvision installation failed with exit code "
-            f"{torchvision_return_code}, but PyTorch was installed. "
-            f"Check {pip_log_path} for details. Continuing with available learned-model support."
-        )
 
     return has_torch_func(site_packages)
 
@@ -397,7 +401,6 @@ def install_torch_sidecar(
 
 
 def _learned_iqa_packages_for_runtime(runtime: str) -> list[str]:
-    normalized = runtime.casefold()
     packages = [
         "pyiqa",
         "opencv-python-headless",
@@ -410,8 +413,6 @@ def _learned_iqa_packages_for_runtime(runtime: str) -> list[str]:
         "pandas",
         "icecream",
     ]
-    if normalized == "directml":
-        packages.append("torch-directml")
     return packages
 
 

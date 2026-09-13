@@ -1,6 +1,14 @@
 from pathlib import Path
+
+import pytest
 from conftest import create_image
-from shotsieve.scanner import IgnoreMatcher, discover_files, check_overlapping_roots
+
+from shotsieve.scanner import (
+    FileDiscoveryError,
+    IgnoreMatcher,
+    check_overlapping_roots,
+    discover_files,
+)
 
 
 def test_ignore_matcher(tmp_path: Path) -> None:
@@ -52,6 +60,65 @@ def test_discover_files_pruning(tmp_path: Path) -> None:
     assert "c.jpg" not in paths
 
 
+def test_discover_files_reports_missing_root(tmp_path: Path) -> None:
+    with pytest.raises(FileDiscoveryError, match="Unable to enumerate"):
+        list(
+            discover_files(
+                tmp_path / "not-mounted",
+                recursive=True,
+                extensions=(".jpg",),
+            )
+        )
+
+
+def test_discover_files_reports_nonrecursive_enumeration_error(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = tmp_path / "photos"
+    root.mkdir()
+
+    def denied_scandir(_path):
+        raise PermissionError("access denied")
+
+    monkeypatch.setattr("shotsieve.scanner.os.scandir", denied_scandir)
+
+    with pytest.raises(FileDiscoveryError, match="photos"):
+        list(
+            discover_files(
+                root,
+                recursive=False,
+                extensions=(".jpg",),
+            )
+        )
+
+
+def test_discover_files_reports_recursive_child_enumeration_error(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = tmp_path / "photos"
+    child = root / "private"
+    child.mkdir(parents=True)
+
+    def failing_walk(_root, *, topdown, onerror):
+        error = PermissionError("access denied")
+        error.filename = str(child)
+        onerror(error)
+        yield str(root), [child.name], []
+
+    monkeypatch.setattr("shotsieve.scanner.os.walk", failing_walk)
+
+    with pytest.raises(FileDiscoveryError, match="private"):
+        list(
+            discover_files(
+                root,
+                recursive=True,
+                extensions=(".jpg",),
+            )
+        )
+
+
 def test_check_overlapping_roots(tmp_path: Path) -> None:
     root1 = tmp_path / "photos"
     root2 = tmp_path / "photos" / "vacation"
@@ -67,4 +134,3 @@ def test_check_overlapping_roots(tmp_path: Path) -> None:
     assert (root1.resolve(), root2.resolve()) in paths
     assert (root1.resolve(), root4.resolve()) in paths
     assert (root2.resolve(), root4.resolve()) in paths
-

@@ -5,6 +5,8 @@ import importlib
 import logging
 import os
 import platform
+import re
+import sys
 import threading
 import warnings
 
@@ -29,7 +31,7 @@ TORCHSCRIPT_ARCHIVE_WARNING_PATTERN = r"'torch\.load' received a zip file that l
 TRANSFORMERS_GENERATION_FLAGS_WARNING_PATTERN = r"The following generation flags are not valid and may be ignored"
 TRANSFORMERS_RETURN_DICT_DEPRECATION_PATTERN = r"`use_return_dict` is deprecated! Use `return_dict` instead!"
 HF_UNAUTHENTICATED_REQUEST_WARNING_PATTERN = r"Warning: You are sending unauthenticated requests to the HF Hub"
-DEFAULT_RUNTIME_STATUS_TEXT = "cuda:unavailable,xpu:unavailable,directml:not-installed,mps:unsupported,cpu:available"
+DEFAULT_RUNTIME_STATUS_TEXT = "cuda:unavailable,xpu:unavailable,directml:missing,mps:unsupported,cpu:available"
 RUNTIME_STATUS_ORDER = ("cuda", "xpu", "directml", "mps", "cpu")
 RESOURCE_PROFILES = {
     "aggressive": {"vram_factor": 0.80, "cpu_factor": 2.0, "ram_factor": 0.75},
@@ -48,6 +50,18 @@ class ResolvedDevice:
     metric_device: object
     tensor_device: object
     display_device: str
+    fallback_reason: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class DirectMLProbe:
+    status: str
+    device: object | None = None
+    cause: str | None = None
+
+
+class LearnedRuntimeUnavailableError(RuntimeError):
+    """Raised when a requested learned-IQA runtime cannot be used."""
 
 
 _cached_hw_capabilities: dict[str, object] | None = None
@@ -107,14 +121,14 @@ def runtime_candidates(requested: str, *, system_name: str | None = None) -> tup
     if requested == "auto":
         return auto_runtime_order(system)
     if requested == "amd":
-        return ("directml", "cpu") if system == "Windows" else ("cpu",)
+        return ("directml",) if system == "Windows" else ("amd",)
     if requested == "apple":
-        return ("mps", "cpu") if system == "Darwin" else ("cpu",)
+        return ("mps",) if system == "Darwin" else ("apple",)
     if requested == "intel":
-        return ("xpu", "directml", "cpu") if system == "Windows" else ("xpu", "cpu")
+        return ("xpu", "directml") if system == "Windows" else ("xpu",)
     if requested in {"cuda", "xpu", "directml", "mps", "cpu"}:
-        return (requested, "cpu") if requested != "cpu" else ("cpu",)
-    return ("cpu",)
+        return (requested,)
+    return (requested,)
 
 
 def has_cuda(torch_module) -> bool:
@@ -142,45 +156,115 @@ def has_mps(torch_module) -> bool:
         return False
 
 
-def load_directml_device(*, import_module=importlib.import_module) -> object | None:
+def _sanitize_runtime_cause(exc: BaseException) -> str:
+    text = " ".join(str(exc).split()) or type(exc).__name__
+    text = re.sub(r"https?://\S+", "<redacted-url>", text, flags=re.IGNORECASE)
+    text = re.sub(r"(?i)(token|password|secret|authorization|proxy)[^\s=:]*\s*[:=]\s*\S+", r"\1=<redacted>", text)
+    return text[:240]
+
+
+def probe_directml_device(*, import_module=importlib.import_module, system_name: str | None = None) -> DirectMLProbe:
+    if current_system_name(system_name) != "Windows":
+        return DirectMLProbe(status="unsupported", cause="DirectML is supported only on Windows.")
+    if sys.version_info < (3, 11) or sys.version_info >= (3, 13):
+        return DirectMLProbe(status="unsupported", cause="The supported DirectML target requires Python 3.11 or 3.12.")
+
     try:
         torch_directml = import_module("torch_directml")
-    except Exception:
-        return None
+    except ModuleNotFoundError as exc:
+        if exc.name == "torch_directml":
+            return DirectMLProbe(status="missing", cause="Install the Windows DirectML runtime package.")
+        return DirectMLProbe(status="broken", cause=_sanitize_runtime_cause(exc))
+    except ImportError as exc:
+        return DirectMLProbe(status="broken", cause=_sanitize_runtime_cause(exc))
+    except Exception as exc:
+        return DirectMLProbe(status="broken", cause=_sanitize_runtime_cause(exc))
+
     try:
-        return torch_directml.device(torch_directml.default_device())
-    except Exception:
-        return None
+        device = torch_directml.device(torch_directml.default_device())
+    except Exception as exc:
+        return DirectMLProbe(status="broken", cause=_sanitize_runtime_cause(exc))
+    return DirectMLProbe(status="available", device=device)
+
+
+def load_directml_device(*, import_module=importlib.import_module) -> object | None:
+    return probe_directml_device(import_module=import_module, system_name="Windows").device
 
 
 def resolve_device(device: str | None, *, torch_module, import_module=importlib.import_module, system_name: str | None = None) -> ResolvedDevice:
     system = current_system_name(system_name)
     requested = normalize_device_target(device, system_name=system)
+    failures: list[str] = []
 
     for runtime in runtime_candidates(requested, system_name=system):
-        if runtime == "cuda" and has_cuda(torch_module):
-            device_object = torch_module.device("cuda")
-            return ResolvedDevice(requested=requested, runtime="cuda", metric_device=device_object, tensor_device=device_object, display_device="cuda")
+        if runtime == "cuda":
+            if has_cuda(torch_module):
+                try:
+                    device_object = torch_module.device("cuda")
+                    return ResolvedDevice(requested=requested, runtime="cuda", metric_device=device_object, tensor_device=device_object, display_device="cuda")
+                except Exception as exc:
+                    failures.append(f"CUDA device initialization failed: {_sanitize_runtime_cause(exc)}")
+            else:
+                failures.append("CUDA is unavailable in the installed Torch runtime")
+            continue
 
-        if runtime == "xpu" and has_xpu(torch_module):
-            device_object = torch_module.device("xpu")
-            return ResolvedDevice(requested=requested, runtime="xpu", metric_device=device_object, tensor_device=device_object, display_device="xpu")
+        if runtime == "xpu":
+            if has_xpu(torch_module):
+                try:
+                    device_object = torch_module.device("xpu")
+                    return ResolvedDevice(requested=requested, runtime="xpu", metric_device=device_object, tensor_device=device_object, display_device="xpu")
+                except Exception as exc:
+                    failures.append(f"XPU device initialization failed: {_sanitize_runtime_cause(exc)}")
+            else:
+                failures.append("XPU is unavailable in the installed Torch runtime")
+            continue
 
         if runtime == "directml":
-            device_object = load_directml_device(import_module=import_module)
-            if device_object is not None:
-                return ResolvedDevice(requested=requested, runtime="directml", metric_device=device_object, tensor_device=device_object, display_device="directml")
+            probe = probe_directml_device(import_module=import_module, system_name=system)
+            if probe.device is not None:
+                return ResolvedDevice(requested=requested, runtime="directml", metric_device=probe.device, tensor_device=probe.device, display_device="directml")
+            failures.append(f"DirectML {probe.status}: {probe.cause or 'device probe failed'}")
+            continue
 
-        if runtime == "mps" and has_mps(torch_module):
-            device_object = torch_module.device("mps")
-            return ResolvedDevice(requested=requested, runtime="mps", metric_device=device_object, tensor_device=device_object, display_device="mps")
+        if runtime == "mps":
+            if has_mps(torch_module):
+                try:
+                    device_object = torch_module.device("mps")
+                    return ResolvedDevice(requested=requested, runtime="mps", metric_device=device_object, tensor_device=device_object, display_device="mps")
+                except Exception as exc:
+                    failures.append(f"MPS device initialization failed: {_sanitize_runtime_cause(exc)}")
+            else:
+                failures.append("MPS is unavailable in the installed Torch runtime")
+            continue
 
         if runtime == "cpu":
             device_object = torch_module.device("cpu")
-            return ResolvedDevice(requested=requested, runtime="cpu", metric_device=device_object, tensor_device=device_object, display_device="cpu")
+            return ResolvedDevice(
+                requested=requested,
+                runtime="cpu",
+                metric_device=device_object,
+                tensor_device=device_object,
+                display_device="cpu",
+                fallback_reason="; ".join(failures) if failures else None,
+            )
 
-    device_object = torch_module.device("cpu")
-    return ResolvedDevice(requested=requested, runtime="cpu", metric_device=device_object, tensor_device=device_object, display_device="cpu")
+        failures.append(f"Runtime '{runtime}' is not supported on this platform")
+
+    detail = "; ".join(failures) or "no compatible device was detected"
+    if requested == "auto":
+        device_object = torch_module.device("cpu")
+        return ResolvedDevice(
+            requested=requested,
+            runtime="cpu",
+            metric_device=device_object,
+            tensor_device=device_object,
+            display_device="cpu",
+            fallback_reason=detail,
+        )
+    raise LearnedRuntimeUnavailableError(
+        f"Requested learned-IQA runtime '{requested}' is unavailable. {detail}. "
+        "Choose Auto/CPU or install and validate the requested runtime."
+    )
 
 
 def runtime_statuses(*, torch_module, import_module=importlib.import_module, system_name: str | None = None) -> dict[str, str]:
@@ -189,7 +273,7 @@ def runtime_statuses(*, torch_module, import_module=importlib.import_module, sys
     statuses["cuda"] = "available" if has_cuda(torch_module) else "unavailable"
     statuses["xpu"] = "available" if has_xpu(torch_module) else ("unsupported" if system == "Darwin" else "unavailable")
     if system == "Windows":
-        statuses["directml"] = "available" if load_directml_device(import_module=import_module) is not None else "not-installed"
+        statuses["directml"] = probe_directml_device(import_module=import_module, system_name=system).status
     else:
         statuses["directml"] = "unsupported"
     if system == "Darwin":
@@ -621,6 +705,7 @@ def import_pyiqa_runtime(*, import_module=importlib.import_module):
 __all__ = [
     "DEFAULT_RESOURCE_PROFILE",
     "DEFAULT_RUNTIME_STATUS_TEXT",
+    "DirectMLProbe",
     "HF_UNAUTHENTICATED_REQUEST_WARNING_PATTERN",
     "PKG_RESOURCES_DEPRECATION_PATTERN",
     "RESOURCE_PROFILES",
@@ -652,8 +737,10 @@ __all__ = [
     "import_pyiqa_runtime",
     "install_runtime_warning_filters",
     "invalidate_hw_cache",
+    "LearnedRuntimeUnavailableError",
     "load_directml_device",
     "normalize_device_target",
+    "probe_directml_device",
     "recommended_batch_size",
     "recommended_cpu_workers",
     "resolve_device",

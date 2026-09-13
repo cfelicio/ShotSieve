@@ -38,6 +38,7 @@
         pollJob: jobPollers.pollJob,
         pollScanJob: jobPollers.pollScanJob,
         pollScoreJob: jobPollers.pollScoreJob,
+        pollModelPreparationJob: jobPollers.pollModelPreparationJob,
       },
       workflowExport,
     };

@@ -6,9 +6,9 @@ from pathlib import Path
 from PIL import Image
 import pytest
 
-from shotsieve.db import connect, initialize_database, root_path_filter
+from shotsieve.db import connect, database, initialize_database, root_path_filter
 from shotsieve.preview import PreviewResult, preview_output_paths, stable_preview_name
-from shotsieve.scanner import canonical_path_key, scan_root
+from shotsieve.scanner import FileDiscoveryError, ScanInterrupted, canonical_path_key, scan_root
 from shotsieve.schema import SCHEMA_SQL
 
 
@@ -181,7 +181,7 @@ def test_scan_marks_unchanged_on_repeat_scan(tmp_path: Path) -> None:
     assert summary.files_unchanged == 1
 
 
-def test_scan_removes_deleted_files_on_rescan(tmp_path: Path) -> None:
+def test_scan_preserves_deleted_files_on_rescan_until_explicit_cleanup(tmp_path: Path) -> None:
     db_path = tmp_path / "data" / "shotsieve.db"
     preview_dir = tmp_path / "previews"
     photo_dir = tmp_path / "photos"
@@ -210,11 +210,155 @@ def test_scan_removes_deleted_files_on_rescan(tmp_path: Path) -> None:
         count = connection.execute("SELECT COUNT(*) AS count FROM files").fetchone()["count"]
 
     assert summary.files_seen == 0
-    assert summary.files_removed == 1
-    assert count == 0
+    assert summary.files_removed == 0
+    assert count == 1
 
 
-def test_scan_excludes_absolute_folder_rules_and_removes_prior_rows(tmp_path: Path) -> None:
+def test_unavailable_scan_preserves_existing_catalog_rows(tmp_path: Path) -> None:
+    db_path = tmp_path / "data" / "shotsieve.db"
+    preview_dir = tmp_path / "previews"
+    photo_dir = tmp_path / "photos"
+    photo_dir.mkdir()
+    create_image(photo_dir / "sample.jpg")
+
+    initialize_database(db_path)
+
+    with connect(db_path) as connection:
+        scan_root(connection, root=photo_dir, recursive=True, extensions=(".jpg",), preview_dir=preview_dir)
+
+        with pytest.raises(OSError, match="Unable to enumerate"):
+            scan_root(
+                connection,
+                root=tmp_path / "unavailable-library",
+                recursive=True,
+                extensions=(".jpg",),
+                preview_dir=preview_dir,
+            )
+
+        rows = connection.execute("SELECT path FROM files ORDER BY path").fetchall()
+
+    assert [row["path"] for row in rows] == [str((photo_dir / "sample.jpg").resolve())]
+
+
+def test_failed_discovery_diagnostic_survives_database_rollback(tmp_path: Path) -> None:
+    db_path = tmp_path / "data" / "shotsieve.db"
+    preview_dir = tmp_path / "previews"
+    missing_root = tmp_path / "unavailable-library"
+    initialize_database(db_path)
+
+    with pytest.raises(FileDiscoveryError):
+        with connect(db_path) as connection:
+            scan_root(
+                connection,
+                root=missing_root,
+                recursive=True,
+                extensions=(".jpg",),
+                preview_dir=preview_dir,
+                generate_previews=False,
+            )
+
+    with database(db_path) as connection:
+        run = connection.execute(
+            """
+            SELECT root_path, started_time, completed_time, files_seen,
+                   files_added, files_updated, files_unchanged, files_removed,
+                   status, error_text
+            FROM scan_runs ORDER BY id DESC LIMIT 1
+            """
+        ).fetchone()
+
+    assert run["root_path"] == str(missing_root.resolve())
+    assert run["started_time"]
+    assert run["completed_time"]
+    assert run["files_seen"] == 0
+    assert run["status"] == "failed"
+    assert "Unable to enumerate" in run["error_text"]
+
+
+def test_failed_scan_after_prior_batch_preserves_processed_diagnostic_counts(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    from shotsieve import scanner as scanner_module
+
+    db_path = tmp_path / "data" / "shotsieve.db"
+    preview_dir = tmp_path / "previews"
+    photo_dir = tmp_path / "photos"
+    photo_dir.mkdir()
+    for index in range(101):
+        create_image(photo_dir / f"sample-{index}.jpg")
+    initialize_database(db_path)
+
+    original_process_batch = scanner_module._process_scan_batch
+    batch_calls = 0
+
+    def fail_second_batch(*args, **kwargs):
+        nonlocal batch_calls
+        batch_calls += 1
+        if batch_calls == 2:
+            raise RuntimeError("late scan failure")
+        return original_process_batch(*args, **kwargs)
+
+    monkeypatch.setattr(scanner_module, "_process_scan_batch", fail_second_batch)
+
+    with pytest.raises(RuntimeError, match="late scan failure"):
+        with database(db_path) as connection:
+            scan_root(
+                connection,
+                root=photo_dir,
+                recursive=True,
+                extensions=(".jpg",),
+                preview_dir=preview_dir,
+                generate_previews=False,
+            )
+
+    with database(db_path) as connection:
+        file_count = connection.execute("SELECT COUNT(*) AS count FROM files").fetchone()["count"]
+        run = connection.execute(
+            "SELECT files_seen, files_added, status, error_text FROM scan_runs ORDER BY id DESC LIMIT 1"
+        ).fetchone()
+
+    assert file_count == 0
+    assert run["files_seen"] == 100
+    assert run["files_added"] == 100
+    assert run["status"] == "failed"
+    assert run["error_text"] == "late scan failure"
+
+
+def test_cancelled_scan_persists_incomplete_diagnostic_after_rollback(tmp_path: Path) -> None:
+    db_path = tmp_path / "data" / "shotsieve.db"
+    preview_dir = tmp_path / "previews"
+    photo_dir = tmp_path / "photos"
+    photo_dir.mkdir()
+    create_image(photo_dir / "sample.jpg")
+    initialize_database(db_path)
+
+    def cancel_scan() -> None:
+        raise InterruptedError("cancelled during discovery")
+
+    with pytest.raises(ScanInterrupted, match="cancelled during discovery"):
+        with database(db_path) as connection:
+            scan_root(
+                connection,
+                root=photo_dir,
+                recursive=True,
+                extensions=(".jpg",),
+                preview_dir=preview_dir,
+                generate_previews=False,
+                cancel_check=cancel_scan,
+            )
+
+    with database(db_path) as connection:
+        run = connection.execute(
+            "SELECT files_seen, status, error_text FROM scan_runs ORDER BY id DESC LIMIT 1"
+        ).fetchone()
+
+    assert run["files_seen"] == 0
+    assert run["status"] == "failed"
+    assert "cancelled during discovery" in run["error_text"]
+
+
+def test_scan_excludes_absolute_folder_rules_but_preserves_prior_rows(tmp_path: Path) -> None:
     db_path = tmp_path / "data" / "shotsieve.db"
     preview_dir = tmp_path / "previews"
     photo_dir = tmp_path / "photos"
@@ -248,8 +392,12 @@ def test_scan_excludes_absolute_folder_rules_and_removes_prior_rows(tmp_path: Pa
         paths = [row["path"] for row in connection.execute("SELECT path FROM files ORDER BY path").fetchall()]
 
     assert summary.files_seen == 1
-    assert summary.files_removed == 2
-    assert paths == [str((photo_dir / "keep.jpg").resolve())]
+    assert summary.files_removed == 0
+    assert paths == [
+        str((photo_dir / "Others" / "Beatrice Low Res" / "exclude-1.jpg").resolve()),
+        str((photo_dir / "Others" / "Beatrice Low Res" / "exclude-2.jpg").resolve()),
+        str((photo_dir / "keep.jpg").resolve()),
+    ]
 
 
 def test_scan_applies_file_ignore_rules_consistently(tmp_path: Path) -> None:
@@ -278,7 +426,7 @@ def test_scan_applies_file_ignore_rules_consistently(tmp_path: Path) -> None:
     assert paths == [str((photo_dir / "keep.jpg").resolve())]
 
 
-def test_scan_rescan_does_not_purge_sibling_prefix_root_entries(tmp_path: Path) -> None:
+def test_scan_rescan_preserves_sibling_prefix_root_entries(tmp_path: Path) -> None:
     db_path = tmp_path / "data" / "shotsieve.db"
     preview_dir = tmp_path / "previews"
     root_main = tmp_path / "photos"
@@ -303,7 +451,7 @@ def test_scan_rescan_does_not_purge_sibling_prefix_root_entries(tmp_path: Path) 
         paths = [row["path"] for row in connection.execute("SELECT path FROM files ORDER BY path").fetchall()]
 
     assert any(path.endswith("sibling.jpg") for path in paths)
-    assert all(not path.endswith("main.jpg") for path in paths)
+    assert any(path.endswith("main.jpg") for path in paths)
 
 
 def test_scan_respects_offset_without_limit(tmp_path: Path) -> None:

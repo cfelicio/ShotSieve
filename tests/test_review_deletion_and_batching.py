@@ -1,3 +1,4 @@
+import errno
 from pathlib import Path
 import sqlite3
 from typing import cast
@@ -171,6 +172,132 @@ def test_delete_files_removes_source_and_cache(tmp_path: Path) -> None:
     assert count == 0
 
 
+def test_delete_post_mutation_failure_is_uncertain_and_not_retry_safe(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from shotsieve import review_cache as review_cache_module
+
+    db_path = tmp_path / "data" / "shotsieve.db"
+    preview_dir = tmp_path / "previews"
+    photo_dir = tmp_path / "photos"
+    photo_dir.mkdir()
+    source_path = photo_dir / "sample.jpg"
+    create_image(source_path)
+    initialize_database(db_path)
+
+    with connect(db_path) as connection:
+        scan_root(connection, root=photo_dir, recursive=True, extensions=(".jpg",), preview_dir=preview_dir)
+        file_id = connection.execute("SELECT id FROM files LIMIT 1").fetchone()["id"]
+
+    real_unlink = Path.unlink
+
+    def unlink_then_fail(path: Path, *args, **kwargs):
+        if path == source_path:
+            real_unlink(path, *args, **kwargs)
+            raise OSError(errno.EIO, "simulated post-mutation delete failure")
+        return real_unlink(path, *args, **kwargs)
+
+    monkeypatch.setattr(review_cache_module.Path, "unlink", unlink_then_fail)
+
+    with connect(db_path) as connection:
+        result = delete_files(
+            connection,
+            file_ids=[file_id],
+            delete_from_disk=True,
+            preview_cache_root=preview_dir,
+        )
+
+    item = result["items"][0]
+    assert item["outcome"] == "uncertain"
+    assert item["retry_safe"] is False
+    assert item["source_state"] == "missing"
+    assert not source_path.exists()
+
+
+def test_delete_catalog_failure_after_source_removal_retains_uncertain_result(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "data" / "shotsieve.db"
+    preview_dir = tmp_path / "previews"
+    photo_dir = tmp_path / "photos"
+    photo_dir.mkdir()
+    source_path = photo_dir / "sample.jpg"
+    create_image(source_path)
+    initialize_database(db_path)
+
+    class FailingDeleteConnection:
+        def __init__(self, inner_connection):
+            self._inner = inner_connection
+
+        def execute(self, sql: str, params=()):
+            if sql.startswith("DELETE FROM files WHERE id = ?"):
+                raise sqlite3.OperationalError("simulated delete catalog failure")
+            return self._inner.execute(sql, params)
+
+        def __getattr__(self, name: str):
+            return getattr(self._inner, name)
+
+    with connect(db_path) as connection:
+        scan_root(connection, root=photo_dir, recursive=True, extensions=(".jpg",), preview_dir=preview_dir)
+        file_id = connection.execute("SELECT id FROM files LIMIT 1").fetchone()["id"]
+        with pytest.raises(sqlite3.OperationalError, match="simulated delete catalog failure") as exc_info:
+            delete_files(
+                FailingDeleteConnection(connection),
+                file_ids=[file_id],
+                delete_from_disk=True,
+                preview_cache_root=preview_dir,
+            )
+
+    item = exc_info.value.file_operation_summary["items"][0]
+    assert item["outcome"] == "uncertain"
+    assert item["retry_safe"] is False
+    assert item["source_state"] == "missing"
+    assert not source_path.exists()
+
+
+def test_delete_catalog_failure_retains_all_later_ids_as_unprocessed(tmp_path: Path) -> None:
+    db_path = tmp_path / "data" / "shotsieve.db"
+    preview_dir = tmp_path / "previews"
+    photo_dir = tmp_path / "photos"
+    photo_dir.mkdir()
+    for name in ("first.jpg", "second.jpg", "third.jpg"):
+        create_image(photo_dir / name)
+    initialize_database(db_path)
+
+    class FailingSecondDeleteConnection:
+        def __init__(self, inner_connection):
+            self._inner = inner_connection
+            self._delete_count = 0
+
+        def execute(self, sql: str, params=()):
+            if sql.startswith("DELETE FROM files WHERE id = ?"):
+                self._delete_count += 1
+                if self._delete_count == 2:
+                    raise sqlite3.OperationalError("simulated second delete catalog failure")
+            return self._inner.execute(sql, params)
+
+        def __getattr__(self, name: str):
+            return getattr(self._inner, name)
+
+    with connect(db_path) as connection:
+        scan_root(connection, root=photo_dir, recursive=True, extensions=(".jpg",), preview_dir=preview_dir)
+        file_ids = [row["id"] for row in connection.execute("SELECT id FROM files ORDER BY id").fetchall()]
+        with pytest.raises(sqlite3.OperationalError, match="simulated second delete catalog failure") as exc_info:
+            delete_files(
+                FailingSecondDeleteConnection(connection),
+                file_ids=file_ids,
+                delete_from_disk=True,
+                preview_cache_root=preview_dir,
+            )
+
+    summary = exc_info.value.file_operation_summary
+    assert {item["file_id"] for item in summary["items"]} == set(file_ids)
+    assert summary["completed_count"] == 1
+    assert summary["partial_count"] == 1
+    assert summary["unprocessed_count"] == 1
+    assert summary["safe_retry_ids"] == [file_ids[2]]
+
+
 def test_delete_files_rejects_disk_delete_outside_scanned_roots(tmp_path: Path) -> None:
     db_path = tmp_path / "data" / "shotsieve.db"
     preview_dir = tmp_path / "previews"
@@ -323,6 +450,44 @@ def test_delete_files_preserves_non_preview_sidecar_inside_root(tmp_path: Path) 
 
     assert result["deleted_count"] == 1
     assert sidecar_path.exists()
+
+
+def test_delete_cancellation_commits_completed_rows_and_retains_unprocessed_rows(tmp_path: Path) -> None:
+    db_path = tmp_path / "data" / "shotsieve.db"
+    photo_dir = tmp_path / "photos"
+    photo_dir.mkdir()
+    create_image(photo_dir / "first.jpg")
+    create_image(photo_dir / "second.jpg")
+    initialize_database(db_path)
+
+    with connect(db_path) as connection:
+        scan_root(connection, root=photo_dir, recursive=True, extensions=(".jpg",), preview_dir=tmp_path / "previews")
+        file_ids = [row["id"] for row in connection.execute("SELECT id FROM files ORDER BY id").fetchall()]
+        calls = 0
+
+        def cancel_after_first_file() -> None:
+            nonlocal calls
+            calls += 1
+            if calls > 1:
+                raise InterruptedError("simulated cancellation")
+
+        with pytest.raises(InterruptedError) as exc_info:
+            delete_files(
+                connection,
+                file_ids=file_ids,
+                delete_from_disk=False,
+                cancel_check=cancel_after_first_file,
+            )
+
+    summary = exc_info.value.file_operation_summary
+    assert summary["outcome"] == "cancelled"
+    assert summary["completed_count"] == 1
+    assert summary["unprocessed_count"] == 1
+    assert summary["safe_retry_ids"] == [file_ids[1]]
+
+    with connect(db_path) as connection:
+        remaining_ids = [row["id"] for row in connection.execute("SELECT id FROM files ORDER BY id").fetchall()]
+    assert remaining_ids == [file_ids[1]]
 
 
 

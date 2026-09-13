@@ -143,15 +143,20 @@
       if (isBusy) {
         state.busyStartTime = Date.now();
         state.abortController = new AbortController();
+        state.controlAbortController = new AbortController();
       } else {
         state.busyStartTime = null;
         state.abortController = null;
         state.compareJobId = null;
         state.scoreJobId = null;
         state.scanJobId = null;
-        state.operationJobId = null;
-        state.operationStatusPath = null;
-        state.operationCancelPath = null;
+        state.modelPreparationJobId = null;
+        if (!state.operationStatusUnknown) {
+          state.operationJobId = null;
+          state.operationStatusPath = null;
+          state.operationCancelPath = null;
+        }
+        state.controlAbortController = null;
       }
       renderBusyState();
     }
@@ -206,13 +211,16 @@
       const deadline = Date.now() + timeoutMs;
       while (Date.now() < deadline) {
         try {
-          const status = await fetchJson(`${statusPath}?job_id=${encodeURIComponent(jobId)}`);
+          const status = await fetchJson(`${statusPath}?job_id=${encodeURIComponent(jobId)}`, {
+            signal: state.controlAbortController?.signal,
+          });
           const statusValue = String(status?.status || "").toLowerCase();
           if (statusValue && statusValue !== "running") {
             return true;
           }
         } catch {
-          return true;
+          // A failed status request is not proof that the worker stopped.
+          continue;
         }
         await sleep(250);
       }
@@ -223,17 +231,42 @@
       if (!jobId) {
         return;
       }
-      await postJson(`${cancelPath}?job_id=${encodeURIComponent(jobId)}`, {}).catch(() => {});
-      await waitForJobToStop(statusPath, jobId).catch(() => {});
+      await postJson(`${cancelPath}?job_id=${encodeURIComponent(jobId)}`, {
+        signal: state.controlAbortController?.signal,
+      }).catch(() => {});
+      return waitForJobToStop(statusPath, jobId).catch(() => false);
     }
 
     async function requestServerCancellation() {
-      await Promise.allSettled([
+      const operationJobId = state.operationJobId;
+      const results = await Promise.allSettled([
         cancelServerJob(state.scanJobId, "/api/scan/cancel", "/api/scan/status"),
         cancelServerJob(state.scoreJobId, "/api/score/cancel", "/api/score/status"),
         cancelServerJob(state.compareJobId, "/api/compare-models/cancel", "/api/compare-models/status"),
+        cancelServerJob(state.modelPreparationJobId, "/api/models/prepare/cancel", "/api/models/prepare/status"),
         cancelServerJob(state.operationJobId, state.operationCancelPath, state.operationStatusPath),
       ]);
+      const operationResult = results[4];
+      const operationStopped = !operationJobId || (operationResult?.status === "fulfilled"
+        ? Boolean(operationResult.value)
+        : true);
+      let operationResultAvailable = !operationJobId;
+      if (operationJobId && operationStopped) {
+        try {
+          const result = await fetchJson(`/api/operations/result?job_id=${encodeURIComponent(operationJobId)}`, {
+            signal: state.controlAbortController?.signal,
+          });
+          state.latestOperationResult = result;
+          if (typeof state.operationResultHandler === "function") {
+            state.operationResultHandler(result, state.latestOperationRequest);
+          }
+          operationResultAvailable = true;
+        } catch {
+          // The status is terminal, but the result endpoint may still be unavailable.
+          // Keep the cancellation message truthful and let the user check status.
+        }
+      }
+      return operationStopped && operationResultAvailable;
     }
 
     async function withBusy(message, task, options = {}) {
@@ -250,7 +283,23 @@
           setBusyMessage("Cancelling...");
           showToast("Cancellation requested. Stopping the current operation...", "error");
           addLogEntry("Cancelled", message);
-          await requestServerCancellation();
+          const cancellationConfirmed = await requestServerCancellation();
+          if (!cancellationConfirmed) {
+            state.operationStatusUnknown = Boolean(state.operationJobId);
+            if (state.operationJobId) {
+              const unknownResult = {
+                action: String(state.latestOperationRequest?.payload?.mode || "operation"),
+                outcome: "unknown",
+                job_status: "unknown",
+                fatal_error: "Cancellation was requested, but the server has not confirmed a terminal state.",
+              };
+              state.latestOperationResult = unknownResult;
+              if (typeof state.operationResultHandler === "function") {
+                state.operationResultHandler(unknownResult, state.latestOperationRequest);
+              }
+            }
+            showToast("Cancellation was requested, but the server status is unknown. Use Check status before starting another operation.", "error");
+          }
           return;
         }
         throw error;

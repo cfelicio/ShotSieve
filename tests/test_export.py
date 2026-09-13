@@ -1,6 +1,7 @@
 """Tests for the export module - copy, move, collision handling, and validation."""
 from __future__ import annotations
 
+import errno
 from pathlib import Path
 import sqlite3
 from typing import cast
@@ -11,6 +12,40 @@ from PIL import Image
 from shotsieve.db import database, initialize_database
 from shotsieve.export import _reject_system_directory, export_files
 from shotsieve.scanner import scan_root
+
+
+@pytest.mark.parametrize("error_code", [errno.EXDEV, errno.EOPNOTSUPP, errno.ENOSYS])
+def test_move_copies_when_hard_links_are_unavailable(tmp_path, monkeypatch, error_code):
+    from shotsieve.export import _move_without_overwrite
+
+    source, target = tmp_path / "source.jpg", tmp_path / "target.jpg"
+    source.write_bytes(b"original photo")
+
+    def unsupported(*args):
+        raise OSError(error_code, "hard links unavailable")
+
+    monkeypatch.setattr("shotsieve.export.os.link", unsupported)
+    _move_without_overwrite(source, target)
+    assert target.read_bytes() == b"original photo"
+    assert not source.exists()
+
+
+def test_move_recovery_never_overwrites_a_racing_source(tmp_path, monkeypatch):
+    from shotsieve import export
+
+    source, target = tmp_path / "source.jpg", tmp_path / "target.jpg"
+    target.write_bytes(b"moved photo")
+    real_link = export.os.link
+
+    def racing_link(old, new):
+        source.write_bytes(b"new photo")
+        return real_link(old, new)
+
+    monkeypatch.setattr(export.os, "link", racing_link)
+    with pytest.raises(FileExistsError):
+        export._restore_moved_source(source, target)
+    assert source.read_bytes() == b"new photo"
+    assert target.read_bytes() == b"moved photo"
 
 
 def create_image(path: Path) -> None:
@@ -163,6 +198,112 @@ class TestValidation:
         assert result.copied == 0
         assert len(result.failed) == 1
         assert "not found" in result.failed[0]["error"]
+
+    def test_inaccessible_source_observation_is_not_retry_safe(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+        from shotsieve import export as export_module
+        from shotsieve.models import FilesystemObservation
+
+        db_path, photo_dir, ids_by_name = setup_library(tmp_path)
+        destination = tmp_path / "export"
+        destination.mkdir()
+        source = photo_dir / "alpha.jpg"
+        real_observe = export_module.observe_filesystem_path
+
+        def observe(path: Path):
+            if path == source:
+                return FilesystemObservation("unknown", "simulated access denied")
+            return real_observe(path)
+
+        monkeypatch.setattr(export_module, "observe_filesystem_path", observe)
+
+        with database(db_path) as connection:
+            result = export_files(
+                connection,
+                file_ids=[ids_by_name["alpha.jpg"]],
+                destination=str(destination),
+                mode="copy",
+            )
+
+        item = result.items[0]
+        assert item.outcome == "failed"
+        assert item.source_state == "unknown"
+        assert item.retry_safe is False
+        assert "simulated access denied" in item.observation_errors[0]
+
+    def test_post_mutation_move_failure_is_uncertain_and_retains_both_paths(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        from shotsieve import export as export_module
+
+        db_path, photo_dir, ids_by_name = setup_library(tmp_path)
+        destination = tmp_path / "export"
+        destination.mkdir()
+        source = photo_dir / "alpha.jpg"
+        target = destination / "alpha.jpg"
+        original_bytes = source.read_bytes()
+
+        def move_then_fail(source_path: Path, target_path: Path) -> None:
+            target_path.write_bytes(source_path.read_bytes())
+            source_path.unlink()
+            raise OSError(errno.EIO, "simulated post-mutation failure")
+
+        monkeypatch.setattr(export_module, "_move_without_overwrite", move_then_fail)
+
+        with database(db_path) as connection:
+            result = export_files(
+                connection,
+                file_ids=[ids_by_name["alpha.jpg"]],
+                destination=str(destination),
+                mode="move",
+            )
+
+        item = result.items[0]
+        assert item.outcome == "uncertain"
+        assert item.retry_safe is False
+        assert item.source == str(source.resolve())
+        assert item.destination == str(target.resolve())
+        assert item.source_state == "missing"
+        assert item.destination_state == "present"
+        assert target.read_bytes() == original_bytes
+
+    def test_copy_cleanup_failure_is_uncertain_and_retains_destination(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        from shotsieve import export as export_module
+
+        db_path, _photo_dir, ids_by_name = setup_library(tmp_path)
+        destination = tmp_path / "export"
+        destination.mkdir()
+        target = destination / "alpha.jpg"
+        real_copyfileobj = export_module.shutil.copyfileobj
+        real_unlink = Path.unlink
+
+        def copy_then_fail(source_stream, destination_stream, *args, **kwargs):
+            real_copyfileobj(source_stream, destination_stream, *args, **kwargs)
+            raise OSError(errno.EIO, "simulated copy failure")
+
+        def cleanup_then_fail(path: Path, *args, **kwargs):
+            if path == target:
+                raise PermissionError("simulated cleanup denial")
+            return real_unlink(path, *args, **kwargs)
+
+        monkeypatch.setattr(export_module.shutil, "copyfileobj", copy_then_fail)
+        monkeypatch.setattr(Path, "unlink", cleanup_then_fail)
+
+        with database(db_path) as connection:
+            result = export_files(
+                connection,
+                file_ids=[ids_by_name["alpha.jpg"]],
+                destination=str(destination),
+                mode="copy",
+            )
+
+        item = result.items[0]
+        assert item.outcome == "uncertain"
+        assert item.retry_safe is False
+        assert item.destination_state == "present"
+        assert "cleanup failed" in (item.error_text or "")
+        assert target.exists()
 
     def test_export_raises_for_nonexistent_ids(self, tmp_path: Path):
         db_path, _, ids_by_name = setup_library(tmp_path)
@@ -341,6 +482,39 @@ class TestMovePreviewCleanup:
         assert row["path"] == original_db_path
         assert row["preview_path"] == str(preview_path.resolve())
 
+    def test_move_restores_source_when_database_commit_fails(self, tmp_path: Path):
+        db_path, photo_dir, ids_by_name = setup_library(tmp_path)
+        destination = tmp_path / "export"
+        destination.mkdir()
+
+        class FailingCommitConnection:
+            def __init__(self, inner_connection):
+                self._inner = inner_connection
+
+            def commit(self):
+                raise sqlite3.OperationalError("simulated export commit failure")
+
+            def __getattr__(self, name: str):
+                return getattr(self._inner, name)
+
+        source = photo_dir / "alpha.jpg"
+        target = destination / "alpha.jpg"
+
+        with database(db_path) as connection:
+            with pytest.raises(sqlite3.OperationalError, match="simulated export commit failure") as exc_info:
+                export_files(
+                    FailingCommitConnection(connection),
+                    file_ids=[ids_by_name["alpha.jpg"]],
+                    destination=str(destination),
+                    mode="move",
+                )
+
+        item = exc_info.value.file_operation_summary["items"][0]
+        assert item["outcome"] == "failed"
+        assert item["retry_safe"] is True
+        assert source.exists()
+        assert not target.exists()
+
     def test_move_keeps_earlier_rows_consistent_when_later_database_update_fails(self, tmp_path: Path):
         db_path, photo_dir, ids_by_name = setup_library(tmp_path)
         preview_dir = tmp_path / "previews"
@@ -385,7 +559,7 @@ class TestMovePreviewCleanup:
             assert preview_paths[first_name].exists()
             assert preview_paths[second_name].exists()
 
-        with pytest.raises(sqlite3.OperationalError, match="simulated second export update failure"):
+        with pytest.raises(sqlite3.OperationalError, match="simulated second export update failure") as exc_info:
             with database(db_path) as connection:
                 failing_connection = FailingSecondUpdateConnection(connection)
                 export_files(
@@ -415,6 +589,11 @@ class TestMovePreviewCleanup:
         assert rows_by_name[first_name]["preview_path"] is None
         assert rows_by_name[second_name]["path"] == original_paths[second_name]
         assert rows_by_name[second_name]["preview_path"] == str(preview_paths[second_name].resolve())
+
+        partial_summary = exc_info.value.file_operation_summary
+        assert partial_summary["completed_count"] == 1
+        assert partial_summary["failed_count"] == 1
+        assert partial_summary["outcome"] == "partial"
 
     def test_move_raises_if_rollback_restore_also_fails(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         db_path, photo_dir, ids_by_name = setup_library(tmp_path)
@@ -450,4 +629,57 @@ class TestMovePreviewCleanup:
                     mode="move",
                     preview_cache_root=preview_dir,
                 )
+
+    def test_cleanup_warning_is_not_counted_as_a_failed_photo(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+        db_path, _photo_dir, ids_by_name = setup_library(tmp_path)
+        dest = tmp_path / "export"
+        dest.mkdir()
+
+        def fail_cleanup(*_args, **_kwargs):
+            raise OSError("simulated preview cleanup failure")
+
+        monkeypatch.setattr("shotsieve.export.delete_managed_preview_file", fail_cleanup)
+
+        with database(db_path) as connection:
+            result = export_files(
+                connection,
+                file_ids=[ids_by_name["alpha.jpg"]],
+                destination=str(dest),
+                mode="move",
+                preview_cache_root=tmp_path / "previews",
+            )
+
+        assert result.outcome == "success"
+        assert result.moved == 1
+        assert result.failed == []
+        assert result.warnings[0]["stage"] == "preview_cleanup"
+
+    def test_cancellation_retains_completed_and_unprocessed_rows(self, tmp_path: Path):
+        db_path, _photo_dir, ids_by_name = setup_library(tmp_path)
+        dest = tmp_path / "export"
+        dest.mkdir()
+        calls = 0
+
+        def cancel_after_first_file() -> None:
+            nonlocal calls
+            calls += 1
+            if calls > 1:
+                raise InterruptedError("simulated cancellation")
+
+        with database(db_path) as connection:
+            with pytest.raises(InterruptedError) as exc_info:
+                export_files(
+                    connection,
+                    file_ids=[ids_by_name["alpha.jpg"], ids_by_name["beta.jpg"]],
+                    destination=str(dest),
+                    mode="copy",
+                    cancel_check=cancel_after_first_file,
+                )
+
+        summary = exc_info.value.file_operation_summary
+        assert summary["outcome"] == "cancelled"
+        assert summary["completed_count"] == 1
+        assert summary["unprocessed_count"] == 1
+        assert summary["safe_retry_ids"] == [ids_by_name["beta.jpg"]]
+        assert (dest / "alpha.jpg").exists()
 

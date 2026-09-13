@@ -57,6 +57,49 @@ def _create_test_image(path: Path, *, color: tuple[int, int, int]) -> None:
     image.save(path, format="JPEG")
 
 
+def _frontend_learned_options(*, resource_profile: str | None = None) -> dict[str, object]:
+    from shotsieve.learned_iqa import model_catalog_payload
+
+    return {
+        "pyiqa": "installed",
+        "default_model": "topiq_nr",
+        "device_policy": "auto (platform-aware accelerator, then cpu)",
+        "default_device": "cpu",
+        "default_runtime": "cpu",
+        "runtime_fallback_reason": None,
+        "runtime_targets": "auto,cpu,cuda,xpu,directml,mps,nvidia,amd,intel,apple",
+        "runtime_status": "cuda:unavailable,xpu:unavailable,directml:missing,mps:unsupported,cpu:available",
+        "auto_runtime_priority": "cuda,xpu,directml,cpu",
+        "vendor_aliases": "nvidia->cuda,amd->directml(windows),intel->xpu/directml,apple->mps",
+        "modern_model_catalog": "topiq_nr,clipiqa",
+        "modern_models_available": "topiq_nr,clipiqa",
+        "model_catalog": model_catalog_payload(available_models=("topiq_nr", "clipiqa")),
+        "hardware": {"cpu_count": 4, "ram_mb": 8192, "vram_mb": None},
+        "recommended_batch_sizes": {"topiq_nr": 4, "clipiqa": 4},
+        "resource_profile": resource_profile or "normal",
+    }
+
+
+def _install_frontend_learned_options(server) -> None:
+    from shotsieve import web as web_module
+
+    original_available = web_module.available_learned_backends
+
+    def fake_available(*, resource_profile: str | None = None) -> dict[str, object]:
+        return _frontend_learned_options(resource_profile=resource_profile)
+
+    web_module.available_learned_backends = fake_available
+    original_shutdown = server.shutdown
+
+    def shutdown_with_restore(*args, **kwargs):
+        try:
+            return original_shutdown(*args, **kwargs)
+        finally:
+            web_module.available_learned_backends = original_available
+
+    server.shutdown = shutdown_with_restore
+
+
 def _build_frontend_server(tmp_path: Path, *, filenames: list[str], issue_filename: str | None = None):
     from shotsieve.db import database, initialize_database
     from shotsieve.learned_iqa import LearnedScoreResult
@@ -110,6 +153,7 @@ def _build_frontend_server(tmp_path: Path, *, filenames: list[str], issue_filena
             )
 
     server = build_review_server(db_path, host="127.0.0.1", port=0)
+    _install_frontend_learned_options(server)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     return server, thread
@@ -266,6 +310,7 @@ def scoped_chromium_page(tmp_path: Path):
         )
 
     server = build_review_server(db_path, host="127.0.0.1", port=0)
+    _install_frontend_learned_options(server)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:

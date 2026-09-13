@@ -113,3 +113,20 @@ def test_review_save_refreshes_rejected_actions_pagination(frontend_server: str)
     assert "await refreshOverview();" in save_block
     assert "renderPagination();" in save_block
     assert save_block.index("await refreshOverview();") < save_block.index("renderPagination();")
+
+
+def test_operation_results_and_decision_csv_controls_are_present(frontend_server: str) -> None:
+    index_body = urlopen(f"{frontend_server}/").read().decode("utf-8")
+    export_body = urlopen(f"{frontend_server}/app-workflow-export.js").read().decode("utf-8")
+    library_body = urlopen(f"{frontend_server}/app-workflow-library.js").read().decode("utf-8")
+    polling_body = urlopen(f"{frontend_server}/app-workflow-polling.js").read().decode("utf-8")
+
+    assert 'id="operation-result-panel"' in index_body
+    assert 'id="operation-result-download"' in index_body
+    assert 'id="download-decisions-csv"' in index_body
+    assert 'startPath: "/api/files/delete/start"' in export_body
+    assert 'result.safe_retry_ids' in export_body
+    assert 'textContent' in export_body
+    assert 'retainFailedResult: true' in library_body
+    assert 'No progress for 30 seconds' in library_body
+    assert 'retainFailedResult = false' in polling_body

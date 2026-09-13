@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from contextlib import AbstractContextManager, ExitStack, contextmanager, redirect_stderr, redirect_stdout
 from dataclasses import dataclass
-import functools
 import gc
 import io
 import logging
@@ -12,7 +11,16 @@ from pathlib import Path
 from typing import Callable, Protocol, Sequence, cast
 import warnings
 
-from .learned_iqa_catalog import DEFAULT_BATCH_SIZE, DEFAULT_INPUT_SIZE, DEFAULT_INPUT_SIZES, MAX_BATCH_SIZES, is_model_runtime_compatible
+from .learned_iqa_catalog import (
+    DEFAULT_BATCH_SIZE,
+    DEFAULT_INPUT_SIZE,
+    DEFAULT_INPUT_SIZES,
+    MAX_BATCH_SIZES,
+    is_model_runtime_compatible,
+    is_supported_model_name,
+    validate_model_name,
+)
+from .learned_iqa_runtime import LearnedRuntimeUnavailableError
 
 
 log = logging.getLogger(__name__)
@@ -53,39 +61,23 @@ class _GcModuleLike(Protocol):
         ...
 
 
-_torch_load_patch_lock = threading.Lock()
 _stdio_capture_lock = threading.Lock()
 
 
-@contextmanager
-def _bypass_torch_load_cve_check():
-    try:
-        import torch as _torch
-    except ImportError:
-        yield
-        return
-
-    if not hasattr(_torch, "load"):
-        yield
-        return
-
-    with _torch_load_patch_lock:
-        original_load = _torch.load
-
-        @functools.wraps(original_load)
-        def patched_load(*args, **kwargs):
-            kwargs.setdefault("weights_only", False)
-            return original_load(*args, **kwargs)
-
-        _torch.load = patched_load
+def _validate_product_model(model_name: str, *, normalize_model_name_fn) -> str:
+    canonical = normalize_model_name_fn(model_name)
+    if not is_supported_model_name(canonical):
         try:
-            yield
-        finally:
-            _torch.load = original_load
+            validate_model_name(canonical)
+        except ValueError as exc:
+            raise LearnedBackendUnavailableError(str(exc)) from exc
+        raise LearnedBackendUnavailableError(f"Learned IQA model '{canonical}' is not supported for new runs.")
+    return canonical
 
 
 def build_learned_backend(model_name: str, *, device: str | None = None, backend_cls, normalize_model_name_fn):
-    return backend_cls(normalize_model_name_fn(model_name), device=device)
+    canonical_model_name = _validate_product_model(model_name, normalize_model_name_fn=normalize_model_name_fn)
+    return backend_cls(canonical_model_name, device=device)
 
 
 def release_learned_backend(backend: object) -> None:
@@ -101,24 +93,23 @@ def create_metric_safely(pyiqa_module, model_name: str, *, device, configure_run
     configure_runtime_noise_controls_fn()
     with warnings.catch_warnings():
         install_runtime_warning_filters_fn()
-        with _bypass_torch_load_cve_check():
-            capture_stdio = threading.active_count() == 1
-            if not capture_stdio:
-                return pyiqa_module.create_metric(model_name, device=device)
+        capture_stdio = threading.active_count() == 1
+        if not capture_stdio:
+            return pyiqa_module.create_metric(model_name, device=device)
 
-            with _stdio_capture_lock:
-                with io.StringIO() as stdout_buffer, io.StringIO() as stderr_buffer:
-                    try:
-                        with redirect_stdout(stdout_buffer), redirect_stderr(stderr_buffer):
-                            return pyiqa_module.create_metric(model_name, device=device)
-                    except Exception:
-                        captured_stdout = stdout_buffer.getvalue().strip()
-                        captured_stderr = stderr_buffer.getvalue().strip()
-                        if captured_stdout:
-                            print(captured_stdout, file=sys.stdout)
-                        if captured_stderr:
-                            print(captured_stderr, file=sys.stderr)
-                        raise
+        with _stdio_capture_lock:
+            with io.StringIO() as stdout_buffer, io.StringIO() as stderr_buffer:
+                try:
+                    with redirect_stdout(stdout_buffer), redirect_stderr(stderr_buffer):
+                        return pyiqa_module.create_metric(model_name, device=device)
+                except Exception:
+                    captured_stdout = stdout_buffer.getvalue().strip()
+                    captured_stderr = stderr_buffer.getvalue().strip()
+                    if captured_stdout:
+                        print(captured_stdout, file=sys.stdout)
+                    if captured_stderr:
+                        print(captured_stderr, file=sys.stderr)
+                    raise
 
 
 def _ensure_model_runtime_compatible(model_name: str, *, runtime: str, torch_version: str | None) -> None:
@@ -132,6 +123,8 @@ def _ensure_model_runtime_compatible(model_name: str, *, runtime: str, torch_ver
 
 
 def resolve_learned_model_version(model_name: str, *, device: str | None = None, import_pyiqa_runtime_fn, normalize_model_name_fn, preferred_model_names_fn, resolve_device_fn) -> str:
+    canonical_model_name = _validate_product_model(model_name, normalize_model_name_fn=normalize_model_name_fn)
+
     try:
         pyiqa, torch = import_pyiqa_runtime_fn()
     except ImportError as exc:
@@ -143,9 +136,11 @@ def resolve_learned_model_version(model_name: str, *, device: str | None = None,
             f"Learned IQA runtime failed to initialize: {exc}"
         ) from exc
 
-    canonical_model_name = normalize_model_name_fn(model_name)
     try:
-        available_models = set(pyiqa.list_models(metric_mode="NR"))
+        available_models = {
+            normalize_model_name_fn(name)
+            for name in pyiqa.list_models(metric_mode="NR")
+        }
     except Exception as exc:
         raise LearnedBackendUnavailableError(
             f"Learned IQA runtime is installed but unavailable: {exc}"
@@ -159,7 +154,10 @@ def resolve_learned_model_version(model_name: str, *, device: str | None = None,
             f"Available NR models include: {catalog_text}"
         )
 
-    resolved_device = resolve_device_fn(device, torch_module=torch)
+    try:
+        resolved_device = resolve_device_fn(device, torch_module=torch)
+    except LearnedRuntimeUnavailableError as exc:
+        raise LearnedBackendUnavailableError(str(exc)) from exc
     _ensure_model_runtime_compatible(
         canonical_model_name,
         runtime=resolved_device.runtime,
@@ -181,6 +179,7 @@ def _restore_cudnn_benchmark(backend) -> None:
 
 def initialize_backend(backend, model_name: str, *, device: str | None = None, import_pyiqa_runtime_fn, normalize_model_name_fn, preferred_model_names_fn, resolve_device_fn, create_metric_safely_fn, default_input_sizes=None, default_input_size: int = DEFAULT_INPUT_SIZE) -> None:
     input_sizes = default_input_sizes or DEFAULT_INPUT_SIZES
+    canonical_model_name = _validate_product_model(model_name, normalize_model_name_fn=normalize_model_name_fn)
 
     try:
         pyiqa, torch = import_pyiqa_runtime_fn()
@@ -193,9 +192,11 @@ def initialize_backend(backend, model_name: str, *, device: str | None = None, i
             f"Learned IQA runtime failed to initialize: {exc}"
         ) from exc
 
-    canonical_model_name = normalize_model_name_fn(model_name)
     try:
-        available_models = set(pyiqa.list_models(metric_mode="NR"))
+        available_models = {
+            normalize_model_name_fn(name)
+            for name in pyiqa.list_models(metric_mode="NR")
+        }
     except Exception as exc:
         raise LearnedBackendUnavailableError(
             f"Learned IQA runtime is installed but unavailable: {exc}"
@@ -211,7 +212,10 @@ def initialize_backend(backend, model_name: str, *, device: str | None = None, i
 
     backend._pyiqa = pyiqa
     backend._torch = torch
-    resolved_device = resolve_device_fn(device, torch_module=torch)
+    try:
+        resolved_device = resolve_device_fn(device, torch_module=torch)
+    except LearnedRuntimeUnavailableError as exc:
+        raise LearnedBackendUnavailableError(str(exc)) from exc
     _ensure_model_runtime_compatible(
         canonical_model_name,
         runtime=resolved_device.runtime,
@@ -451,7 +455,7 @@ def score_tensor_batch(backend, batch_tensor, *, flatten_tensor_fn, confidence_v
     ]
 
 
-def available_learned_backends(*, resource_profile: str | None = None, import_pyiqa_runtime_fn, unavailable_backend_payload_fn, resolve_device_fn, runtime_statuses_fn, runtime_compatible_model_names_fn, preferred_model_names_fn, detect_hardware_capabilities_fn, valid_profile_fn, recommended_batch_size_fn, supported_model_names: Sequence[str], default_model_name: str, default_device_policy: str, supported_runtime_targets_fn, auto_runtime_order_fn, runtime_status_order: Sequence[str]) -> dict[str, object]:
+def available_learned_backends(*, resource_profile: str | None = None, import_pyiqa_runtime_fn, unavailable_backend_payload_fn, resolve_device_fn, runtime_statuses_fn, runtime_compatible_model_names_fn, preferred_model_names_fn, detect_hardware_capabilities_fn, valid_profile_fn, recommended_batch_size_fn, supported_model_names: Sequence[str], default_model_name: str, default_device_policy: str, supported_runtime_targets_fn, auto_runtime_order_fn, runtime_status_order: Sequence[str], model_catalog_payload_fn=None) -> dict[str, object]:
     catalog = ",".join(supported_model_names)
     runtime_targets = ",".join(supported_runtime_targets_fn())
     auto_priority = ",".join(auto_runtime_order_fn())
@@ -480,6 +484,12 @@ def available_learned_backends(*, resource_profile: str | None = None, import_py
                 runtime=resolved.runtime,
             )
         )
+        if not compatible_models:
+            return unavailable_backend_payload_fn(
+                status="unavailable",
+                error="The installed pyiqa runtime exposes no supported product models.",
+                resource_profile=resource_profile,
+            )
         preferred = preferred_model_names_fn(compatible_models)
         status_text = ",".join(f"{runtime}:{statuses[runtime]}" for runtime in runtime_status_order)
         hardware = detect_hardware_capabilities_fn()
@@ -496,12 +506,18 @@ def available_learned_backends(*, resource_profile: str | None = None, import_py
             "device_policy": default_device_policy,
             "default_device": resolved.display_device,
             "default_runtime": resolved.runtime,
+            "runtime_fallback_reason": getattr(resolved, "fallback_reason", None),
             "runtime_targets": runtime_targets,
             "runtime_status": status_text,
             "auto_runtime_priority": auto_priority,
             "vendor_aliases": vendor_aliases,
             "modern_model_catalog": catalog,
             "modern_models_available": ",".join(preferred),
+            "model_catalog": (
+                model_catalog_payload_fn(available_models=preferred)
+                if model_catalog_payload_fn is not None
+                else None
+            ),
             "hardware": hardware,
             "recommended_batch_sizes": batch_recommendations,
             "resource_profile": profile,
@@ -514,7 +530,6 @@ __all__ = [
     "LearnedBackendUnavailableError",
     "LearnedIqaBackend",
     "LearnedScoreResult",
-    "_bypass_torch_load_cve_check",
     "available_learned_backends",
     "build_learned_backend",
     "close_backend",

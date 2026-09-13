@@ -1,32 +1,10 @@
 (() => {
-  const DEFAULT_MODEL_CATALOG = ["topiq_nr", "clipiqa", "qalign"];
-  const HIDDEN_MODEL_NAMES = ["arniqa", "arniqa-spaq"];
   const UI_STATE_KEY = "shotsieve-ui-state-v4";
 
   const REVIEW_DECISIONS = {
     keep: { delete_marked: false, export_marked: true, decision_state: "export" },
     reject: { delete_marked: true, export_marked: false, decision_state: "delete" },
     reset: { delete_marked: false, export_marked: false, decision_state: "pending" },
-  };
-
-  const MODEL_DESCRIPTIONS = {
-    topiq_nr: "Best all-rounder and recommended starting point - fast, stable, and strong quality ranking for most libraries.",
-    "topiq_nr-flive": "TOPIQ trained for in-the-wild photo quality; useful for mixed consumer libraries.",
-    "topiq_nr-spaq": "TOPIQ variant tuned on smartphone photo aesthetics and perceptual quality.",
-    tres: "Transformer-based perceptual ranking; worth testing on varied or stylized image sets.",
-    clipiqa: "Fast CLIP-based model that can catch outliers TOPIQ misses.",
-    qualiclip: "Newer CLIP-based quality model; useful when human taste matters more than strict distortions.",
-    qalign: "Outlier-sensitive vision-language scorer that can be helpful when you want a second opinion on unusual or polarizing images.",
-  };
-
-  const MODEL_DISPLAY_NAMES = {
-    topiq_nr: "TOPIQ (Recommended)",
-    "topiq_nr-flive": "TOPIQ FLIVE",
-    "topiq_nr-spaq": "TOPIQ SPAQ",
-    tres: "TReS",
-    clipiqa: "CLIPIQA",
-    qualiclip: "QualiCLIP",
-    qalign: "Q-Align",
   };
 
   function createState() {
@@ -59,13 +37,21 @@
       busyPhaseLabel: "",
       busyStartTime: null,
       abortController: null,
+      controlAbortController: null,
       cancelPending: false,
       compareJobId: null,
       scoreJobId: null,
       scanJobId: null,
+      modelPreparationJobId: null,
       operationJobId: null,
       operationStatusPath: null,
       operationCancelPath: null,
+      operationStatusUnknown: false,
+      latestOperationResult: null,
+      latestOperationRequest: null,
+      operationResultHandler: null,
+      operationProgressSignature: null,
+      operationProgressChangedAt: null,
       pendingExport: null,
       compareRowSort: "topiq_nr:desc",
       compareRowSortInitialized: false,
@@ -179,10 +165,6 @@
   }
 
   window.ShotSieveState = {
-    DEFAULT_MODEL_CATALOG,
-    HIDDEN_MODEL_NAMES,
-    MODEL_DESCRIPTIONS,
-    MODEL_DISPLAY_NAMES,
     REVIEW_DECISIONS,
     UI_STATE_KEY,
     createState,

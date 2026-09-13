@@ -21,7 +21,7 @@
     const { loadQueue, refreshWorkspace, selectFile, syncReviewRoot } = review;
     const { currentLibraryRoot, saveUiState, setTab } = ui;
 
-    const { pollJob, pollScanJob, pollScoreJob, createResultFetcher, createStatusFetcher } = pollingModule;
+    const { pollJob, pollScanJob, pollScoreJob, pollModelPreparationJob, createResultFetcher, createStatusFetcher } = pollingModule;
 
     const fetchOperationJobStatus = createStatusFetcher("/api/operations/status");
     const fetchOperationJobResult = createResultFetcher("/api/operations/result");
@@ -43,7 +43,13 @@
       const total = Number(progress?.files_total || 0);
       const countText = total > 0 ? ` (${processed}/${total})` : "";
       const elapsedText = elapsedSeconds >= 1 ? ` · ${formatDuration(elapsedSeconds)}` : "";
-      return `${label}${countText}${elapsedText}`;
+      const stagnantForSeconds = state.operationProgressChangedAt
+        ? Math.floor((Date.now() - state.operationProgressChangedAt) / 1000)
+        : 0;
+      const warning = stagnantForSeconds >= 30
+        ? "\nNo progress for 30 seconds. Check status or cancel if the operation is stuck."
+        : "";
+      return `${label}${countText}${elapsedText}${warning}`;
     }
 
     async function pollOperationJob(jobId, { fallbackLabel, failureMessage }) {
@@ -54,7 +60,13 @@
         progressMessage: (progress, elapsedSeconds) => operationProgressMessage(progress, elapsedSeconds, fallbackLabel),
         progressTotal: null,
         failureMessage,
+        retainFailedResult: true,
         onProgress: ({ progress }) => {
+          const progressSignature = JSON.stringify(progress || {});
+          if (progressSignature !== state.operationProgressSignature) {
+            state.operationProgressSignature = progressSignature;
+            state.operationProgressChangedAt = Date.now();
+          }
           const total = Number(progress?.files_total || 0);
           const processed = Number(progress?.files_processed || 0);
           const percent = total > 0
@@ -83,16 +95,54 @@
       state.operationJobId = jobId;
       state.operationStatusPath = "/api/operations/status";
       state.operationCancelPath = "/api/operations/cancel";
+      state.operationStatusUnknown = false;
+      state.operationProgressSignature = null;
+      state.operationProgressChangedAt = Date.now();
+      state.latestOperationRequest = { startPath, payload: { ...payload }, fallbackLabel, failureMessage };
 
       try {
         return await pollOperationJob(jobId, { fallbackLabel, failureMessage });
+      } catch (error) {
+        if (error?.name !== "AbortError") {
+          state.operationStatusUnknown = true;
+          const unknownResult = {
+            action: String(payload?.mode || "operation"),
+            outcome: "unknown",
+            job_status: "unknown",
+            fatal_error: String(error?.message || error),
+          };
+          state.latestOperationResult = unknownResult;
+          if (typeof state.operationResultHandler === "function") {
+            state.operationResultHandler(unknownResult, state.latestOperationRequest);
+          }
+        }
+        throw error;
       } finally {
-        if (!state.abortController?.signal?.aborted) {
+        if (!state.abortController?.signal?.aborted && !state.operationStatusUnknown) {
           state.operationJobId = null;
           state.operationStatusPath = null;
           state.operationCancelPath = null;
         }
       }
+    }
+
+    async function checkTrackedOperation() {
+      const jobId = state.operationJobId;
+      if (!jobId) {
+        throw new Error("No operation status is available to check.");
+      }
+      const status = await fetchOperationJobStatus(jobId);
+      if (status?.status === "running") {
+        showToast("The operation is still running. Check again shortly.");
+        return null;
+      }
+      const result = await fetchOperationJobResult(jobId);
+      state.latestOperationResult = result;
+      state.operationStatusUnknown = false;
+      state.operationJobId = null;
+      state.operationStatusPath = null;
+      state.operationCancelPath = null;
+      return result;
     }
 
     function resetReviewFiltersForAnalyze(root) {
@@ -202,7 +252,11 @@
     async function runScore(rootOverride = null, { pipeline = null } = {}) {
       const root = rootOverride || currentLibraryRoot() || null;
 
-      const selectedModel = document.getElementById("model-select").value || state.options?.default_scoring_mode || state.options?.learned_models?.[0] || "topiq_nr";
+      const selectedModel = document.getElementById("model-select").value || state.options?.default_scoring_mode || state.options?.learned_models?.[0] || "";
+      if (!selectedModel) {
+        showToast("No learned IQA model is currently available. Check the runtime setup in Settings.", "error");
+        return;
+      }
       const learnedBackend = selectedModel;
       const runtimeTarget = document.getElementById("device-select").value || "auto";
       const requestedBatchSize = scoreBatchSize(learnedBackend, runtimeTarget, state.options?.learned?.recommended_batch_sizes);
@@ -276,6 +330,41 @@
       syncReviewRoot(root);
     }
 
+    async function prepareSelectedModel() {
+      const model = document.getElementById("model-select")?.value || state.options?.default_scoring_mode || "";
+      if (!model) {
+        throw new Error("No supported learned-IQA model is available to prepare.");
+      }
+      setBusyPhaseProgress({ percent: null, phaseIndex: 1, phaseCount: 3, phaseLabel: "Preparing model" });
+      setBusyProgress(0);
+      setBusyMessage(`Preparing ${model} on CPU. First use may download model assets...`);
+      const startPayload = await postJson("/api/models/prepare/start", { model }, { signal: state.abortController?.signal });
+      const jobId = String(startPayload?.job_id || "");
+      if (!jobId) {
+        throw new Error("Model preparation failed to start.");
+      }
+      state.modelPreparationJobId = jobId;
+      try {
+        const result = await pollModelPreparationJob(jobId);
+        if (result?.job_status === "failed" || ["failed", "runtime_unavailable"].includes(String(result?.state || ""))) {
+          const detail = result?.error || result?.error_report?.cause || "Model preparation failed.";
+          showToast(`Model preparation failed: ${detail}`, "error");
+          addLogEntry("Model preparation failed", detail);
+          return result;
+        }
+        setBusyProgress(100);
+        setBusyPhaseProgress({ percent: 100, phaseIndex: 3, phaseCount: 3, phaseLabel: "Model prepared" });
+        showToast(`${model} is prepared and passed a CPU validation inference.`);
+        addLogEntry("Model prepared", `${model} is ready for use.`);
+        return result;
+      } finally {
+        if (!state.abortController?.signal?.aborted) {
+          state.modelPreparationJobId = null;
+        }
+        await refreshWorkspace();
+      }
+    }
+
     async function analyzeLibrary() {
       const root = currentLibraryRoot();
       if (!root) {
@@ -309,10 +398,22 @@
 
     function renderLibraryRoots() {
       const listContainer = document.getElementById("library-roots-list");
-      if (!listContainer) return;
-
       const rootStr = currentLibraryRoot();
       const roots = rootStr.split("|").map(r => r.trim()).filter(Boolean);
+
+      const decisionRoot = document.getElementById("decision-csv-root");
+      if (decisionRoot) {
+        const previousRoot = decisionRoot.value;
+        decisionRoot.replaceChildren(new Option("Choose a library root", ""));
+        roots.forEach((root) => decisionRoot.add(new Option(root, root)));
+        if (roots.includes(previousRoot)) {
+          decisionRoot.value = previousRoot;
+        } else if (roots.length === 1) {
+          decisionRoot.value = roots[0];
+        }
+      }
+
+      if (!listContainer) return;
 
       if (roots.length === 0) {
         listContainer.innerHTML = `<p class="muted">No folders selected yet. Click "Add Folder" to add directories to your library.</p>`;
@@ -341,6 +442,42 @@
       });
     }
 
+    async function downloadDecisionCsv() {
+      const root = document.getElementById("decision-csv-root")?.value || "";
+      const decision = document.getElementById("decision-csv-decision")?.value || "both";
+      if (!root) {
+        throw new Error("Choose a library root before downloading decisions.");
+      }
+      const response = await fetch(`/api/review/decisions.csv?root=${encodeURIComponent(root)}&decision=${encodeURIComponent(decision)}`);
+      if (!response.ok) {
+        let message = `Decision CSV request failed (${response.status}).`;
+        try {
+          const payload = await response.json();
+          message = payload?.error || message;
+        } catch {
+          // Keep the status-based message for non-JSON server errors.
+        }
+        throw new Error(message);
+      }
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = "shotsieve-decisions.csv";
+      link.click();
+      URL.revokeObjectURL(url);
+      showToast("Decision CSV downloaded.");
+    }
+
+    function installDecisionCsvEvents() {
+      const button = document.getElementById("download-decisions-csv");
+      if (!button || button.dataset.eventsInstalled === "true") return;
+      button.dataset.eventsInstalled = "true";
+      button.addEventListener("click", () => {
+        downloadDecisionCsv().catch(handleError);
+      });
+    }
+
     async function clearCache(scope, message) {
       setBusyPhaseProgress({ percent: 0, phaseIndex: 1, phaseCount: 1, phaseLabel: "Clearing cache" });
       const result = await runTrackedOperation({
@@ -349,8 +486,11 @@
         fallbackLabel: "Clearing cache",
         failureMessage: "Cache action failed.",
       });
+      if (workflowExport?.presentOperationResult && (result?.outcome || Array.isArray(result?.items))) {
+        workflowExport.presentOperationResult(result, state.latestOperationRequest);
+      }
       addLogEntry("Cache action", `${message}: files ${result.files}, scores ${result.scores}, review ${result.review}.`);
-      showToast(message);
+      showToast(message, workflowExport?.operationTone ? workflowExport.operationTone(result) : "success");
       if (scope === "all") {
         if (workflowExport?.clearActiveSelection) {
           workflowExport.clearActiveSelection();
@@ -358,6 +498,84 @@
         state.activeId = null;
         state.detail = null;
       }
+      await refreshWorkspace();
+    }
+
+    function missingCleanupConfirmation(previews) {
+      const lines = [
+        "Review the cached entries that will be removed:",
+        "",
+        "Original files on disk will not be touched.",
+        "",
+      ];
+      for (const preview of previews) {
+        lines.push(`Root: ${preview.root}`);
+        lines.push(`Cached entries: ${Number(preview.candidate_count || 0).toLocaleString()}`);
+        lines.push(`Review decisions removed: ${Number(preview.affected_review_count || 0).toLocaleString()}`);
+        for (const candidate of (preview.candidates || [])) {
+          const decision = Number(candidate.review_count || 0) > 0
+            ? ` [review: ${candidate.decision_state || "recorded"}]`
+            : "";
+          lines.push(`  - ${candidate.path}${decision}`);
+        }
+        lines.push("");
+      }
+      lines.push("Continue with this cleanup?");
+      return lines.join("\n");
+    }
+
+    async function reviewMissingEntries() {
+      const roots = (currentLibraryRoot() || "").split("|").map((root) => root.trim()).filter(Boolean);
+      if (!roots.length) {
+        throw new Error("Choose a folder before reviewing missing entries.");
+      }
+
+      setBusyMessage("Checking selected library for missing entries...");
+      const previews = await Promise.all(roots.map((root) => fetchJson(
+        `/api/cache/missing/preview?root=${encodeURIComponent(root)}`,
+        { signal: state.abortController?.signal },
+      )));
+      const unknownPreview = previews.find((preview) => preview?.status === "unknown");
+      if (unknownPreview) {
+        throw new Error(unknownPreview.error || "The selected library could not be verified.");
+      }
+
+      const readyPreviews = previews.filter((preview) => preview?.status === "ready" && Number(preview.candidate_count || 0) > 0);
+      if (!readyPreviews.length) {
+        showToast("No missing cached entries found.");
+        return;
+      }
+      if (!window.confirm(missingCleanupConfirmation(readyPreviews))) {
+        return;
+      }
+
+      setBusyMessage("Applying confirmed missing-entry cleanup...");
+      let removedCount = 0;
+      let reviewRemovedCount = 0;
+      for (const preview of readyPreviews) {
+        const result = await postJson("/api/cache/missing/apply", {
+          root: preview.root,
+          token: preview.token,
+          candidate_ids: (preview.candidates || []).map((candidate) => Number(candidate.id)),
+        }, { signal: state.abortController?.signal });
+        if (result?.status === "refresh_required") {
+          throw new Error("The catalog changed after the preview. Review missing entries again before applying cleanup.");
+        }
+        if (result?.status === "unknown") {
+          throw new Error(result.error || "The selected library could not be verified during cleanup.");
+        }
+        if (result?.status !== "applied") {
+          throw new Error("Missing-entry cleanup did not complete.");
+        }
+        removedCount += Number(result.removed_count || 0);
+        reviewRemovedCount += Number(result.review_removed_count || 0);
+      }
+
+      addLogEntry(
+        "Missing-entry cleanup",
+        `Removed ${removedCount} cached entr${removedCount === 1 ? "y" : "ies"} and ${reviewRemovedCount} review decision(s).`,
+      );
+      showToast(`Removed ${removedCount} missing cached entr${removedCount === 1 ? "y" : "ies"}.`);
       await refreshWorkspace();
     }
 
@@ -376,11 +594,11 @@
         fallbackLabel: "Deleting files",
         failureMessage: "Delete failed.",
       });
-      addLogEntry("Disk delete", `Deleted ${result.deleted_count}, failed ${result.failed_count}.`);
-      if (workflowExport?.clearActiveSelection) {
-        workflowExport.clearActiveSelection();
+      if (workflowExport?.presentOperationResult) {
+        workflowExport.presentOperationResult(result, state.latestOperationRequest);
       }
-      showToast(`Deleted ${result.deleted_count} files from disk.`);
+      addLogEntry("Disk delete", `Deleted ${result.deleted_count}, failed ${result.failed_count}.`);
+      showToast(`Deleted ${result.deleted_count} files from disk.`, workflowExport?.operationTone ? workflowExport.operationTone(result) : "success");
       await refreshWorkspace();
     }
 
@@ -512,6 +730,7 @@
       const currentSeq = ++activeBrowseSeq;
       const list = document.getElementById("browser-list");
       const pathInput = document.getElementById("browser-path");
+      state.browserPath = null;
       if (pathInput) pathInput.value = path;
 
       if (list && !list.children.length) {
@@ -560,12 +779,14 @@
     }
 
     function chooseBrowserPath() {
-      if (!state.browserTarget || !state.browserPath) return;
+      if (!state.browserTarget) return;
+      const selectedPath = state.browserPath || document.getElementById("browser-path")?.value?.trim();
+      if (!selectedPath) return;
       const targetInput = document.getElementById(state.browserTarget);
       if (!targetInput) {
         return;
       }
-      targetInput.value = state.browserPath;
+      targetInput.value = selectedPath;
       targetInput.dispatchEvent(new Event("input", { bubbles: true }));
       targetInput.dispatchEvent(new Event("change", { bubbles: true }));
       document.getElementById("folder-browser").close();
@@ -583,12 +804,17 @@
 
     return {
       runTrackedOperation,
+      checkTrackedOperation,
       resetReviewFiltersForAnalyze,
       runScan,
       runScore,
+      prepareSelectedModel,
       analyzeLibrary,
       renderLibraryRoots,
+      downloadDecisionCsv,
+      installDecisionCsvEvents,
       clearCache,
+      reviewMissingEntries,
       deleteSelectedFiles,
       navigateSelection,
       openOriginalFile,

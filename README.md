@@ -69,6 +69,7 @@ Useful flags:
 
 ```bash
 shotsieve-desktop --data-dir ./shot-data
+shotsieve-desktop --model-cache-dir ./model-cache
 shotsieve-desktop --host 127.0.0.1 --port 9001 --no-browser
 ```
 
@@ -97,13 +98,30 @@ If you are using a downloaded runtime pack, replace step 1 with the matching bun
 
 ShotSieve is meant to speed up your judgment, not replace it. The app helps surface likely throwaways; you still make the final call.
 
+### Scan safety and cached catalog entries
+
+An ordinary scan updates files it can actually discover. It preserves catalog rows, scores, and keep/reject decisions that are outside the selected scan coverage or temporarily unavailable, including when a scan is nonrecursive or uses changed extension/ignore filters. If the root or a subdirectory cannot be enumerated, the scan reports the path and operating-system error instead of treating the location as an empty folder.
+
+Removing verified missing entries is a separate reviewed-cleanup workflow. In Settings, choose **Review Missing Entries** to preview every candidate and any affected review decisions for the selected root(s), then explicitly confirm the removal. ShotSieve checks that each root can be fully enumerated; unavailable or unmounted roots are reported as unknown and are never treated as missing files. The apply step also rejects a stale preview if sources, candidates, or review state changed.
+
+Failed or cancelled scans remain visible in the recent scan diagnostics with the affected root, timestamps, error, and processed counts. Multi-root scans commit each successful root independently; if a later root fails, the scan job is failed and reports successful, failed, and not-processed roots instead of presenting the job as fully successful. Cancellation keeps any work completed before the cancellation request.
+
+### File-operation results
+
+Copy, move, and delete operations keep the existing aggregate counts and now also return a per-file result through the operation status/result endpoints. Each result identifies the source, destination when known, action stage, OS error details, guarded source/destination state (`present`, `missing`, or `unknown`), observation errors, and whether retrying that file is safe. Preview cleanup warnings are reported separately from transfer failures. A cancelled or fatally stopped operation retains completed rows and every later frozen selection as unprocessed; if a mutation may have happened, both paths and the original plus observation errors are retained and that file is not automatically retried. Catalog failures are reconciled before a move is compensated. An async operation job can therefore be terminally failed while its result endpoint still returns the retained file summary.
+
+The Library workspace retains the latest operation result until you dismiss or replace it. It shows action-specific completed, partial, failed, and unprocessed counts, a bounded list of paths/stages/details, and buttons to copy or download the complete JSON result. Successful selections are removed after a terminal result while failed and unprocessed files remain selected; only files marked safe by the operation contract can be retried. Rejected-file deletion uses the same tracked operation flow as selected deletion, copying, and moving.
+
+Settings also provides **Download decisions CSV** for a selected library root. It exports every approved, rejected, or both marked decisions in that root—not just the current Review page—with `file_id`, `decision`, `source_path`, `library_root`, and `decision_updated_time` columns. The export is read-only, spreadsheet-friendly UTF-8, and formula-safe for text cells.
+
 ## Models and runtimes
 
-The main in-app model choices are currently centered on:
+The supported in-app model catalog is intentionally small:
 
 - `topiq_nr` is the default model
 - `clipiqa` is a fast secondary option for quick comparisons
-- `qalign` is available only on supported accelerator-backed paths (`cuda`, `mps`)
+
+Q-Align, TReS, QualiCLIP, ARNIQA, and other PyIQA names are not supported for new scoring or comparison runs. Older stored scores remain readable and are shown using their saved raw model name; disabling a model does not delete those rows.
 
 Runtime names you may see in settings or developer docs:
 
@@ -113,7 +131,13 @@ Runtime names you may see in settings or developer docs:
 - `directml`: Windows GPU acceleration through DirectML
 - `mps`: Apple Silicon GPU acceleration
 
-Runtime compatibility note: `qalign` is **not** available on `cpu` or `directml`; on those paths, `topiq_nr` and `clipiqa` are the practical in-app choices.
+The Settings model list is populated from runtime discovery. If discovery or initialization is unavailable, the list stays empty instead of claiming that a model is ready. Auto mode may fall back to CPU and reports the failed accelerator reason; an explicitly requested unavailable runtime fails with recovery guidance.
+
+The Windows DirectML target is constrained to Python 3.11–3.12 with `torch==2.4.1`, `torchvision==0.19.1`, and `torch-directml==0.2.5.dev240914`. DirectML is not installed through the generic latest-Torch path.
+
+In Settings, **Prepare selected model** downloads any missing assets through the normal learned-IQA backend and validates one generated image on CPU. Preparation is for the selected model only; it does not make accelerator readiness claims, and scoring still validates the requested runtime when used. The small readiness record under the app data directory retains the last state (`not_checked`, `preparing`, `prepared`, `failed`, or `runtime_unavailable`), cache paths, dependency fingerprint, tested runtime, and sanitized recovery diagnostics. `/api/options` only reads that record and does not download assets or construct a model.
+
+Use `--model-cache-dir` when a portable or shared cache root is needed. The option supplies defaults for Hugging Face and Torch subdirectories while preserving explicitly set `HF_HOME`, `HF_HUB_CACHE`, and `TORCH_HOME`; existing caches are not moved. For offline use, prepare the selected model once, shut down ShotSieve, copy the complete compatible cache tree and app-data readiness record, then validate in a fresh process with the relevant offline environment settings.
 
 ## Review UI
 
@@ -170,7 +194,7 @@ The browser-focused frontend checks are intentionally about **visual QA** and vi
 - [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md): third-party model and library licensing
 - [LICENSE](LICENSE): GNU Affero General Public License v3.0 or later (AGPLv3+)
 
-ShotSieve uses AI models and libraries that carry **non-commercial or stricter research-use restrictions**. No model weights are bundled; they are downloaded on first use from Hugging Face. In particular, Q-Align should be treated as research-use only unless its authors publish clearer licensing terms. See [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md) for the canonical breakdown.
+ShotSieve uses AI models and libraries with their own terms. The learned-IQA extra currently pins `pyiqa==0.1.16`, whose PolyForm Noncommercial license and included notices must be reviewed with the model/checkpoint terms before commercial use. No model weights are bundled; supported assets may be downloaded into the configured upstream caches. Q-Align is retired from new runs and is not part of the supported asset set. See [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md) for the per-component audit boundary.
 
 ## Project docs
 

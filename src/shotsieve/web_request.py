@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any, TypedDict
 
 from shotsieve.config import normalize_raw_preview_mode
+from shotsieve.learned_iqa_catalog import validate_model_name
 
 
 class ScanRequest(TypedDict):
@@ -454,7 +455,11 @@ def parse_compare_request(
     model_names = payload.get("models")
     if not isinstance(model_names, list) or not model_names:
         raise ValueError("models must be a non-empty list")
-    models = [str(model_name).strip() for model_name in model_names if str(model_name).strip()]
+    models = [
+        validate_model_name(str(model_name).strip())
+        for model_name in model_names
+        if str(model_name).strip()
+    ]
     if not models:
         raise ValueError("models must be a non-empty list")
 

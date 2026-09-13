@@ -18,6 +18,12 @@ def test_resolve_cuda_runtime_target_id_only_returns_cuda_targets() -> None:
     assert desktop_module._resolve_cuda_runtime_target_id(None) is None
 
 
+def test_desktop_parser_accepts_optional_model_cache_dir() -> None:
+    args = desktop_module.build_parser().parse_args(["--model-cache-dir", "./models"])
+
+    assert args.model_cache_dir == "./models"
+
+
 def test_default_data_dir_prefers_local_app_data(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     local_app_data = tmp_path / "AppData" / "Local"
     monkeypatch.setenv("LOCALAPPDATA", str(local_app_data))

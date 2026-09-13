@@ -10,42 +10,56 @@ import subprocess
 import sys
 import threading
 import webbrowser
-from string import ascii_uppercase
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from string import ascii_uppercase
 from typing import cast
 
-from shotsieve.config import DEFAULT_RAW_PREVIEW_MODE, DEFAULT_SUPPORTED_EXTENSIONS, RAW_PREVIEW_MODES, build_config
+from shotsieve import web_request as _request_helpers
+from shotsieve import web_security as _security_helpers
+from shotsieve.config import (
+    DEFAULT_RAW_PREVIEW_MODE,
+    DEFAULT_SUPPORTED_EXTENSIONS,
+    RAW_PREVIEW_MODES,
+    build_config,
+)
 from shotsieve.db import database, get_preview_cache_root, initialize_database
 from shotsieve.export import export_files
 from shotsieve.job_registry import JobRegistry
+from shotsieve.model_assets import prepare_model, read_preparation_record
 from shotsieve.learned_iqa import (
     DEFAULT_BATCH_SIZE,
     LearnedBackendUnavailableError,
     available_learned_backends,
     runtime_curated_learned_models,
 )
-from shotsieve.preview import MIN_RAW_THUMBNAIL_LONG_EDGE, preview_capabilities, preview_name_candidates, stable_preview_name
+from shotsieve.preview import (
+    MIN_RAW_THUMBNAIL_LONG_EDGE,
+    preview_capabilities,
+    preview_name_candidates,
+    stable_preview_name,
+)
 from shotsieve.review import (
+    apply_missing_cache_entries,
     clear_cache_scope,
     count_review_files,
+    decision_csv,
     delete_files,
     get_review_file_detail,
+    list_analysis_diagnostics,
     list_review_browser_file_ids,
     list_review_files,
-    list_analysis_diagnostics,
     list_review_state_file_ids,
     media_path_for_file,
-    prune_missing_cache_entries,
-    review_selection_revision,
+    preview_missing_cache_entries,
     review_overview,
+    review_selection_revision,
     update_review_state,
     update_review_state_batch,
 )
 from shotsieve.scanner import scan_root, utc_now
 from shotsieve.scoring import compare_learned_models, count_score_rows, score_files
-from shotsieve import web_request as _request_helpers
 from shotsieve.web_routes import (
     WebRouteContext,
     WebRouteDependencies,
@@ -54,7 +68,6 @@ from shotsieve.web_routes import (
     log_request_message,
     send_json_error,
 )
-from shotsieve import web_security as _security_helpers
 
 _coerce_bool = _request_helpers.coerce_bool
 _first = _request_helpers.first_value
@@ -255,6 +268,7 @@ def build_handler(db_path: Path):
     score_registry = JobRegistry(max_jobs=10)
     compare_registry = JobRegistry(max_jobs=10)
     operation_registry = JobRegistry(max_jobs=10)
+    model_registry = JobRegistry(max_jobs=10)
 
     def route_scan_root(*args, **kwargs):
         return scan_root(*args, **kwargs)
@@ -306,6 +320,7 @@ def build_handler(db_path: Path):
         static_dir=STATIC_DIR,
         media_mime_fallbacks=_MEDIA_MIME_FALLBACKS,
         operation_registry=operation_registry,
+        model_registry=model_registry,
         dependencies=WebRouteDependencies(
             coerce_bool=lambda value, *, default: _coerce_bool(value, default=default),
             first_value=lambda params, key, default=None: _first(params, key, default),
@@ -345,6 +360,7 @@ def build_handler(db_path: Path):
             list_review_browser_file_ids=lambda *args, **kwargs: list_review_browser_file_ids(*args, **kwargs),
             list_review_state_file_ids=lambda *args, **kwargs: list_review_state_file_ids(*args, **kwargs),
             list_analysis_diagnostics=lambda *args, **kwargs: list_analysis_diagnostics(*args, **kwargs),
+            decision_csv=lambda *args, **kwargs: decision_csv(*args, **kwargs),
             get_review_file_detail=lambda *args, **kwargs: get_review_file_detail(*args, **kwargs),
             update_review_state=lambda *args, **kwargs: update_review_state(*args, **kwargs),
             update_review_state_batch=lambda *args, **kwargs: update_review_state_batch(*args, **kwargs),
@@ -362,12 +378,14 @@ def build_handler(db_path: Path):
             get_preview_cache_root=lambda *args, **kwargs: get_preview_cache_root(*args, **kwargs),
             count_score_rows=lambda *args, **kwargs: count_score_rows(*args, **kwargs),
             clear_cache_scope=lambda *args, **kwargs: clear_cache_scope(*args, **kwargs),
-            prune_missing_cache_entries=lambda *args, **kwargs: prune_missing_cache_entries(*args, **kwargs),
+            preview_missing_cache_entries=lambda *args, **kwargs: preview_missing_cache_entries(*args, **kwargs),
+            apply_missing_cache_entries=lambda *args, **kwargs: apply_missing_cache_entries(*args, **kwargs),
             reveal_in_file_manager=lambda path: reveal_in_file_manager(path),
             delete_files=lambda *args, **kwargs: delete_files(*args, **kwargs),
             export_files=lambda *args, **kwargs: export_files(*args, **kwargs),
             default_batch_size=lambda: DEFAULT_BATCH_SIZE,
             thread_factory=lambda *args, **kwargs: threading.Thread(*args, **kwargs),
+            prepare_model=lambda *args, **kwargs: prepare_model(*args, **kwargs),
         ),
     )
 
@@ -499,9 +517,16 @@ def build_handler(db_path: Path):
 
 def build_options_payload(db_path: Path, *, resource_profile: str | None = None) -> dict[str, object]:
     learned = available_learned_backends(resource_profile=resource_profile)
+    learned["model_preparation"] = read_preparation_record(db_path.parent)
     capabilities = preview_capabilities()
     with database(db_path) as connection:
         preview_dir = get_preview_cache_root(connection, db_path=db_path, persist=False)
+    model_catalog = learned.get("model_catalog")
+    learned_models = [
+        str(entry["canonical_id"])
+        for entry in model_catalog
+        if isinstance(entry, dict) and entry.get("available") and entry.get("canonical_id")
+    ] if isinstance(model_catalog, list) else list(runtime_curated_learned_models())
     runtime_targets_ui = ["auto", "cpu", "cuda", "xpu", "directml", "mps"]
     return {
         "database": str(db_path.resolve()),
@@ -511,7 +536,7 @@ def build_options_payload(db_path: Path, *, resource_profile: str | None = None)
         "preview_modes": list(RAW_PREVIEW_MODES),
         "raw_preview_auto_min_long_edge": MIN_RAW_THUMBNAIL_LONG_EDGE,
         "learned": learned,
-        "learned_models": list(runtime_curated_learned_models()),
+        "learned_models": learned_models,
         "default_scoring_mode": learned["default_model"],
         "runtime_targets": runtime_targets_ui,
         "default_batch_size": DEFAULT_BATCH_SIZE,

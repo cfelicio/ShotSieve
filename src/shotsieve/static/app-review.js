@@ -283,7 +283,6 @@
   function renderDetail(deps) {
     const {
       state,
-      modelDisplayNames,
       pathLeaf,
       escapeHtml,
       formatNumber: formatNumberFn,
@@ -293,7 +292,6 @@
       handleError,
     } = deps;
 
-    void modelDisplayNames;
     void escapeHtml;
     void scoreCard;
     void statusPill;

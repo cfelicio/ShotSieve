@@ -20,7 +20,7 @@ wheels/
 *.egg-info/
 .installed.cfg
 *.egg
-JFamily/
+implementation.md
 
 # Virtual Environments
 .venv/
@@ -40,6 +40,8 @@ blog.md
 .github/skills/
 !.github/workflows/
 !.github/workflows/release.yml
+!.github/workflows/ci.yml
+!.github/workflows/model-smoke.yml
 
 # PyInstaller
 #  Ignore generated manifest files, but keep the checked-in build spec used by release scripts.

@@ -9,10 +9,6 @@ if (!busyModule?.createBusyController) {
 }
 
 const {
-  DEFAULT_MODEL_CATALOG,
-  HIDDEN_MODEL_NAMES,
-  MODEL_DESCRIPTIONS,
-  MODEL_DISPLAY_NAMES,
   REVIEW_DECISIONS,
   createState,
   createUiStateStore,
@@ -170,8 +166,6 @@ const workflows = workflowsModule.createWorkflows({
     compareProgressPercent,
     comparisonDefaults: comparisonDefaultsUtil,
     currentResourceProfile,
-    modelDescriptions: MODEL_DESCRIPTIONS,
-    modelDisplayNames: MODEL_DISPLAY_NAMES,
     scanProgressMessage,
     scanProgressPercent,
     scoreBatchSize,
@@ -227,8 +221,10 @@ const {
   installRejectedActionEvents,
   runScan,
   runScore,
+  prepareSelectedModel,
   analyzeLibrary,
   clearCache,
+  reviewMissingEntries,
   deleteSelectedFiles,
   navigateSelection,
   openOriginalFile,
@@ -236,6 +232,7 @@ const {
   browseDirectory,
   chooseBrowserPath,
   renderLibraryRoots,
+  installDecisionCsvEvents,
   handleError,
 } = workflows;
 
@@ -260,9 +257,11 @@ const installEvents = eventsModule.createEvents({
   analyzeLibrary,
   runScan,
   runScore,
+  prepareSelectedModel,
   runModelComparison,
   renderComparisonResults,
   clearCache,
+  reviewMissingEntries,
   openBrowser,
   browseDirectory,
   chooseBrowserPath,
@@ -284,6 +283,7 @@ const installEvents = eventsModule.createEvents({
   resetReviewToActiveLibrary: controller.resetReviewToActiveLibrary,
   setReviewScope: controller.setReviewScope,
   renderLibraryRoots,
+  installDecisionCsvEvents,
   loadAnalysisDiagnostics: controller.loadAnalysisDiagnostics,
 });
 

@@ -160,13 +160,150 @@ class TestRouteHandlingAsync:
 
             assert completed_payload is not None
             assert completed_payload["summary"]["files_seen"] == 3
+            assert completed_payload["summary"]["overall_status"] == "completed"
+            assert completed_payload["summary"]["root_results"][0]["status"] == "completed"
 
             result_response = urlopen(f"http://127.0.0.1:{port}/api/scan/result?job_id={job_id}")
             result_payload = json.loads(result_response.read().decode("utf-8"))
             assert result_payload["files_seen"] == 3
             assert result_payload["files_added"] == 2
+            assert result_payload["root_results"][0]["root_path"] == str(photo_dir.resolve())
         finally:
             release_event.set()
+            server.shutdown()
+
+    def test_scan_async_multi_root_commits_success_before_failed_root(self, tmp_path: Path, monkeypatch):
+        from http.server import ThreadingHTTPServer
+        from shotsieve import scanner as scanner_module
+        from shotsieve.scanner import FileDiscoveryError
+
+        db_path = tmp_path / "data" / "shotsieve.db"
+        first_root = tmp_path / "first"
+        failed_root = tmp_path / "unavailable"
+        first_root.mkdir()
+        failed_root.mkdir()
+        create_image(first_root / "sample.jpg")
+        initialize_database(db_path)
+
+        original_discover_files = scanner_module.discover_files
+
+        def fail_second_root(root, *args, **kwargs):
+            if root == failed_root:
+                raise FileDiscoveryError(root, PermissionError("second root unavailable"))
+            return original_discover_files(root, *args, **kwargs)
+
+        monkeypatch.setattr(scanner_module, "discover_files", fail_second_root)
+
+        port = find_free_port()
+        server = ThreadingHTTPServer(("127.0.0.1", port), build_handler(db_path))
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            start_request = Request(
+                f"http://127.0.0.1:{port}/api/scan/start",
+                data=json.dumps({
+                    "roots": [str(first_root), str(failed_root)],
+                    "recursive": True,
+                    "generate_previews": False,
+                }).encode("utf-8"),
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            job_id = json.loads(urlopen(start_request).read().decode("utf-8"))["job_id"]
+
+            failed_payload = None
+            deadline = time.time() + 3
+            while time.time() < deadline:
+                status = json.loads(
+                    urlopen(f"http://127.0.0.1:{port}/api/scan/status?job_id={job_id}").read().decode("utf-8")
+                )
+                if status["status"] == "failed":
+                    failed_payload = status
+                    break
+                time.sleep(0.05)
+
+            assert failed_payload is not None
+            assert failed_payload["summary"]["overall_status"] == "failed"
+            assert [item["status"] for item in failed_payload["summary"]["root_results"]] == [
+                "completed",
+                "failed",
+            ]
+            assert failed_payload["summary"]["root_results"][1]["root_path"] == str(failed_root.resolve())
+            assert "Unable to enumerate" in failed_payload["summary"]["root_results"][1]["error_text"]
+
+            with database(db_path) as connection:
+                file_count = connection.execute("SELECT COUNT(*) AS count FROM files").fetchone()["count"]
+                runs = connection.execute(
+                    "SELECT root_path, status FROM scan_runs ORDER BY id ASC"
+                ).fetchall()
+
+            assert file_count == 1
+            assert [(row["root_path"], row["status"]) for row in runs] == [
+                (str(first_root.resolve()), "completed"),
+                (str(failed_root.resolve()), "failed"),
+            ]
+        finally:
+            server.shutdown()
+
+    def test_scan_async_failure_marks_later_root_not_processed(self, tmp_path: Path, monkeypatch):
+        from http.server import ThreadingHTTPServer
+        from shotsieve import scanner as scanner_module
+        from shotsieve.scanner import FileDiscoveryError
+
+        db_path = tmp_path / "data" / "shotsieve.db"
+        failed_root = tmp_path / "unavailable"
+        later_root = tmp_path / "later"
+        failed_root.mkdir()
+        later_root.mkdir()
+        create_image(later_root / "sample.jpg")
+        initialize_database(db_path)
+
+        original_discover_files = scanner_module.discover_files
+
+        def fail_first_root(root, *args, **kwargs):
+            if root == failed_root:
+                raise FileDiscoveryError(root, PermissionError("first root unavailable"))
+            return original_discover_files(root, *args, **kwargs)
+
+        monkeypatch.setattr(scanner_module, "discover_files", fail_first_root)
+
+        port = find_free_port()
+        server = ThreadingHTTPServer(("127.0.0.1", port), build_handler(db_path))
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            start_request = Request(
+                f"http://127.0.0.1:{port}/api/scan/start",
+                data=json.dumps({
+                    "roots": [str(failed_root), str(later_root)],
+                    "recursive": True,
+                    "generate_previews": False,
+                }).encode("utf-8"),
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            job_id = json.loads(urlopen(start_request).read().decode("utf-8"))["job_id"]
+
+            failed_payload = None
+            deadline = time.time() + 3
+            while time.time() < deadline:
+                status = json.loads(
+                    urlopen(f"http://127.0.0.1:{port}/api/scan/status?job_id={job_id}").read().decode("utf-8")
+                )
+                if status["status"] == "failed":
+                    failed_payload = status
+                    break
+                time.sleep(0.05)
+
+            assert failed_payload is not None
+            assert [item["status"] for item in failed_payload["summary"]["root_results"]] == [
+                "failed",
+                "not_processed",
+            ]
+            with database(db_path) as connection:
+                assert connection.execute("SELECT COUNT(*) AS count FROM files").fetchone()["count"] == 0
+                assert connection.execute("SELECT COUNT(*) AS count FROM scan_runs").fetchone()["count"] == 1
+        finally:
             server.shutdown()
 
     def test_scan_async_forwards_ignore_rules_to_scanner(self, tmp_path: Path, monkeypatch):
@@ -394,6 +531,30 @@ class TestRouteHandlingAsync:
         finally:
             release_event.set()
             server.shutdown()
+
+    def test_cache_clear_async_start_rejects_missing_scope(self, tmp_path: Path):
+        from http.server import ThreadingHTTPServer
+
+        db_path = tmp_path / "data" / "shotsieve.db"
+        initialize_database(db_path)
+
+        port = find_free_port()
+        server = ThreadingHTTPServer(("127.0.0.1", port), build_handler(db_path))
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            request = Request(
+                f"http://127.0.0.1:{port}/api/cache/clear/start",
+                data=json.dumps({"scope": "missing"}).encode("utf-8"),
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            with pytest.raises(HTTPError) as exc_info:
+                urlopen(request)
+        finally:
+            server.shutdown()
+
+        assert exc_info.value.code == HTTPStatus.BAD_REQUEST
 
     def test_scan_async_cancel_route_stops_running_job(self, tmp_path: Path, monkeypatch):
         from dataclasses import dataclass

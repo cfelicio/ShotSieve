@@ -48,6 +48,12 @@ jobs:
           python -m pip install --upgrade pip setuptools wheel
           python -m pip install -e .[test]
 
+      - name: Check installed requirements
+        run: python -m pip check
+
+      - name: Run focused static checks
+        run: python -m ruff check --select F,E9 src tests
+
       - name: Run test suite
         run: python -m pytest -q
 
@@ -148,22 +154,27 @@ jobs:
 
       - name: Upgrade packaging tools
         run: |
-          python -m pip install --upgrade pip setuptools wheel -c ${{ env.RELEASE_CONSTRAINTS }}
+          python -m pip install --upgrade pip setuptools wheel -c ${{ env.RELEASE_CONSTRAINTS }} -c ${{ matrix.constraintsFile }}
 
       - name: Install CPU Torch runtime
         if: matrix.torchVariant == 'cpu'
         run: |
-          python -m pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu -c ${{ env.RELEASE_CONSTRAINTS }}
+          python -m pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu -c ${{ env.RELEASE_CONSTRAINTS }} -c ${{ matrix.constraintsFile }}
 
       - name: Install default Torch runtime
-        if: matrix.torchVariant == 'default' || matrix.torchVariant == 'directml'
+        if: matrix.torchVariant == 'default'
         run: |
-          python -m pip install torch torchvision -c ${{ env.RELEASE_CONSTRAINTS }}
+          python -m pip install torch torchvision -c ${{ env.RELEASE_CONSTRAINTS }} -c ${{ matrix.constraintsFile }}
+
+      - name: Install pinned DirectML Torch runtime
+        if: matrix.torchVariant == 'directml'
+        run: |
+          python -m pip install torch==2.4.1 torchvision==0.19.1 torch-directml==0.2.5.dev240914 -c ${{ env.RELEASE_CONSTRAINTS }} -c ${{ matrix.constraintsFile }}
 
       - name: Install ShotSieve build dependencies
         run: |
-          python -m pip install -e ".[${{ join(matrix.extras, ',') }}]" -c ${{ env.RELEASE_CONSTRAINTS }}
-          python -m pip install pyinstaller -c ${{ env.RELEASE_CONSTRAINTS }}
+          python -m pip install -e ".[${{ join(matrix.extras, ',') }}]" -c ${{ env.RELEASE_CONSTRAINTS }} -c ${{ matrix.constraintsFile }}
+          python -m pip install pyinstaller -c ${{ env.RELEASE_CONSTRAINTS }} -c ${{ matrix.constraintsFile }}
 
       - name: Build portable bundle
         env:
@@ -187,6 +198,13 @@ jobs:
           $launcher = Join-Path $plan.distPath $plan.target.executableName
           if (-not (Test-Path $launcher)) {
             throw "Expected launcher not found at $launcher"
+          }
+
+          $bundledWeights = Get-ChildItem -LiteralPath $plan.distPath -Recurse -File |
+            Where-Object { $_.Extension.ToLowerInvariant() -in @('.safetensors', '.ckpt', '.pth', '.pt') }
+          if ($bundledWeights) {
+            $paths = ($bundledWeights | ForEach-Object { $_.FullName }) -join ", "
+            throw "Model weight files must not be bundled in a portable release: $paths"
           }
 
           & $launcher --help | Out-Null

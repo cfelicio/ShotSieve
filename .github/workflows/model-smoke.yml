@@ -1,0 +1,55 @@
+name: model-smoke
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 3 * * 1"
+
+permissions:
+  contents: read
+
+jobs:
+  learned-models:
+    name: learned-${{ matrix.model }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        model:
+          - topiq_nr
+          - clipiqa
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install learned-IQA runtime
+        run: |
+          python -m pip install --upgrade pip setuptools wheel
+          python -m pip install -e ".[learned-iqa]"
+
+      - name: Prepare model into a fresh isolated cache
+        env:
+          SMOKE_MODEL: ${{ matrix.model }}
+        shell: bash
+        run: |
+          python scripts/model_smoke.py \
+            --model "$SMOKE_MODEL" \
+            --cache-dir "$RUNNER_TEMP/shotsieve-cache/$SMOKE_MODEL" \
+            --data-dir "$RUNNER_TEMP/shotsieve-data/$SMOKE_MODEL"
+
+      - name: Re-open and score one generated image with network disabled
+        env:
+          SMOKE_MODEL: ${{ matrix.model }}
+        shell: bash
+        run: |
+          python scripts/model_smoke.py \
+            --model "$SMOKE_MODEL" \
+            --cache-dir "$RUNNER_TEMP/shotsieve-cache/$SMOKE_MODEL" \
+            --data-dir "$RUNNER_TEMP/shotsieve-data/$SMOKE_MODEL" \
+            --offline

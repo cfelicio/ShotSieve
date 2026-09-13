@@ -128,11 +128,9 @@
   }
 
   function compareChunkSize(models, runtime) {
-    const normalizedRuntime = String(runtime || "").toLowerCase();
-    if (normalizedRuntime === "cpu" && models.some((modelName) => modelName === "qalign")) {
-      return 1;
-    }
-    return models.some((modelName) => ["qalign", "qualiclip", "tres"].includes(modelName)) ? 10 : 20;
+    void models;
+    void runtime;
+    return 20;
   }
 
   function isAcceleratedRuntime(runtime) {
@@ -145,7 +143,7 @@
       return Math.max(1, Number(serverRecommendations[modelName]));
     }
     // Fallback: conservative defaults when VRAM is unknown
-    const heavy = ["qalign", "qualiclip", "clipiqa", "tres"].includes(modelName);
+    const heavy = modelName === "clipiqa";
     if (heavy) {
       return 2;
     }
@@ -161,7 +159,7 @@
       return null;
     }
     // Fallback: conservative defaults when server recommendations unavailable
-    const hasHeavyModel = models.some((modelName) => ["qalign", "qualiclip", "clipiqa", "tres"].includes(modelName));
+    const hasHeavyModel = models.some((modelName) => modelName === "clipiqa");
     if (hasHeavyModel) {
       return 2;
     }
@@ -358,8 +356,11 @@
     if (normalized === "available") {
       return "✅";
     }
-    if (normalized === "not-installed") {
+    if (normalized === "missing") {
       return "⬇️";
+    }
+    if (normalized === "broken") {
+      return "⚠️";
     }
     if (normalized === "unsupported") {
       return "🚫";
@@ -398,15 +399,12 @@
     return parts.join(" \u00b7 ");
   }
 
-  function availableLearnedModels(options, defaultModelCatalog, excludedModels = []) {
-    const excluded = new Set((excludedModels || []).map((model) => String(model).toLowerCase()));
-    const available = (options.learned_models || []).filter((model) => !excluded.has(String(model).toLowerCase()));
-    const preferred = available.filter((model) => defaultModelCatalog.includes(model));
-    return preferred;
+  function availableLearnedModels(options) {
+    return Array.isArray(options?.learned_models) ? [...options.learned_models] : [];
   }
 
   function comparisonDefaults(options, persisted, allowedModels) {
-    const preferred = [options.default_scoring_mode, "clipiqa", "qalign"].filter(Boolean);
+    const preferred = [options.default_scoring_mode, "clipiqa"].filter(Boolean);
     const source = Array.isArray(persisted.compareModels) && persisted.compareModels.length ? persisted.compareModels : preferred;
     const selected = source.filter((model, index, items) => allowedModels.includes(model) && items.indexOf(model) === index);
     if (selected.length >= 2) {

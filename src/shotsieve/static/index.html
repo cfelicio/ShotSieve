@@ -89,6 +89,25 @@
               <div id="busy-progress-fill" class="busy-progress-fill"></div>
             </div>
           </div>
+
+          <section id="operation-result-panel" class="operation-result-panel hidden" aria-live="polite">
+            <div class="operation-result-header">
+              <div>
+                <p class="eyebrow">Latest operation</p>
+                <h3 id="operation-result-title">Operation results</h3>
+              </div>
+              <button id="operation-result-dismiss" type="button" class="ghost-tiny">Dismiss</button>
+            </div>
+            <p id="operation-result-summary" class="settings-help"></p>
+            <div id="operation-result-counts" class="operation-result-counts"></div>
+            <ul id="operation-result-items" class="operation-result-items"></ul>
+            <div class="inline-actions operation-result-actions">
+              <button id="operation-result-copy" type="button" class="ghost">Copy details</button>
+              <button id="operation-result-download" type="button" class="ghost">Download JSON</button>
+              <button id="operation-result-retry" type="button" class="ghost hidden">Retry safe files</button>
+              <button id="operation-result-check-status" type="button" class="ghost hidden">Check status</button>
+            </div>
+          </section>
         </section>
 
         <!-- Analysis Options (moved from Settings) -->
@@ -118,6 +137,8 @@
                 <span>AI Model</span>
                 <select id="model-select"></select>
                 <span id="model-detail-hint" class="field-hint">Model-specific quality notes appear here when selected.</span>
+                <button id="prepare-model" type="button" class="secondary" data-busy-lock="true">Prepare selected model</button>
+                <span id="model-preparation-status" class="field-hint" role="status" aria-live="polite">Model readiness has not been checked.</span>
               </label>
               <label>
                 <span>Processing Unit</span>
@@ -483,13 +504,6 @@
             <p class="settings-help">Manage database state and clear cached calculations. Original photos are never modified or deleted.</p>
             <div class="maintenance-grid">
               <div class="maintenance-item">
-                <button id="prune-missing-cache" type="button" data-busy-lock="true"
-                  data-confirm="This removes database entries for photos that no longer exist on disk. Your actual files are NOT deleted - only stale references are cleaned up.">
-                  Clean Up Missing Files
-                </button>
-                <p class="maintenance-desc">Purge database records for moved or deleted files</p>
-              </div>
-              <div class="maintenance-item">
                 <button id="clear-scores" type="button" class="ghost" data-busy-lock="true"
                   data-confirm="This erases all quality scores. You'll need to re-run scoring to get scores back. Your photos and review decisions are not affected.">
                   Reset All Scores
@@ -502,6 +516,27 @@
                   Reset All Reviews
                 </button>
                 <p class="maintenance-desc">Clear keep/reject marks across all photos</p>
+              </div>
+              <div class="maintenance-item">
+                <button id="review-missing-entries" type="button" class="ghost" data-busy-lock="true">
+                  Review Missing Entries
+                </button>
+                <p class="maintenance-desc">Preview and explicitly remove catalog entries whose source files are gone</p>
+              </div>
+              <div class="maintenance-item">
+                <label for="decision-csv-root">Decision export root</label>
+                <select id="decision-csv-root">
+                  <option value="">Choose a library root</option>
+                </select>
+                <select id="decision-csv-decision" aria-label="Decisions to export">
+                  <option value="both">Approved and rejected</option>
+                  <option value="approved">Approved only</option>
+                  <option value="rejected">Rejected only</option>
+                </select>
+                <button id="download-decisions-csv" type="button" class="ghost" data-busy-lock="true">
+                  Download decisions CSV
+                </button>
+                <p class="maintenance-desc">Export every decision in the selected root, including rows outside the current Review page</p>
               </div>
               <div class="maintenance-item">
                 <button id="clear-all-cache" type="button" class="danger" data-busy-lock="true"
@@ -546,13 +581,14 @@
         </div>
         <button type="submit" class="ghost">Close</button>
       </div>
-      <div class="field-with-action dialog-path-field">
-        <label id="browser-path-label" for="browser-path">Current folder path</label>
-        <div class="dialog-toolbar">
-          <button id="browser-up" type="button" class="ghost">Up</button>
-          <input id="browser-path" type="text">
-        </div>
-        <div id="browser-breadcrumbs" class="browser-breadcrumbs"></div>
+        <div class="field-with-action dialog-path-field">
+          <label id="browser-path-label" for="browser-path">Current folder path</label>
+          <div class="dialog-toolbar">
+            <button id="browser-up" type="button" class="ghost">Up</button>
+            <input id="browser-path" type="text">
+          </div>
+          <span class="field-hint">Enter a full local or UNC path, such as \\server\share\folder, then press Enter.</span>
+          <div id="browser-breadcrumbs" class="browser-breadcrumbs"></div>
       </div>
       <div id="browser-roots" class="shortcut-list"></div>
       <div id="browser-list" class="browser-list"></div>

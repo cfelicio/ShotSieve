@@ -98,8 +98,15 @@ class JobRegistry:
                 record["finished_at"] = now
                 record["updated_at"] = now
 
-    def fail(self, job_id: str, *, error: str, progress: dict | None = None) -> None:
-        """Mark job as failed and store the error message."""
+    def fail(
+        self,
+        job_id: str,
+        *,
+        error: str,
+        progress: dict | None = None,
+        summary: dict | None = None,
+    ) -> None:
+        """Mark job as failed and optionally retain a partial summary."""
         now = time.time()
         with self._lock:
             record = self._jobs.get(job_id)
@@ -108,6 +115,8 @@ class JobRegistry:
                 record["error"] = error
                 if progress is not None:
                     record["progress"] = dict(progress)
+                if summary is not None:
+                    record["summary"] = dict(summary)
                 record["finished_at"] = now
                 record["updated_at"] = now
 

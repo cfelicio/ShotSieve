@@ -1,16 +1,10 @@
 from __future__ import annotations
 
 import re
-import threading
 from pathlib import Path
 
 import pytest
 from PIL import Image
-
-from shotsieve.db import initialize_database
-from shotsieve.learned_iqa import LearnedScoreResult
-from shotsieve.scanner import scan_root
-from shotsieve.scoring import score_files
 
 
 def _create_image(path: Path, *, color: tuple[int, int, int]) -> None:
@@ -61,6 +55,22 @@ def _render_compare_results(page, comparison: dict[str, object], *, root: str = 
             document.getElementById("library-root-input").value = root;
 
             const state = stateModule.createState();
+            state.options = {
+                learned: {
+                    model_catalog: [
+                        {
+                            canonical_id: "topiq_nr",
+                            label: "TOPIQ (Recommended)",
+                            description: "Fast, stable all-rounder for general photo-quality ranking.",
+                        },
+                        {
+                            canonical_id: "clipiqa",
+                            label: "CLIPIQA",
+                            description: "CLIP-based quality scorer for a complementary second opinion.",
+                        },
+                    ],
+                },
+            };
             state.comparison = comparison;
 
             const workflows = workflowsModule.createWorkflows({
@@ -85,8 +95,6 @@ def _render_compare_results(page, comparison: dict[str, object], *, root: str = 
                     compareProgressPercent: () => 0,
                     comparisonDefaults: () => [],
                     currentResourceProfile: () => "normal",
-                    modelDescriptions: stateModule.MODEL_DESCRIPTIONS,
-                    modelDisplayNames: stateModule.MODEL_DISPLAY_NAMES,
                     scanProgressMessage: () => "",
                     scanProgressPercent: () => 0,
                     scoreBatchSize: () => 1,

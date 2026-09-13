@@ -4,7 +4,11 @@ from http import HTTPStatus
 from typing import Any
 from urllib.parse import urlparse
 
-from shotsieve.web_media import MediaDependencies, resolve_media_request, serve_media_response
+from shotsieve.web_media import (
+    MediaDependencies,
+    resolve_media_request,
+    serve_media_response,
+)
 from shotsieve.web_route_common import (
     DeleteResultPayload,
     ExportAggregate,
@@ -36,12 +40,14 @@ from shotsieve.web_route_common import (
     log_request_message,
     send_json,
     send_json_error,
+    send_bytes,
     serve_static,
 )
 from shotsieve.web_route_files import (
     _execute_cache_clear_request,
     _execute_delete_request,
     _execute_export_request,
+    _execute_missing_cache_apply_request,
     _handle_file_action_post_routes,
     _handle_filesystem_get_routes,
     _handle_media_get_routes,
@@ -66,6 +72,7 @@ from shotsieve.web_route_jobs import (
     start_compare_job,
     start_delete_job,
     start_export_job,
+    start_model_prepare_job,
     start_scan_job,
     start_score_job,
     try_acquire_operation_lock,
@@ -158,6 +165,7 @@ __all__ = [
     "_execute_cache_clear_request",
     "_execute_delete_request",
     "_execute_export_request",
+    "_execute_missing_cache_apply_request",
     "_export_result_payload",
     "_finish_consistent_snapshot",
     "_frozen_selection_batches",
@@ -205,12 +213,14 @@ __all__ = [
     "resolve_media_request",
     "send_json",
     "send_json_error",
+    "send_bytes",
     "serve_media_response",
     "serve_static",
     "start_cache_clear_job",
     "start_compare_job",
     "start_delete_job",
     "start_export_job",
+    "start_model_prepare_job",
     "start_scan_job",
     "start_score_job",
     "try_acquire_operation_lock",

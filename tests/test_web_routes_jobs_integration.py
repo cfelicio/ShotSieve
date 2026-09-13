@@ -146,12 +146,112 @@ class TestWebRoutesJobsIntegration:
         assert payload["preview_modes"] == ["fast", "auto", "high-quality"]
         assert payload["raw_preview_auto_min_long_edge"] == 1024
         assert "technical-only" not in payload["learned_models"]
-        assert set(payload["learned_models"]).issubset({"topiq_nr", "clipiqa", "qalign"})
-        assert "topiq_nr" in payload["learned_models"]
-        assert "clipiqa" in payload["learned_models"]
+        assert set(payload["learned_models"]).issubset({"topiq_nr", "clipiqa"})
+        assert "qalign" not in payload["learned_models"]
         assert "auto_runtime_priority" in payload["learned"]
         assert "cpu" in payload["learned"]["auto_runtime_priority"]
         assert payload["runtime_targets"] == ["auto", "cpu", "cuda", "xpu", "directml", "mps"]
+        assert payload["learned"]["model_preparation"]["state"] == "not_checked"
+
+    def test_model_preparation_job_reports_success_and_retains_readiness_record(self, test_server, monkeypatch):
+        base_url, db_path, _ = test_server
+        from shotsieve import model_assets, web as web_module
+
+        class Result:
+            failed = False
+            error = None
+
+        class Backend:
+            runtime = "cpu"
+
+            def score_paths(self, paths, *, batch_size, resource_profile):
+                return [Result()]
+
+            def close(self):
+                pass
+
+        monkeypatch.setattr(
+            web_module,
+            "prepare_model",
+            lambda model, **kwargs: model_assets.prepare_model(
+                model,
+                backend_factory=lambda *_args, **_kwargs: Backend(),
+                **kwargs,
+            ),
+        )
+
+        response = urlopen(Request(
+            f"{base_url}/api/models/prepare/start",
+            data=json.dumps({"model": "topiq-nr"}).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        ))
+        job_id = json.loads(response.read().decode("utf-8"))["job_id"]
+
+        terminal = None
+        deadline = time.time() + 3
+        while time.time() < deadline:
+            terminal = json.loads(urlopen(f"{base_url}/api/models/prepare/status?job_id={job_id}").read().decode("utf-8"))
+            if terminal["status"] != "running":
+                break
+            time.sleep(0.05)
+
+        assert terminal is not None
+        assert terminal["status"] == "completed"
+        result = json.loads(urlopen(f"{base_url}/api/models/prepare/result?job_id={job_id}").read().decode("utf-8"))
+        assert result["state"] == "prepared"
+        assert result["model"] == "topiq_nr"
+        with database(db_path) as connection:
+            assert connection.execute("SELECT COUNT(*) AS count FROM files").fetchone()["count"] == 0
+
+        options = json.loads(urlopen(f"{base_url}/api/options").read().decode("utf-8"))
+        assert options["learned"]["model_preparation"]["state"] == "prepared"
+
+    def test_model_preparation_job_returns_persisted_failure_diagnostic(self, test_server, monkeypatch):
+        base_url, _, _ = test_server
+        from shotsieve import model_assets, web as web_module
+
+        class Backend:
+            runtime = "cpu"
+
+            def score_paths(self, paths, *, batch_size, resource_profile):
+                raise RuntimeError("Hub request https://example.test/model?token=secret failed")
+
+            def close(self):
+                pass
+
+        monkeypatch.setattr(
+            web_module,
+            "prepare_model",
+            lambda model, **kwargs: model_assets.prepare_model(
+                model,
+                backend_factory=lambda *_args, **_kwargs: Backend(),
+                **kwargs,
+            ),
+        )
+
+        response = urlopen(Request(
+            f"{base_url}/api/models/prepare/start",
+            data=json.dumps({"model": "clipiqa"}).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        ))
+        job_id = json.loads(response.read().decode("utf-8"))["job_id"]
+
+        terminal = None
+        deadline = time.time() + 3
+        while time.time() < deadline:
+            terminal = json.loads(urlopen(f"{base_url}/api/models/prepare/status?job_id={job_id}").read().decode("utf-8"))
+            if terminal["status"] != "running":
+                break
+            time.sleep(0.05)
+
+        assert terminal is not None
+        assert terminal["status"] == "failed"
+        result = json.loads(urlopen(f"{base_url}/api/models/prepare/result?job_id={job_id}").read().decode("utf-8"))
+        assert result["state"] == "failed"
+        assert result["error_report"]["category"] == "network_or_hub"
+        assert "token=secret" not in json.dumps(result)
 
     def test_options_payload_hides_qalign_for_installed_cpu_runtime(self, test_server, monkeypatch):
         base_url, _, _ = test_server
@@ -191,7 +291,7 @@ class TestWebRoutesJobsIntegration:
         assert payload["learned"]["default_runtime"] == "cpu"
         assert payload["learned_models"] == ["topiq_nr", "clipiqa"]
 
-    def test_options_payload_keeps_qalign_for_installed_accelerator_runtime(self, test_server, monkeypatch):
+    def test_options_payload_keeps_product_catalog_for_installed_accelerator_runtime(self, test_server, monkeypatch):
         base_url, _, _ = test_server
         from shotsieve import web as web_module
         import shotsieve.learned_iqa as learned_iqa_module
@@ -229,7 +329,7 @@ class TestWebRoutesJobsIntegration:
         payload = json.loads(response.read().decode("utf-8"))
 
         assert payload["learned"]["default_runtime"] == "cuda"
-        assert "qalign" in payload["learned_models"]
+        assert payload["learned_models"] == ["topiq_nr", "clipiqa"]
 
     def test_options_route_uses_refreshed_hardware_cache_after_invalidation(self, test_server, monkeypatch):
         base_url, _, _ = test_server
@@ -441,7 +541,7 @@ class TestWebRoutesJobsIntegration:
             if progress_callback:
                 progress_callback(
                     AnalysisProgress(
-                        model_name="arniqa",
+                        model_name="clipiqa",
                         model_index=2,
                         model_count=2,
                         files_processed=3,
@@ -449,19 +549,19 @@ class TestWebRoutesJobsIntegration:
                     )
                 )
             return FakeComparison(
-                model_names=["topiq_nr", "arniqa"],
+                model_names=["topiq_nr", "clipiqa"],
                 rows=[
                     {
                         "path": "C:/photos/sample.jpg",
                         "topiq_nr_score": 82.0,
                         "topiq_nr_confidence": 91.0,
                         "topiq_nr_raw": 0.82,
-                        "arniqa_score": 74.0,
-                        "arniqa_confidence": 85.0,
-                        "arniqa_raw": 0.74,
+                        "clipiqa_score": 74.0,
+                        "clipiqa_confidence": 85.0,
+                        "clipiqa_raw": 0.74,
                     }
                 ],
-                model_timings_seconds={"topiq_nr": 0.9, "arniqa": 0.9},
+                model_timings_seconds={"topiq_nr": 0.9, "clipiqa": 0.9},
             )
 
         monkeypatch.setattr(web_module, "compare_learned_models", fake_compare_models)
@@ -475,7 +575,7 @@ class TestWebRoutesJobsIntegration:
         try:
             start_req = Request(
                 f"http://127.0.0.1:{port}/api/compare-models/start",
-                data=json.dumps({"models": ["topiq_nr", "arniqa"], "root": None, "preview_mode": "fast"}).encode("utf-8"),
+                data=json.dumps({"models": ["topiq_nr", "clipiqa"], "root": None, "preview_mode": "fast"}).encode("utf-8"),
                 headers={"Content-Type": "application/json"},
                 method="POST",
             )
@@ -508,8 +608,8 @@ class TestWebRoutesJobsIntegration:
 
             result_response = urlopen(f"http://127.0.0.1:{port}/api/compare-models/result?job_id={job_id}")
             result_payload = json.loads(result_response.read().decode("utf-8"))
-            assert result_payload["model_names"] == ["topiq_nr", "arniqa"]
-            assert result_payload["rows"][0]["arniqa_score"] == 74.0
+            assert result_payload["model_names"] == ["topiq_nr", "clipiqa"]
+            assert result_payload["rows"][0]["clipiqa_score"] == 74.0
             assert captured_preview_mode["value"] == "fast"
         finally:
             release_event.set()
@@ -527,7 +627,7 @@ class TestWebRoutesJobsIntegration:
 
         def fake_compare_models(*args, **kwargs):
             return SimpleNamespace(
-                model_names=["topiq_nr", "arniqa"],
+                model_names=["topiq_nr", "clipiqa"],
                 rows=[],
                 files_considered=1,
                 files_compared=0,
@@ -556,7 +656,7 @@ class TestWebRoutesJobsIntegration:
         try:
             start_req = Request(
                 f"http://127.0.0.1:{port}/api/compare-models/start",
-                data=json.dumps({"models": ["topiq_nr", "arniqa"], "root": None}).encode("utf-8"),
+                data=json.dumps({"models": ["topiq_nr", "clipiqa"], "root": None}).encode("utf-8"),
                 headers={"Content-Type": "application/json"},
                 method="POST",
             )
@@ -602,7 +702,7 @@ class TestWebRoutesJobsIntegration:
 
         def fake_compare_models(*args, **kwargs):
             return SimpleNamespace(
-                model_names=["topiq_nr", "arniqa"],
+                model_names=["topiq_nr", "clipiqa"],
                 rows=[
                     {
                         "file_id": 1,
@@ -610,9 +710,9 @@ class TestWebRoutesJobsIntegration:
                         "topiq_nr_score": 82.0,
                         "topiq_nr_confidence": 91.0,
                         "topiq_nr_raw": 0.82,
-                        "arniqa_score": 74.0,
-                        "arniqa_confidence": 85.0,
-                        "arniqa_raw": 0.74,
+                        "clipiqa_score": 74.0,
+                        "clipiqa_confidence": 85.0,
+                        "clipiqa_raw": 0.74,
                     }
                 ],
                 compare_failures=[],
@@ -621,7 +721,7 @@ class TestWebRoutesJobsIntegration:
                 files_skipped=0,
                 files_failed=0,
                 elapsed_seconds=0.6,
-                model_timings_seconds={"topiq_nr": 0.3, "arniqa": 0.3},
+                model_timings_seconds={"topiq_nr": 0.3, "clipiqa": 0.3},
                 requested_rows_total=32000,
                 processed_rows_total=10000,
                 truncated=True,
@@ -639,7 +739,7 @@ class TestWebRoutesJobsIntegration:
         try:
             start_req = Request(
                 f"http://127.0.0.1:{port}/api/compare-models/start",
-                data=json.dumps({"models": ["topiq_nr", "arniqa"], "root": None}).encode("utf-8"),
+                data=json.dumps({"models": ["topiq_nr", "clipiqa"], "root": None}).encode("utf-8"),
                 headers={"Content-Type": "application/json"},
                 method="POST",
             )

@@ -33,6 +33,13 @@ def _row_id(row: object) -> int:
     return _coerce_int(_row_value(row, "id"))
 
 
+def test_compare_rejects_disabled_model_before_loading_catalog_rows() -> None:
+    import pytest
+
+    with pytest.raises(ValueError, match="unknown or disabled"):
+        compare_learned_models(None, model_names=["qalign"])
+
+
 
 
 def test_compare_learned_models_returns_side_by_side_rows(tmp_path: Path, monkeypatch) -> None:
@@ -68,19 +75,19 @@ def test_compare_learned_models_returns_side_by_side_rows(tmp_path: Path, monkey
 
         comparison = compare_learned_models(
             connection,
-            model_names=["topiq_nr", "arniqa"],
+            model_names=["topiq_nr", "clipiqa"],
             learned_backend_factory=lambda model_name: {
                 "topiq_nr": FakeLearnedBackend("topiq_nr", 82.0, 91.0),
-                "arniqa": FakeLearnedBackend("arniqa", 74.0, 85.0),
+                "clipiqa": FakeLearnedBackend("clipiqa", 74.0, 85.0),
             }[model_name],
         )
 
     assert comparison.files_considered == 1
     assert comparison.files_compared == 1
     assert comparison.files_skipped == 0
-    assert comparison.model_names == ["topiq_nr", "arniqa"]
+    assert comparison.model_names == ["topiq_nr", "clipiqa"]
     assert comparison.elapsed_seconds == 3.0
-    assert comparison.model_timings_seconds == {"topiq_nr": 1.5, "arniqa": 1.5}
+    assert comparison.model_timings_seconds == {"topiq_nr": 1.5, "clipiqa": 1.5}
     assert len(comparison.rows) == 1
     row = comparison.rows[0]
     assert isinstance(row["file_id"], int)
@@ -88,8 +95,8 @@ def test_compare_learned_models_returns_side_by_side_rows(tmp_path: Path, monkey
     assert row["path"].endswith("sample.jpg")
     assert row["topiq_nr_score"] == 82.0
     assert row["topiq_nr_confidence"] == 91.0
-    assert row["arniqa_score"] == 74.0
-    assert row["arniqa_confidence"] == 85.0
+    assert row["clipiqa_score"] == 74.0
+    assert row["clipiqa_confidence"] == 85.0
 
 
 def test_compare_learned_models_reports_failed_results_without_fake_scores(tmp_path: Path) -> None:
@@ -177,7 +184,7 @@ def test_compare_learned_models_counts_failed_files_once_when_multiple_models_fa
 
         comparison = compare_learned_models(
             connection,
-            model_names=["topiq_nr", "arniqa"],
+            model_names=["topiq_nr", "clipiqa"],
             learned_backend_factory=lambda model_name: FailingBackend(model_name),
         )
 
@@ -223,12 +230,12 @@ def test_compare_learned_models_releases_backend_before_loading_next(tmp_path: P
 
         comparison = compare_learned_models(
             connection,
-            model_names=["topiq_nr", "arniqa"],
+            model_names=["topiq_nr", "clipiqa"],
             learned_backend_factory=lambda model_name: ExclusiveBackend(model_name),
         )
 
     assert comparison.files_compared == 1
-    assert comparison.model_names == ["topiq_nr", "arniqa"]
+    assert comparison.model_names == ["topiq_nr", "clipiqa"]
     assert active_backends == 0
 
 
@@ -264,27 +271,27 @@ def test_compare_learned_models_reports_progress_per_model_and_chunk(tmp_path: P
 
         comparison = compare_learned_models(
             connection,
-            model_names=["topiq_nr", "arniqa"],
+            model_names=["topiq_nr", "clipiqa"],
             learned_batch_size=2,
             compare_chunk_size=2,
             progress_callback=progress_updates.append,
             learned_backend_factory=lambda model_name: {
                 "topiq_nr": FakeLearnedBackend("topiq_nr", 82.0),
-                "arniqa": FakeLearnedBackend("arniqa", 74.0),
+                "clipiqa": FakeLearnedBackend("clipiqa", 74.0),
             }[model_name],
         )
 
     assert comparison.files_compared == 5
-    assert comparison.model_names == ["topiq_nr", "arniqa"]
+    assert comparison.model_names == ["topiq_nr", "clipiqa"]
     assert len(progress_updates) == 10
 
     topiq_updates = [update for update in progress_updates if update.model_name == "topiq_nr"]
-    arniqa_updates = [update for update in progress_updates if update.model_name == "arniqa"]
+    clipiqa_updates = [update for update in progress_updates if update.model_name == "clipiqa"]
 
     assert [update.phase for update in topiq_updates] == ["loading", "scoring", "scoring", "scoring", "scoring"]
-    assert [update.phase for update in arniqa_updates] == ["loading", "scoring", "scoring", "scoring", "scoring"]
+    assert [update.phase for update in clipiqa_updates] == ["loading", "scoring", "scoring", "scoring", "scoring"]
     assert [update.files_processed for update in topiq_updates] == [0, 0, 2, 4, 5]
-    assert [update.files_processed for update in arniqa_updates] == [0, 0, 2, 4, 5]
+    assert [update.files_processed for update in clipiqa_updates] == [0, 0, 2, 4, 5]
     assert topiq_updates[0].model_index == 1
     assert topiq_updates[0].model_count == 2
     assert topiq_updates[-1].files_total == 5
@@ -369,7 +376,7 @@ def test_compare_learned_models_can_keep_backends_loaded(tmp_path: Path) -> None
 
         comparison = compare_learned_models(
             connection,
-            model_names=["topiq_nr", "arniqa"],
+            model_names=["topiq_nr", "clipiqa"],
             learned_backend_factory=lambda model_name: ClosableBackend(model_name),
             release_backends=False,
         )

@@ -64,6 +64,13 @@ def test_route_shape_helpers_normalize_scan_compare_and_selection_payloads(tmp_p
     assert route_module._selection_excluded_ids({"exclude_file_ids": [1, 2]}) == {1, 2}
 
 
+def test_compare_request_rejects_disabled_model_names() -> None:
+    from shotsieve import web_request as request_module
+
+    with pytest.raises(ValueError, match="unknown or disabled"):
+        request_module.parse_compare_request({"models": ["topiq_nr", "qalign"]}, default_batch_size=4)
+
+
 def test_route_result_helpers_normalize_delete_and_export_payloads() -> None:
     from shotsieve import web_routes as route_module
 
@@ -287,13 +294,13 @@ class TestRouteHandling:
                         f"Host: 127.0.0.1:{server.server_port}\r\n"
                         f"Origin: http://127.0.0.1:{server.server_port}\r\n"
                         f"Content-Type: application/json\r\n"
-                        f"Content-Length: 19\r\n"
+                        f"Content-Length: 15\r\n"
                         f"Connection: close\r\n\r\n"
-                        "{\"scope\":"
+                    "{\"scope\":"
                     ).encode("utf-8")
                 )
                 time.sleep(0.35)
-                client.sendall(b'"missing"}')
+                client.sendall(b'"all"}')
 
                 response = read_socket_response(client)
         finally:

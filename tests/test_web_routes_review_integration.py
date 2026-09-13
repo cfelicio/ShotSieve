@@ -1,6 +1,7 @@
 """Integration tests for web review, export, preview, and cache routes."""
 from __future__ import annotations
 
+import csv
 import json
 import threading
 from types import SimpleNamespace
@@ -13,45 +14,89 @@ from urllib.error import HTTPError
 import pytest
 
 from shotsieve.db import database
+from shotsieve.review import _spreadsheet_safe_text
 from shotsieve.scanner import scan_root
 
 from conftest import create_image
 
 
 class TestWebRoutesReviewIntegration:
-    def test_cache_post_route_family_handles_missing_scope(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    def test_decision_csv_exports_all_marked_rows_for_one_root(self, test_server):
+        base_url, db_path, tmp_path = test_server
+        root_a = tmp_path / "library-a"
+        root_b = tmp_path / "library-b"
+        root_a.mkdir()
+        root_b.mkdir()
+        files = [
+            root_a / "approved, 日本.jpg",
+            root_a / "rejected.jpg",
+            root_a / "pending.jpg",
+            root_b / "other.jpg",
+        ]
+        for image_path in files:
+            create_image(image_path)
+
+        with database(db_path) as connection:
+            scan_root(connection, root=root_a, recursive=True, extensions=(".jpg",), preview_dir=tmp_path / "previews")
+            scan_root(connection, root=root_b, recursive=True, extensions=(".jpg",), preview_dir=tmp_path / "previews")
+            approved_id = int(connection.execute("SELECT id FROM files WHERE path = ?", (str(files[0]),)).fetchone()["id"])
+            rejected_id = int(connection.execute("SELECT id FROM files WHERE path = ?", (str(files[1]),)).fetchone()["id"])
+            connection.executemany(
+                """
+                INSERT INTO review_state(file_id, decision_state, delete_marked, export_marked, updated_time)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                [
+                    (approved_id, "export", 0, 1, "2026-07-20T00:00:01+00:00"),
+                    (rejected_id, "delete", 1, 0, "2026-07-20T00:00:02+00:00"),
+                ],
+            )
+
+        root_query = quote(str(root_a.resolve()), safe="")
+        response = urlopen(f"{base_url}/api/review/decisions.csv?root={root_query}&decision=both")
+        body = response.read()
+        text = body.decode("utf-8-sig")
+
+        assert response.headers["Content-Type"] == "text/csv; charset=utf-8"
+        assert "attachment" in response.headers["Content-Disposition"]
+        assert text.splitlines()[0] == "file_id,decision,source_path,library_root,decision_updated_time"
+        rows = list(csv.reader(text.splitlines()))
+        assert [row[0] for row in rows[1:]] == [str(approved_id), str(rejected_id)]
+        assert rows[1][1:] == ["approved", str(files[0]), str(root_a.resolve()), "2026-07-20T00:00:01+00:00"]
+        assert f"{rejected_id},rejected,{files[1]},{root_a.resolve()},2026-07-20T00:00:02+00:00" in text
+        assert str(root_b / "other.jpg") not in text
+        assert "pending.jpg" not in text
+        assert _spreadsheet_safe_text("=SUM(A1:A2)") == "'=SUM(A1:A2)"
+        assert _spreadsheet_safe_text("ordinary text") == "ordinary text"
+
+        approved_only = urlopen(f"{base_url}/api/review/decisions.csv?root={root_query}&decision=approved")
+        approved_text = approved_only.read().decode("utf-8-sig")
+        assert str(approved_id) in approved_text
+        assert str(rejected_id) not in approved_text
+
+    def test_decision_csv_validates_root_and_decision(self, test_server):
+        base_url, _, _ = test_server
+
+        with pytest.raises(HTTPError) as missing_root:
+            urlopen(f"{base_url}/api/review/decisions.csv")
+        assert missing_root.value.code == HTTPStatus.BAD_REQUEST
+
+        root_query = quote(str(Path("/does/not/matter").resolve()), safe="")
+        with pytest.raises(HTTPError) as bad_decision:
+            urlopen(f"{base_url}/api/review/decisions.csv?root={root_query}&decision=unknown")
+        assert bad_decision.value.code == HTTPStatus.BAD_REQUEST
+
+    def test_cache_post_route_family_rejects_missing_scope(self, tmp_path: Path):
         from shotsieve import web_routes as route_module
 
-        captured: dict[str, object] = {}
-        connection = object()
-        preview_root = (tmp_path / "previews").resolve()
-
-        class _DatabaseContext:
-            def __enter__(self):
-                return connection
-
-            def __exit__(self, exc_type, exc, tb):
-                return False
-
-        def fake_send_json(_handler, payload: object) -> None:
-            captured["payload"] = payload
-
-        def fake_clear_cache_scope(*_args, **_kwargs):
-            raise AssertionError("clear_cache_scope should not run for missing scope")
-
-        monkeypatch.setattr(route_module, "send_json", fake_send_json)
-
-        def fake_prune_missing_cache_entries(_connection, *, preview_cache_root):
-            captured["preview_cache_root"] = preview_cache_root
-            return 7
+        def required_choice(value, *, name, choices):
+            if value not in choices:
+                raise ValueError(f"{name} must be one of: {', '.join(choices)}")
+            return value
 
         deps = SimpleNamespace(
             read_json_body=lambda _handler, *, max_body_size: {"scope": "missing"},
-            required_choice=lambda value, *, name, choices: value,
-            database=lambda _path: _DatabaseContext(),
-            get_preview_cache_root=lambda _connection, *, db_path, persist: preview_root,
-            prune_missing_cache_entries=fake_prune_missing_cache_entries,
-            clear_cache_scope=fake_clear_cache_scope,
+            required_choice=required_choice,
         )
         context = route_module.WebRouteContext(
             db_path=tmp_path / "shotsieve.db",
@@ -66,11 +111,8 @@ class TestWebRoutesReviewIntegration:
         )
         handler = SimpleNamespace(path="/api/cache/clear", headers={"Content-Length": "20"})
 
-        handled = route_module._handle_cache_post_routes(handler, context, urlparse(handler.path))
-
-        assert handled is True
-        assert captured["preview_cache_root"] == preview_root
-        assert captured["payload"] == {"files": 7, "scores": 0, "review": 0, "scan_runs": 0}
+        with pytest.raises(ValueError, match="scope must be one of: scores, review, all"):
+            route_module._handle_cache_post_routes(handler, context, urlparse(handler.path))
 
     def test_analysis_diagnostics_route_returns_unscored_files_in_requested_root(self, test_server):
         base_url, db_path, tmp_path = test_server
@@ -345,21 +387,8 @@ class TestWebRoutesReviewIntegration:
         assert isinstance(first_page.get("selection_revision"), str)
         assert isinstance(second_page.get("selection_revision"), str)
 
-    def test_cache_clear_route_missing_scope_prunes_missing_entries(self, test_server, monkeypatch):
-        base_url, db_path, _ = test_server
-        from shotsieve import web as web_module
-
-        captured: dict[str, object] = {}
-
-        def fake_prune_missing_cache_entries(_connection, *, preview_cache_root):
-            captured["preview_cache_root"] = preview_cache_root
-            return 7
-
-        def fake_clear_cache_scope(*_args, **_kwargs):
-            raise AssertionError("clear_cache_scope should not run for missing scope")
-
-        monkeypatch.setattr(web_module, "prune_missing_cache_entries", fake_prune_missing_cache_entries)
-        monkeypatch.setattr(web_module, "clear_cache_scope", fake_clear_cache_scope)
+    def test_cache_clear_route_rejects_missing_scope(self, test_server):
+        base_url, _, _ = test_server
 
         request = Request(
             f"{base_url}/api/cache/clear",
@@ -368,12 +397,10 @@ class TestWebRoutesReviewIntegration:
             method="POST",
         )
 
-        response = urlopen(request)
-        payload = json.loads(response.read().decode("utf-8"))
+        with pytest.raises(HTTPError) as exc_info:
+            urlopen(request)
 
-        assert response.status == HTTPStatus.OK
-        assert payload == {"files": 7, "scores": 0, "review": 0, "scan_runs": 0}
-        assert captured["preview_cache_root"] == (db_path.parent / "previews").resolve()
+        assert exc_info.value.code == HTTPStatus.BAD_REQUEST
 
     def test_files_export_route_rejects_non_string_destination_and_mode(self, test_server, monkeypatch):
         base_url, _, _ = test_server

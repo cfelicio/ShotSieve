@@ -128,7 +128,8 @@ def test_integrated_release_script_does_not_include_directml_torch26_override_sw
 def test_integrated_release_script_uses_stable_directml_runtime_path_without_torch26_overrides() -> None:
     script_text = SCRIPT_PATH.read_text(encoding="utf-8")
 
-    assert "Installing default Torch runtime for DirectML target" in script_text
+    assert "Installing the pinned Torch/Torchvision/DirectML trio for DirectML target" in script_text
+    assert "torch==2.4.1 torchvision==0.19.1 torch-directml==0.2.5.dev240914" in script_text
     assert "torch==2.6.*" not in script_text
     assert "torchvision==0.21.*" not in script_text
 
@@ -381,7 +382,7 @@ def test_target_modules_do_not_keep_dead_imports() -> None:
     assert completed.returncode == 0, completed.stdout + completed.stderr
 
 
-def test_directml_extra_accepts_available_prerelease_torch_directml() -> None:
+def test_directml_extra_pins_the_supported_torch_trio() -> None:
     pyproject_text = (PROJECT_ROOT / "pyproject.toml").read_text(encoding="utf-8")
     pyproject = tomllib.loads(pyproject_text)
     directml_dependencies = pyproject["project"]["optional-dependencies"]["learned-iqa-directml"]
@@ -392,8 +393,11 @@ def test_directml_extra_accepts_available_prerelease_torch_directml() -> None:
     )
 
     assert torch_directml_dependency
-    assert ">=0.2.5.dev0" in torch_directml_dependency
+    assert "==0.2.5.dev240914" in torch_directml_dependency
+    assert "python_version >= '3.11'" in torch_directml_dependency
     assert "python_version < '3.13'" in torch_directml_dependency
+    assert any(entry.startswith("torch==2.4.1") for entry in directml_dependencies)
+    assert any(entry.startswith("torchvision==0.19.1") for entry in directml_dependencies)
 
 
 def test_learned_iqa_extras_include_icecream_dependency() -> None:
@@ -445,6 +449,7 @@ def test_tier1_release_matrix_covers_all_runtime_pack_targets() -> None:
     assert targets["linux-cpu"]["runsOn"] == "ubuntu-latest"
     assert targets["macos-mps"]["runsOn"] == "macos-latest"
     assert targets["windows-dml"]["extras"] == ["format-loaders", "learned-iqa-directml", "windows-build"]
+    assert targets["windows-dml"]["constraintsFile"] == "scripts/release-constraints-windows-dml.txt"
     assert targets["linux-nvidia"]["torchVariant"] == "cuda"
     assert targets["macos-mps"]["runtime"] == "mps"
     assert _string_value(targets["windows-cpu"]["archiveName"]).endswith(".zip")

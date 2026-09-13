@@ -18,8 +18,6 @@
       compareBatchSize,
       comparisonDefaults,
       currentResourceProfile,
-      modelDescriptions,
-      modelDisplayNames,
     } = compare;
     const {
       escapeHtml,
@@ -39,6 +37,22 @@
       pipelineOverallPercent,
     } = pollingModule;
 
+    function modelMetadata(modelName) {
+      const catalog = state.options?.learned?.model_catalog;
+      if (!Array.isArray(catalog)) {
+        return null;
+      }
+      return catalog.find((entry) => entry?.canonical_id === modelName) || null;
+    }
+
+    function modelLabel(modelName) {
+      return modelMetadata(modelName)?.label || modelName;
+    }
+
+    function modelDescription(modelName) {
+      return modelMetadata(modelName)?.description || "No detailed notes available for this model.";
+    }
+
     function compareRowSortChoices(modelNames) {
       const choices = [
         { value: "input", label: "Original order" },
@@ -46,7 +60,7 @@
       ];
 
       for (const modelName of modelNames) {
-        const label = modelDisplayNames[modelName] || modelName;
+        const label = modelLabel(modelName);
         choices.push({ value: `${modelName}:desc`, label: `${label} score (high → low)` });
         choices.push({ value: `${modelName}:asc`, label: `${label} score (low → high)` });
       }
@@ -154,7 +168,7 @@
         }
         failures.push({
           modelName,
-          label: modelDisplayNames[modelName] || modelName,
+          label: modelLabel(modelName),
           errorText,
         });
       }
@@ -312,7 +326,7 @@
           parts.push(`${formatDuration(runtime)} total`);
           parts.push(formatFilesPerSecond(comparison.files_compared, runtime));
         }
-        cards.push([modelDisplayNames[modelName] || modelName, parts.length ? parts.join(" · ") : "n/a"]);
+        cards.push([modelLabel(modelName), parts.length ? parts.join(" · ") : "n/a"]);
       }
 
       summaryCards.innerHTML = cards.map(([label, value]) => `
@@ -416,7 +430,7 @@
           return `
             <li class="compare-model-score ${getScoreColor(score)}">
               <div>
-                <strong>${escapeHtml(modelDisplayNames[modelName] || modelName)}</strong>
+                <strong>${escapeHtml(modelLabel(modelName))}</strong>
               </div>
               <div class="compare-model-score-values">
                 <span class="compare-score-value">${formatNumber(score)}</span>
@@ -454,15 +468,15 @@
         return;
       }
 
-      const modelsToRender = Array.isArray(allowedModels) && allowedModels.length ? allowedModels : (options?.learned_models?.length ? options.learned_models : ["topiq_nr", "clipiqa"]);
+      const modelsToRender = Array.isArray(allowedModels) ? allowedModels : [];
       const selected = new Set(comparisonDefaults(options, persisted, modelsToRender));
       target.innerHTML = modelsToRender.map((modelName) => `
         <label class="compare-model-card ${selected.has(modelName) ? "selected" : ""}">
           <div class="compare-model-card-head">
             <input type="checkbox" value="${escapeHtml(modelName)}" ${selected.has(modelName) ? "checked" : ""}>
             <span class="compare-model-card-copy">
-              <span class="compare-model-name">${escapeHtml(modelDisplayNames[modelName] || modelName)}</span>
-              <span class="field-hint">${escapeHtml(modelDescriptions[modelName] || "No detailed notes available for this model.")}</span>
+              <span class="compare-model-name">${escapeHtml(modelLabel(modelName))}</span>
+              <span class="field-hint">${escapeHtml(modelDescription(modelName))}</span>
             </span>
           </div>
         </label>

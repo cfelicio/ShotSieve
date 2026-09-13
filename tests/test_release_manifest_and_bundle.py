@@ -102,6 +102,11 @@ def test_release_constraints_file_exists_with_required_pins() -> None:
     assert "setuptools<81" in constraints_text
     assert "pyinstaller>=6.19,<7" in constraints_text
 
+    dml_constraints = (PROJECT_ROOT / "scripts" / "release-constraints-windows-dml.txt").read_text(encoding="utf-8")
+    assert "torch==2.4.1" in dml_constraints
+    assert "torchvision==0.19.1" in dml_constraints
+    assert "torch-directml==0.2.5.dev240914" in dml_constraints
+
 
 def test_release_targets_module_does_not_define_bootstrap_matrix_helpers() -> None:
     module_text = (PROJECT_ROOT / "src" / "shotsieve" / "release_targets.py").read_text(encoding="utf-8")
