@@ -202,6 +202,8 @@ For contributors investigating large-catalog responsiveness, [docs/performance-m
 
 The browser-focused frontend checks are intentionally about **visual QA** and visual usability for the photo-review workflow, not broad accessibility conformance claims.
 
+The frontend workflow facade is documented in [docs/frontend-workflows.md](docs/frontend-workflows.md). `app-workflows.js` keeps the stable `ShotSieveWorkflows` public surface and composes the dedicated library, export, compare, and polling modules; feature behavior belongs to the module that owns it.
+
 ## Security and licensing
 
 - [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md): third-party model and library licensing

@@ -18,6 +18,9 @@ All notable changes to this project will be documented in this file.
 
 ### Changed
 
+- Made the frontend workflow facade composition-only: library, export, and
+  compare behavior now stays in its owning module while `ShotSieveWorkflows`
+  preserves the existing public method names and cross-module operation wiring.
 - Refactored scanner discovery, batch flushing, executor setup, and scan-run
   finalization into focused helpers while preserving progress, cancellation,
   preview/cache, partial-commit, diagnostic, and accounting behavior across

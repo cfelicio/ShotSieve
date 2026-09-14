@@ -656,6 +656,28 @@ class TestStaticAssetHeaders:
         assert "function setBusy(" not in app_body
         assert "async function withBusy(" not in app_body
 
+    def test_static_workflow_facade_only_composes_domain_modules(self, test_server):
+        base_url, _, _ = test_server
+        facade_body = urlopen(f"{base_url}/app-workflows.js").read().decode("utf-8")
+        library_body = urlopen(f"{base_url}/app-workflow-library.js").read().decode("utf-8")
+        export_body = urlopen(f"{base_url}/app-workflow-export.js").read().decode("utf-8")
+
+        for function_name in (
+            "resetReviewFiltersForAnalyze",
+            "analyzeLibrary",
+            "saveReview",
+            "openOriginalFile",
+        ):
+            assert f"function {function_name}(" not in facade_body
+            assert f"async function {function_name}(" not in facade_body
+
+        assert "Object.assign(" in facade_body
+        assert "window.ShotSieveWorkflowLibrary.createWorkflowLibrary" in facade_body
+        assert "window.ShotSieveWorkflowExport.createWorkflowExport" in facade_body
+        assert "function analyzeLibrary()" in library_body
+        assert "function openOriginalFile(fileId)" in library_body
+        assert "function saveReview(payload)" in export_body
+
     def test_static_js_omits_hidden_review_compare_overlay_logic(self, test_server):
         base_url, _, _ = test_server
         body = self._combined_js(base_url)
@@ -742,14 +764,15 @@ class TestStaticAssetHeaders:
         state_body = urlopen(f"{base_url}/app-state.js").read().decode("utf-8")
         controller_body = urlopen(f"{base_url}/app-controller.js").read().decode("utf-8")
         workflows_body = urlopen(f"{base_url}/app-workflows.js").read().decode("utf-8")
+        library_body = urlopen(f"{base_url}/app-workflow-library.js").read().decode("utf-8")
         events_body = urlopen(f"{base_url}/app-events.js").read().decode("utf-8")
 
         assert 'previewMode:' not in state_body
         assert 'currentPreviewMode' not in workflows_body
         assert 'preview_mode:' not in workflows_body
         assert 'preview-mode-select' not in events_body
-        assert 'const reviewRoot = syncReviewRoot(root) || root;' in workflows_body
-        assert 'rootFilter.add(new Option(root, root, true, true));' in workflows_body
+        assert 'const reviewRoot = syncReviewRoot(root) || root;' in library_body
+        assert 'rootFilter.add(new Option(root, root, true, true));' in library_body
         assert 'replace(/^(?:\\.\\/|~\\/)+/, "")' in controller_body
         assert 'rootFilter.add(new Option(previous, previous, false, true));' in controller_body
 
@@ -927,11 +950,11 @@ class TestStaticAssetHeaders:
     def test_static_review_open_file_uses_local_open_endpoint(self, test_server):
         base_url, _, _ = test_server
         review_body = urlopen(f"{base_url}/app-review.js").read().decode("utf-8")
-        workflows_body = urlopen(f"{base_url}/app-workflows.js").read().decode("utf-8")
+        library_body = urlopen(f"{base_url}/app-workflow-library.js").read().decode("utf-8")
 
         assert "openOriginalFile(detail.id)" in review_body
         assert "event.preventDefault();" in review_body
-        assert 'postJson("/api/files/open", { file_id: Number(fileId) })' in workflows_body
+        assert 'postJson("/api/files/open", { file_id: Number(fileId) })' in library_body
 
     def test_static_js_compare_cards_use_header_rows_for_alignment(self, test_server):
         base_url, _, _ = test_server
