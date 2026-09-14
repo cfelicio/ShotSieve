@@ -74,6 +74,73 @@ code integration. DirectML is being retired rather than ported: its available To
 2.4.1 stack conflicts with Q-ReAlign's published Torch >=2.6 requirement, so
 installing Python 3.12 or downloading the weights does not establish support.
 
+## W05 model and release evidence - 2026-09-13
+
+This session completed one exact Windows candidate-target gate against the
+current source. W05 is not a release-ready or fully validated item.
+
+The exact `windows-cpu` environment at
+`build/w01-release-targets/windows-cpu/.venv` reports Python 3.13.14,
+Torch 2.14.0+cpu, Torchvision 0.29.0+cpu, PyIQA 0.1.16, and `pip check` with
+no broken requirements. The matching frozen bundle passed launcher `--help`,
+contained 20,962 archive entries, exactly one expected launcher, and zero
+`.safetensors`, `.ckpt`, `.pth`, or `.pt` files. Its archive also contains the
+exact package `dist-info` records and dependency license trees. Preserve this
+archive as:
+
+`build/w05-dist/ShotSieve-windows-cpu-x64.zip`
+
+with SHA-256
+`1A8C2BAAA8AB54963AD9592B092194300F4A13BD69A6BC4506A95CA2270E79C7`.
+
+The extracted CPU bundle used fresh isolated data at
+`build/w05-cpu-bundle-data` and the external cache
+`build/audit-model-cache-latest`. It scanned one disposable JPEG and completed
+one CPU TOPIQ score: scan `files_seen=1`, `added=1`, `failed=0`, about
+`0.0267s`; score `files_scored=1`, `learned_scored=1`, `skipped=0`, `failed=0`,
+about `5.798s`. The SQLite score row recorded raw `0.42987313866615295`,
+normalized/overall `42.987313866615295`, and
+`learned:pyiqa:0.1.16:topiq_nr:cpu`. This is TOPIQ candidate evidence only;
+it is not Q-ReAlign Mini evidence and is not a no-CUDA hardware pass because
+the host has an NVIDIA RTX 5060 Ti.
+
+The exact `windows-nvidia` environment also built and passed launcher help,
+archive inventory, zero-weight, and single-launcher checks. Its archive is
+`build/w05-dist/ShotSieve-windows-nvidia-x64.zip` with SHA-256
+`3A448D7222BE923595D8E22791118695E571F206A9D5FE428F9B147D1D0E0900`.
+The NVIDIA bundle was not scored: the sandboxed support install could not open
+network sockets, while the escalated sidecar install reached Torch/Torchvision/
+PyIQA installation but the packaged repair process exited before dependencies
+stabilized; a restart still reported missing `sympy`. No NVIDIA pass is
+claimed.
+
+The fresh Q-ReAlign Mini CPU attempt reached only `preparing_model` after about
+150 seconds. Its pending record is
+`build/w05-qrealign-mini-cpu-data/model-preparation.json` and contains the
+immutable revision `fe1f45a7574c9e9d908875af9f7e90cb946aa19f`, requested CPU
+runtime, and resolved dependency metadata, but no downloaded weights, report,
+score, peak memory, or processed image. The prior CUDA attempt likewise has
+only a pending preparation record. These unavailable model checks are blockers,
+not passes.
+
+Continuation attempt: a fresh CPU run with network access enabled used
+`build/w05-qrealign-mini-cpu-online2-cache` and
+`build/w05-qrealign-mini-cpu-online2-data`. It obtained tokenizer and
+configuration files, but no Q-ReAlign checkpoint or incomplete weight payload;
+after about 150 seconds it had no active Hub connection and was stopped. The
+preparation record remains `preparing_model` with zero images and no report or
+score. No offline command was run because the complete-cache prerequisite was
+not satisfied. This confirms an external model-acquisition blocker, not a
+successful CPU or offline result.
+
+Gate status after this session: I06 has exact Windows CPU/NVIDIA build evidence
+only; R01 still lacks fresh model-candidate online/offline and corrupt-cache
+evidence; R02 still lacks stable NVIDIA scoring and Linux/macOS bundles; R03
+lacks Mini/XPU/ROCm/MPS provider evidence; R04 and the human visual/accessibility
+review were not run. Continue with the fresh Q-ReAlign commands below on a
+network-capable runner, then repeat each completed cache in a new process with
+network access disabled.
+
 ## DirectML retirement implementation follow-up - 2026-09-13
 
 The source implementation and regression coverage are complete. DirectML is no
