@@ -4,14 +4,42 @@ from __future__ import annotations
 import json
 import threading
 import time
+from dataclasses import FrozenInstanceError
 from pathlib import Path
 from types import SimpleNamespace
 from urllib.request import Request, urlopen
+
+import pytest
 
 from shotsieve.db import database, initialize_database
 from shotsieve.web import build_handler
 
 from conftest import create_image, find_free_port
+
+
+def test_scan_job_request_snapshots_mutable_request_values(tmp_path: Path):
+    from shotsieve.web_request import parse_scan_request
+    from shotsieve.web_route_scan import _ScanJobRequest
+
+    first_root = tmp_path / "first"
+    second_root = tmp_path / "second"
+    first_root.mkdir()
+    second_root.mkdir()
+    parsed = parse_scan_request({
+        "roots": [str(first_root)],
+        "ignore_rules": ["ignored"],
+        "files_total_hint": 7,
+    })
+    request = _ScanJobRequest.from_scan_request(parsed)
+
+    parsed["roots"].append(second_root)
+    parsed["ignore_rules"].append("changed")
+
+    assert request.roots == (first_root.resolve(),)
+    assert request.ignore_rules == ("ignored",)
+    assert request.files_total_hint == 7
+    with pytest.raises(FrozenInstanceError):
+        request.offset = 4
 
 
 class TestRouteHandlingAsync:

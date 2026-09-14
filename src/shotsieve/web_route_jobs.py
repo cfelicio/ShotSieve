@@ -3,19 +3,12 @@ from __future__ import annotations
 import sys
 from collections.abc import Callable
 from dataclasses import dataclass
+from functools import partial
 from http import HTTPStatus
-from pathlib import Path
 from typing import Any, cast
 from urllib.parse import parse_qs, urlparse
 
 from shotsieve.config import normalize_raw_preview_mode
-from shotsieve.db import (
-    attach_scan_run_diagnostic,
-    mark_scan_run_diagnostic_persisted,
-    persist_scan_run_diagnostic,
-    scan_run_diagnostic_from_exception,
-    scan_run_diagnostic_was_persisted,
-)
 from shotsieve.job_registry import JobRegistry
 from shotsieve.learned_iqa import DEFAULT_MODEL_NAME
 from shotsieve.learned_iqa_catalog import validate_model_name
@@ -24,12 +17,25 @@ from shotsieve.model_assets import (
     classify_preparation_error,
     read_preparation_record,
 )
-from shotsieve.models import ScanRunDiagnostic
 from shotsieve.scoring import AnalysisProgress
 from shotsieve.web_route_common import (
     WebRouteContext,
     WebRouteDependencies,
 )
+from shotsieve import web_route_scan as _scan_runner
+
+# Keep the historical private helper imports available to web_routes and
+# integrations while the implementation lives in the dedicated scan runner.
+_ScanJobRequest = _scan_runner._ScanJobRequest
+_finalize_scan_job = _scan_runner._finalize_scan_job
+_raise_if_scan_cancelled = _scan_runner._raise_if_scan_cancelled
+_resolved_scan_root = _scan_runner._resolved_scan_root
+_run_scan_job = _scan_runner._run_scan_job
+_scan_job_summary = _scan_runner._scan_job_summary
+_scan_offset_consumed = _scan_runner._scan_offset_consumed
+_scan_one_root = _scan_runner._scan_one_root
+_scan_root_report = _scan_runner._scan_root_report
+_scan_root_report_from_exception = _scan_runner._scan_root_report_from_exception
 
 
 def _get_web_routes() -> Any:
@@ -349,115 +355,14 @@ def _send_rows_total_estimate(handler: Any, context: WebRouteContext) -> None:
     routes.send_json(handler, {"rows_total": rows_total})
 
 
-def _scan_offset_consumed(summary: Any, *, requested_offset: int) -> int:
-    consumed = getattr(summary, "offset_consumed", None)
-    if isinstance(consumed, int):
-        return max(0, min(requested_offset, consumed))
-
-    files_seen = int(getattr(summary, "files_seen", 0) or 0)
-    if requested_offset > 0 and files_seen > 0:
-        return requested_offset
-    return 0
-
-
-def _raise_if_scan_cancelled(registry: JobRegistry, job_id: str) -> None:
-    if registry.is_cancelled(job_id):
-        raise InterruptedError("Scan job was cancelled by user.")
-
-
-def _resolved_scan_root(root: Path) -> str:
-    try:
-        return str(root.expanduser().resolve())
-    except OSError:
-        return str(root.expanduser())
-
-
-def _scan_root_report(
-    root: Path,
-    *,
-    status: str,
-    summary: Any = None,
-    error_text: str | None = None,
-) -> dict[str, object]:
-    return {
-        "root_path": _resolved_scan_root(root),
-        "status": status,
-        "files_seen": int(getattr(summary, "files_seen", 0) or 0),
-        "files_added": int(getattr(summary, "files_added", 0) or 0),
-        "files_updated": int(getattr(summary, "files_updated", 0) or 0),
-        "files_unchanged": int(getattr(summary, "files_unchanged", 0) or 0),
-        "files_removed": int(getattr(summary, "files_removed", 0) or 0),
-        "files_failed": int(getattr(summary, "files_failed", 0) or 0),
-        "error_text": error_text,
-    }
-
-
-def _scan_root_report_from_exception(
-    root: Path,
-    exc: BaseException,
-    *,
-    started_time: str,
-    db_path: Path,
-) -> dict[str, object]:
-    diagnostic = scan_run_diagnostic_from_exception(exc)
-    if diagnostic is None:
-        diagnostic = ScanRunDiagnostic(
-            root_path=_resolved_scan_root(root),
-            started_time=started_time,
-            completed_time=started_time,
-            status="failed",
-            files_seen=max(0, int(getattr(exc, "processed_count", 0) or 0)),
-            error_text=str(exc) or exc.__class__.__name__,
-        )
-        attach_scan_run_diagnostic(exc, diagnostic)
-
-    persistence_error: str | None = None
-    if not scan_run_diagnostic_was_persisted(exc):
-        try:
-            persist_scan_run_diagnostic(db_path, diagnostic)
-        except Exception as exc_persist:
-            persistence_error = str(exc_persist) or exc_persist.__class__.__name__
-        else:
-            mark_scan_run_diagnostic_persisted(exc)
-
-    error_text = diagnostic.error_text
-    if persistence_error:
-        error_text = f"{error_text or exc.__class__.__name__}; failed to persist scan diagnostic: {persistence_error}"
-
-    return {
-        "root_path": diagnostic.root_path,
-        "status": "cancelled" if isinstance(exc, InterruptedError) else diagnostic.status,
-        "files_seen": diagnostic.files_seen,
-        "files_added": diagnostic.files_added,
-        "files_updated": diagnostic.files_updated,
-        "files_unchanged": diagnostic.files_unchanged,
-        "files_removed": diagnostic.files_removed,
-        "files_failed": 0,
-        "error_text": error_text,
-    }
-
-
-def _scan_job_summary(
-    aggregated: dict[str, int],
-    root_results: list[dict[str, object]],
-    *,
-    overall_status: str,
-) -> dict[str, object]:
-    return {
-        **aggregated,
-        "root_results": root_results,
-        "overall_status": overall_status,
-    }
-
-
 def start_scan_job(handler: Any, context: WebRouteContext, payload: dict[str, object]) -> None:
     deps = cast(WebRouteDependencies, context.dependencies)
     routes = _get_web_routes()
     scan_registry = routes._require_registry(context.scan_registry, label="Scan")
-    scan_request = deps.parse_scan_request(payload)
+    request = _ScanJobRequest.from_scan_request(deps.parse_scan_request(payload))
 
     from shotsieve.scanner import check_overlapping_roots
-    overlaps = check_overlapping_roots(scan_request["roots"])
+    overlaps = check_overlapping_roots(request.roots)
     if overlaps:
         parent, child = overlaps[0]
         handler.send_error(HTTPStatus.BAD_REQUEST, f"Overlapping folders detected: '{child}' is a subfolder of '{parent}'. Please remove the subfolder.")
@@ -466,176 +371,15 @@ def start_scan_job(handler: Any, context: WebRouteContext, payload: dict[str, ob
     if not routes.try_acquire_operation_lock(handler, context):
         return
 
-    total_hint = max(0, routes._scan_request_total_hint(scan_request))
+    total_hint = request.files_total_hint
     job_id = scan_registry.create(initial_progress={
         "phase": "indexing",
         "files_processed": 0,
         "files_total": total_hint,
     })
 
-    def run_scan_job() -> None:
-        aggregated = {
-            "files_seen": 0,
-            "files_added": 0,
-            "files_updated": 0,
-            "files_unchanged": 0,
-            "files_removed": 0,
-            "files_failed": 0,
-        }
-        root_results: list[dict[str, object]] = []
-        try:
-            config = deps.build_config(
-                str(context.db_path),
-                raw_preview_dir=scan_request["preview_dir"],
-                raw_extensions=scan_request["extensions"],
-                raw_preview_mode=scan_request["preview_mode"],
-            )
-            scan_registry.update_progress(job_id, {
-                "phase": "scanning",
-                "files_processed": 0,
-                "files_total": total_hint,
-            })
-
-            processed_before_root = 0
-            remaining_offset = max(0, routes._scan_request_offset(scan_request))
-            remaining_limit = scan_request["limit"]
-
-            def publish_progress(processed_in_root: int, _root_total: int, phase: str) -> None:
-                files_total = total_hint if total_hint > 0 else 0
-                scan_registry.update_progress(job_id, {
-                    "phase": phase,
-                    "files_processed": max(0, processed_before_root + processed_in_root),
-                    "files_total": files_total,
-                })
-
-            roots = routes._scan_request_roots(scan_request)
-            failure_error: str | None = None
-            failure_progress: dict[str, object] | None = None
-            for root_index, root in enumerate(roots):
-                root_started_time = deps.utc_now()
-                try:
-                    routes._raise_if_scan_cancelled(scan_registry, job_id)
-                    if remaining_limit is not None and remaining_limit <= 0:
-                        root_results.extend(
-                            _scan_root_report(
-                                later_root,
-                                status="not_processed",
-                                error_text="Not processed because the scan limit was reached.",
-                            )
-                            for later_root in roots[root_index:]
-                        )
-                        break
-
-                    root_total_hint = None
-                    if total_hint > 0:
-                        root_total_hint = max(0, total_hint - processed_before_root)
-
-                    root_offset = remaining_offset
-                    # Each root owns an independent transaction.  A failed
-                    # root therefore rolls back only its own catalog work.
-                    root_exception: BaseException | None = None
-                    with deps.database(config.db_path) as connection:
-                        try:
-                            summary = deps.scan_root(
-                                connection,
-                                root=root,
-                                recursive=scan_request["recursive"],
-                                limit=remaining_limit,
-                                offset=root_offset,
-                                extensions=config.supported_extensions,
-                                preview_dir=config.preview_dir,
-                                rescan_all=scan_request["rescan_all"],
-                                generate_previews=scan_request["generate_previews"],
-                                raw_preview_mode=config.raw_preview_mode,
-                                resource_profile=scan_request["resource_profile"],
-                                progress_callback=publish_progress,
-                                files_total_hint=root_total_hint,
-                                cancel_check=lambda: routes._raise_if_scan_cancelled(scan_registry, job_id),
-                                ignore_rules=scan_request["ignore_rules"],
-                            )
-                        except InterruptedError as exc:
-                            # Preserve the established best-effort cancellation
-                            # behavior: batches already committed by scan_root
-                            # remain visible when this root's transaction exits.
-                            root_exception = exc
-                    if root_exception is not None:
-                        raise root_exception
-                    aggregated["files_seen"] += summary.files_seen
-                    aggregated["files_added"] += summary.files_added
-                    aggregated["files_updated"] += summary.files_updated
-                    aggregated["files_unchanged"] += summary.files_unchanged
-                    aggregated["files_removed"] += summary.files_removed
-                    aggregated["files_failed"] += summary.files_failed
-                    processed_before_root += summary.files_seen
-                    remaining_offset = max(0, remaining_offset - routes._scan_offset_consumed(summary, requested_offset=root_offset))
-                    if remaining_limit is not None:
-                        remaining_limit = max(0, remaining_limit - summary.files_seen)
-                    root_results.append(
-                        _scan_root_report(
-                            root,
-                            status="completed_with_errors" if summary.files_failed else "completed",
-                            summary=summary,
-                            error_text=getattr(summary, "last_batch_error", None),
-                        )
-                    )
-                except Exception as exc:
-                    root_report = _scan_root_report_from_exception(
-                        root,
-                        exc,
-                        started_time=root_started_time,
-                        db_path=context.db_path,
-                    )
-                    root_results.append(root_report)
-                    root_results.extend(
-                        _scan_root_report(
-                            later_root,
-                            status="not_processed",
-                            error_text="Not processed because an earlier root failed.",
-                        )
-                        for later_root in roots[root_index + 1:]
-                    )
-                    failure_error = str(root_report.get("error_text") or exc) or exc.__class__.__name__
-                    files_processed = processed_before_root + int(root_report.get("files_seen", 0) or 0)
-                    failure_progress = {
-                        "phase": "failed",
-                        "files_processed": max(0, files_processed),
-                        "files_total": total_hint if total_hint > 0 else max(0, files_processed),
-                    }
-                    break
-
-            if failure_error is not None:
-                scan_registry.fail(
-                    job_id,
-                    error=failure_error,
-                    progress=failure_progress,
-                    summary=_scan_job_summary(aggregated, root_results, overall_status="failed"),
-                )
-                return
-
-            scan_registry.update_progress(job_id, {
-                "phase": "scanning",
-                "files_processed": aggregated["files_seen"],
-                "files_total": total_hint if total_hint > 0 else aggregated["files_seen"],
-            })
-            overall_status = (
-                "completed_with_errors"
-                if any(item["status"] == "completed_with_errors" for item in root_results)
-                else "completed"
-            )
-            scan_registry.complete(
-                job_id,
-                summary=_scan_job_summary(aggregated, root_results, overall_status=overall_status),
-            )
-        except Exception as exc:
-            scan_registry.fail(
-                job_id,
-                error=str(exc) or exc.__class__.__name__,
-                summary=_scan_job_summary(aggregated, root_results, overall_status="failed"),
-            )
-        finally:
-            context.operation_lock.release()
-
-    deps.thread_factory(target=run_scan_job, daemon=True).start()
+    worker = partial(_run_scan_job, context, request, scan_registry, job_id)
+    deps.thread_factory(target=worker, daemon=True).start()
     routes.send_json(handler, {"job_id": job_id, "status": "running"})
 
 

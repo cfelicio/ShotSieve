@@ -18,6 +18,10 @@ All notable changes to this project will be documented in this file.
 
 ### Changed
 
+- Extracted multi-root scan job execution into a dedicated runner with an
+  immutable request snapshot, explicit per-root attempts, and centralized
+  result/diagnostic finalization while preserving pagination, progress,
+  cancellation, transaction, and route payload contracts.
 - Split selected-model preparation into explicit context, storage, backend,
   generated-image validation, and durable-record phases while preserving the
   public preparation contract, state transitions, atomic writes, diagnostics,
