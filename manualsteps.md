@@ -206,6 +206,21 @@ outside the packaged release matrix, and uses `scripts/model_smoke.py` to
 write sanitized one-image evidence. The code/docs portion is complete; the
 hardware checks below remain open until they run on supported Intel hardware.
 
+The AMD ROCm source-install implementation is documented in
+[docs/amd-rocm.md](docs/amd-rocm.md). It uses the AMD-validated ROCm 7.2.1
+PyTorch 2.9.1/Python 3.12 wheel family, keeps Linux as the primary path, and
+keeps the optional Windows path limited to AMD's explicit compatibility
+matrix. The logical `rocm` runtime maps to Torch's HIP-backed CUDA device API
+but reports AMD/ROCm identity in the app and smoke report. The code/docs portion
+is complete; no AMD hardware or model evidence is available in this workspace.
+
+Automated evidence for the source implementation: the directly affected
+runtime/model-smoke/release suite passed **54 tests**; the full suite passed
+**636 tests, 1 skipped** (the opt-in performance baseline); focused Ruff,
+Python compilation, `git diff --check`, and six-target release-matrix
+generation passed. These are code/regression checks only and do not close the
+AMD hardware or model gates below.
+
 - [x] Keep Intel XPU source-only and out of the packaged release target matrix.
 - [x] Document isolated Windows/Linux installation, exact Python/wheel
   recording, driver recording, native tensor verification, cache isolation,
@@ -226,14 +241,30 @@ hardware checks below remain open until they run on supported Intel hardware.
   Python, driver, runtime, cache paths, raw/normalized score, elapsed time,
   and peak memory from the smoke report. A source-install pass does not
   authorize a packaged XPU target.
+- [x] Keep AMD ROCm source-only and out of the packaged release target matrix.
+- [x] Document the Linux-first AMD install, exact ROCm/PyTorch wheel pair,
+  supported Windows limitation, HIP tensor check, cache isolation, and
+  online/offline smoke commands in [docs/amd-rocm.md](docs/amd-rocm.md).
+- [x] Preserve an explicit `rocm` runtime and `amd -> rocm` alias for a
+  detected HIP build; unavailable AMD requests retain CPU fallback with an
+  actionable ROCm diagnostic.
+- [x] Extend smoke evidence with HIP/ROCm version, GPU name/architecture,
+  runtime, driver field, score, elapsed time, and peak memory without adding a
+  packaged target.
 - [ ] **AMD ROCm/Linux:** on a GPU listed in AMD's current matrix, install the
-  supported ROCm/PyTorch pair and run the same online/offline one-image checks.
-  Record the ROCm version, GPU architecture, driver, Python, Torch build,
-  scores, and peak memory. Keep unsupported Radeon cards on CPU.
-- [ ] **AMD ROCm/Windows (optional):** test only a GPU and Python/Torch/ROCm
-  combination explicitly listed by AMD. Windows ROCm support is narrower than
-  Linux and may require a target-specific wheel; do not infer support from a
-  Linux run or from generic CPU/CUDA wheels.
+  exact supported ROCm/PyTorch pair in a fresh Python 3.12 environment using
+  [docs/amd-rocm.md](docs/amd-rocm.md) and
+  `scripts/source-constraints-rocm.txt`. Run TOPIQ and CLIPIQA on one
+  disposable JPEG, then Q-ReAlign Mini only after W04 adds it. Repeat every
+  model from a complete network-disabled cache. Record the ROCm version, GPU
+  architecture, driver, Python, Torch build, cache paths, raw/normalized
+  scores, elapsed time, and peak memory. Keep unsupported Radeon cards on CPU.
+- [ ] **AMD ROCm/Windows (optional):** test only the exact GPU, Python 3.12,
+  driver, Torch, and ROCm combination explicitly listed by AMD, using the
+  Windows source constraints in `scripts/source-constraints-rocm-windows.txt`.
+  Windows ROCm support is narrower than Linux and covers PyTorch rather than
+  the full ROCm stack; do not infer support from a Linux run or generic
+  CPU/CUDA wheels.
 - [ ] For each successful track, update the runtime catalog, installer/build
   constraints, release target, user-facing hardware wording, and third-party
   notices together. If a provider cannot run Q-ReAlign Mini, record model-level

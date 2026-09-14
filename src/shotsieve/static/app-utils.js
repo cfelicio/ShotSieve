@@ -342,6 +342,7 @@
   function runtimeDisplayName(runtime) {
     const labels = {
       cuda: "CUDA",
+      rocm: "AMD ROCm",
       xpu: "XPU",
       mps: "MPS",
       cpu: "CPU",
@@ -371,7 +372,7 @@
   }
 
   function summarizeAccelerators(statusMap) {
-    const orderedAccelerators = ["cuda", "xpu", "mps"];
+    const orderedAccelerators = ["rocm", "cuda", "xpu", "mps"];
     return orderedAccelerators
       .map((runtime) => {
         const status = statusMap[runtime] || "unknown";
@@ -381,7 +382,7 @@
   }
 
   function summarizeAutoPriority(options) {
-    const priorityRaw = String(options?.learned?.auto_runtime_priority || "cuda,xpu,cpu");
+    const priorityRaw = String(options?.learned?.auto_runtime_priority || "rocm,cuda,xpu,cpu");
     const priority = priorityRaw
       .split(",")
       .map((runtime) => runtime.trim())

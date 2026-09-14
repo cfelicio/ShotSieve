@@ -29,16 +29,17 @@ If you are choosing between the packaged builds, pick the one that matches your 
 | `CPU` | Any machine, safest fallback | Runs entirely on the processor. Slowest, but the most compatible. |
 | `NVIDIA / CUDA` | Windows or Linux machines with an NVIDIA GPU | Best choice when you have a supported NVIDIA card and want the fastest learned-IQA scoring. |
 | `Intel XPU` (source install) | Supported Intel accelerators with the matching PyTorch XPU runtime | Source-install path; not a packaged runtime download. |
+| `AMD ROCm` (source install) | AMD GPUs in the current ROCm/PyTorch support matrix | Linux-first source-install path; not a packaged runtime download. |
 | `Apple Silicon / MPS` | Recent Macs with Apple Silicon | Best choice on Apple Silicon when you want GPU acceleration without a separate CUDA stack. |
 
 Practical rule of thumb:
 
 - If you have an NVIDIA GPU, choose **CUDA**.
 - If you are on Apple Silicon, choose **MPS**.
-- If you are on Windows without a validated CUDA or XPU runtime, choose **CPU**.
+- If you are on Windows without a validated CUDA, XPU, or explicitly supported ROCm runtime, choose **CPU**.
 - If you just want the most reliable option or are unsure, choose **CPU**.
 
-Intel XPU remains a source-install/runtime option today, but it is not one of the packaged runtime downloads listed above. See [docs/intel-xpu.md](docs/intel-xpu.md) for the pinned Windows/Linux install and one-image evidence workflow.
+Intel XPU and AMD ROCm remain source-install/runtime options today, but neither is one of the packaged runtime downloads listed above. See [docs/intel-xpu.md](docs/intel-xpu.md) and [docs/amd-rocm.md](docs/amd-rocm.md) for the pinned install and one-image evidence workflows.
 
 ## Quick start with `shotsieve-desktop`
 
@@ -134,11 +135,12 @@ Runtime names you may see in settings or developer docs:
 - `cpu`: no GPU acceleration
 - `cuda`: NVIDIA GPU acceleration
 - `xpu`: Intel accelerator path for source installs where the local PyTorch runtime exposes it
+- `rocm`: AMD ROCm path for source installs where the local HIP-enabled PyTorch runtime exposes it
 - `mps`: Apple Silicon GPU acceleration
 
 The Settings model list is populated from runtime discovery. If discovery or initialization is unavailable, the list stays empty instead of claiming that a model is ready. Auto mode may fall back to CPU and reports the failed accelerator reason; an explicitly requested unavailable runtime fails with recovery guidance.
 
-The release and sidecar paths use the tested learned-IQA package set `pyiqa==0.1.16`, `timm==1.0.29`, `huggingface-hub==1.31.0`, `transformers==5.17.0`, and `openai-clip==1.0.1`, `accelerate==1.15.0`, `sentencepiece==0.2.2`, and `einops==0.8.2`. CPU, CUDA, and Apple MPS targets use `torch==2.14.0` with `torchvision==0.29.0`; CUDA selects the cu130 index and CPU selects the PyTorch CPU index. Windows AMD hardware falls back to CPU until a native ROCm path is validated. The retired DirectML package and release target are not installed or published.
+The release and sidecar paths use the tested learned-IQA package set `pyiqa==0.1.16`, `timm==1.0.29`, `huggingface-hub==1.31.0`, `transformers==5.17.0`, and `openai-clip==1.0.1`, `accelerate==1.15.0`, `sentencepiece==0.2.2`, and `einops==0.8.2`. CPU, CUDA, and Apple MPS targets use `torch==2.14.0` with `torchvision==0.29.0`; CUDA selects the cu130 index and CPU selects the PyTorch CPU index. AMD ROCm is a Linux-first source-install track using AMD's exact supported ROCm/PyTorch wheels; unsupported Windows AMD hardware falls back to CPU. The retired DirectML package and release target are not installed or published.
 
 The manual/weekly model smoke workflow installs these constraints, runs `pip check`, prepares TOPIQ and CLIPIQA in separate fresh caches, and repeats both checks offline in a new process. It records resolved versions and retains sanitized JSON diagnostics on failure; caches, weights, and generated images are not uploaded.
 

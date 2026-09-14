@@ -22,6 +22,8 @@ MATRIX_SCRIPT_PATH = PROJECT_ROOT / "scripts" / "release_target_matrix.py"
 BUNDLE_SCRIPT_PATH = PROJECT_ROOT / "scripts" / "build_portable_bundle.py"
 RELEASE_CONSTRAINTS_PATH = PROJECT_ROOT / "scripts" / "release-constraints.txt"
 XPU_CONSTRAINTS_PATH = PROJECT_ROOT / "scripts" / "source-constraints-xpu.txt"
+ROCM_CONSTRAINTS_PATH = PROJECT_ROOT / "scripts" / "source-constraints-rocm.txt"
+ROCM_WINDOWS_CONSTRAINTS_PATH = PROJECT_ROOT / "scripts" / "source-constraints-rocm-windows.txt"
 LOCAL_ONLY_REPO_RELATIVE_PATHS = (
     "blog.md",
     ".github/agents/anvil.agent.md",
@@ -383,6 +385,30 @@ def test_xpu_source_track_is_pinned_and_not_in_release_matrix() -> None:
     assert "https://download.pytorch.org/whl/xpu" in xpu_doc
     assert "--driver-version" in xpu_doc
     assert "qrealign-mini" in xpu_doc
+
+
+def test_rocm_source_track_is_pinned_and_not_in_release_matrix() -> None:
+    constraints = ROCM_CONSTRAINTS_PATH.read_text(encoding="utf-8")
+    windows_constraints = ROCM_WINDOWS_CONSTRAINTS_PATH.read_text(encoding="utf-8")
+    assert "torch==2.9.1+rocm7.2.1" in constraints
+    assert "torchvision==0.24.0+rocm7.2.1" in constraints
+    assert "torch==2.9.1+rocm7.2.1" in windows_constraints
+    assert "torchvision==0.24.1" in windows_constraints
+
+    from shotsieve.dependency_constraints import model_requirements_for_runtime
+
+    assert model_requirements_for_runtime("ROCm")[-2:] == (
+        "torch==2.9.1+rocm7.2.1.lw.gitff65f5bc",
+        "torchvision==0.24.0+rocm7.2.1.gitb919bd0c",
+    )
+
+    matrix = run_release_matrix("runtime")
+    assert not any("rocm" in str(entry["id"]).casefold() for entry in matrix)
+
+    rocm_doc = (PROJECT_ROOT / "docs" / "amd-rocm.md").read_text(encoding="utf-8")
+    assert "rocm7.2.1" in rocm_doc
+    assert "--driver-version" in rocm_doc
+    assert "qrealign-mini" in rocm_doc
 
 
 def test_pyproject_does_not_expose_removed_cli_entry_point() -> None:

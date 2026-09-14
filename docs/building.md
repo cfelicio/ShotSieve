@@ -31,6 +31,12 @@ driver prerequisites, runtime probe, and model-evidence commands are in
 for an XPU environment; use `scripts/source-constraints-xpu.txt` and the
 official PyTorch XPU wheel index.
 
+AMD ROCm is also a source-install-only track, Linux first. The exact
+ROCm/PyTorch wheels, AMD driver boundary, Windows limitation, runtime probe,
+and model-evidence commands are in [amd-rocm.md](./amd-rocm.md). Do not use
+the CPU/CUDA release constraints for ROCm; use the matching source constraints
+and AMD's current hardware matrix. No ROCm pack is published.
+
 ## Desktop entry point
 
 ShotSieve is desktop-first. For source installs and editable installs, the main entry point is:
@@ -48,7 +54,9 @@ Downloaded runtime packs use target-specific launcher names instead:
 - macOS CPU: `ShotSieve-CPU`
 - macOS Apple Silicon / MPS: `ShotSieve-MPS`
 
-Intel XPU remains a source-only runtime path today; there is no prebuilt XPU runtime-pack target yet. See [intel-xpu.md](./intel-xpu.md) for the exact source-install track.
+Intel XPU remains a source-only runtime path today; there is no prebuilt XPU runtime-pack target yet. AMD ROCm is also source-only, with no prebuilt ROCm
+runtime-pack target. See [intel-xpu.md](./intel-xpu.md) and
+[amd-rocm.md](./amd-rocm.md) for the exact source-install tracks.
 
 Useful flags:
 
@@ -84,7 +92,7 @@ Startup automation remains available when explicitly configured:
 
 Interactive console launches may still ask for consent when neither automation setting is present. Portable and frozen builds prefer the bundled pip-based installer paths from `shotsieve.bootstrap`; if that installer is unavailable or declined, ShotSieve keeps running but learned backends may stay disabled. Cancelling an explicit installation takes effect between runtime install steps; restart ShotSieve if newly installed native packages are not usable in the current process.
 
-The supported learned-model catalog is `topiq_nr`, `clipiqa`, and accelerator-only `qalign`, with TOPIQ as the default. Q-Align is exposed only when the selected runtime is CUDA or Apple MPS; CPU and XPU intentionally expose only the compatible models. PyIQA discovery is not an allowlist: if a product model is not discoverable or cannot initialize, Settings shows an unavailable/empty model state. Older stored model names remain displayable by their raw name, but retired names cannot be selected for new scoring or comparison runs. No process-wide `torch.load` override is used.
+The supported learned-model catalog is `topiq_nr`, `clipiqa`, and accelerator-only `qalign`, with TOPIQ as the default. Q-Align is exposed only when the selected runtime is CUDA or Apple MPS; CPU, XPU, and ROCm intentionally expose only the compatible models until model-specific validation expands the catalog. PyIQA discovery is not an allowlist: if a product model is not discoverable or cannot initialize, Settings shows an unavailable/empty model state. Older stored model names remain displayable by their raw name, but retired names cannot be selected for new scoring or comparison runs. No process-wide `torch.load` override is used.
 
 The Settings **Prepare selected model** action uses CPU for CPU-compatible models and the selected/Auto accelerator for Q-Align, then runs a tiny generated-image inference check. It may download the model's upstream assets on first use; TOPIQ can require its ResNet backbone and CFANet checkpoint, CLIPIQA can require the CLIP RN50 dependency, and Q-Align can require approximately 16.4 GB of Hugging Face assets with a one-image batch limit. Preparation records coarse phases, effective cache paths and volume free space, dependency versions/fingerprint, requested and tested runtime, and sanitized error/recovery details in a small atomic JSON file under the app data directory. A `preparing` record owned by a process that has ended is downgraded to an interrupted failure at startup. A later `/api/options` call performs only local record, dependency-metadata, and disk-volume reads; it does not scan caches, download assets, or construct models. Missing or changed cache context invalidates a previous `prepared` state, and scoring still validates its selected runtime at use time: readiness is a last successful check, not a future availability guarantee.
 
@@ -92,9 +100,9 @@ Score and Compare job failures reuse the same diagnostic schema as Prepare. Thei
 
 `--model-cache-dir ROOT` sets default `HF_HOME=ROOT/huggingface`, `HF_HUB_CACHE=ROOT/huggingface/hub`, and `TORCH_HOME=ROOT/torch` before learned-IQA runtime preparation. Explicit environment values win, including Hub endpoints, proxy/certificate, and offline settings, so the resulting cache paths may be split. For an offline portable setup, prepare the selected model into the intended compatible cache tree, shut down the app, copy that tree with the app-data readiness record, and validate it in a fresh offline process. ShotSieve does not migrate or remove caches automatically.
 
-The release and sidecar paths use the tested learned-IQA package set `pyiqa==0.1.16`, `timm==1.0.29`, `huggingface-hub==1.31.0`, `transformers==5.17.0`, and `openai-clip==1.0.1`, `accelerate==1.15.0`, `sentencepiece==0.2.2`, and `einops==0.8.2`. CPU, CUDA, and Apple MPS targets use `torch==2.14.0` with `torchvision==0.29.0`; the CUDA path selects the cu130 index, while CPU selects the PyTorch CPU index. The corresponding target constraint file is `scripts/release-constraints-torch.txt`.
+The release and sidecar paths use the tested learned-IQA package set `pyiqa==0.1.16`, `timm==1.0.29`, `huggingface-hub==1.31.0`, `transformers==5.17.0`, and `openai-clip==1.0.1`, `accelerate==1.15.0`, `sentencepiece==0.2.2`, and `einops==0.8.2`. CPU, CUDA, and Apple MPS targets use `torch==2.14.0` with `torchvision==0.29.0`; the CUDA path selects the cu130 index, while CPU selects the PyTorch CPU index. The corresponding target constraint file is `scripts/release-constraints-torch.txt`. The source-only ROCm track uses AMD's separately validated ROCm 7.2.1 PyTorch wheels and `scripts/source-constraints-rocm.txt` (or the explicit Windows variant); it is not a packaged target.
 
-Windows AMD hardware remains on CPU until a native ROCm path passes its separate source-install validation. The retired DirectML package, sidecar path, and Windows-DML release target are absent from new installs and release builds. Local Windows release builds and CI run `pip check` after resolving the target environment.
+Windows AMD hardware remains on CPU unless the exact host is in AMD's supported ROCm/PyTorch matrix and passes the separate source-install validation. The retired DirectML package, sidecar path, and Windows-DML release target are absent from new installs and release builds. Local Windows release builds and CI run `pip check` after resolving the target environment.
 
 Pull requests run the offline test workflow in `.github/workflows/ci.yml`; it sets the learned-model offline flags so an accidental model download fails rather than silently reaching the Hub. The separate `.github/workflows/model-smoke.yml` workflow is manual/weekly and prepares TOPIQ and CLIPIQA in fresh isolated caches, then repeats the CPU check in a new process with socket access disabled. Q-Align requires an accelerator-capable host and is validated through the release-target smoke procedure rather than the CPU-only GitHub-hosted job. The workflow does not upload caches or generated images.
 

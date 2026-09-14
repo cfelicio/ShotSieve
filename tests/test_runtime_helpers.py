@@ -15,6 +15,7 @@ from shotsieve.learned_iqa import (
     parse_score_range,
     resolve_device,
     runtime_statuses,
+    has_rocm,
     supported_learned_models,
     supported_runtime_targets,
 )
@@ -443,6 +444,7 @@ def test_learned_model_catalog_exposes_all_supported_backends() -> None:
     assert "directml" not in runtimes
     assert "intel" in runtimes
     assert "amd" in runtimes
+    assert "rocm" in runtimes
     assert "mps" in runtimes
     assert "apple" in runtimes
 
@@ -514,6 +516,19 @@ def test_learned_model_aliases_and_runtime_resolution() -> None:
                 def is_available() -> bool:
                     return True
 
+    class RocmCuda:
+        @staticmethod
+        def is_available() -> bool:
+            return True
+
+    class RocmTorch:
+        version = types.SimpleNamespace(hip="7.2.1")
+        cuda = RocmCuda
+
+        @staticmethod
+        def device(name: str) -> str:
+            return name
+
     def import_missing(name: str):
         raise ImportError(name)
 
@@ -533,6 +548,12 @@ def test_learned_model_aliases_and_runtime_resolution() -> None:
     assert resolve_device(None, torch_module=CudaTorch, import_module=import_missing, system_name="Linux").runtime == "cuda"
     assert resolve_device("cpu", torch_module=CudaTorch, import_module=import_missing).runtime == "cpu"
     assert resolve_device("intel", torch_module=XpuTorch, import_module=import_missing).runtime == "xpu"
+    rocm_result = resolve_device("amd", torch_module=RocmTorch, import_module=import_missing, system_name="Linux")
+    assert has_rocm(RocmTorch) is True
+    assert rocm_result.runtime == "rocm"
+    assert rocm_result.tensor_device == "cuda"
+    assert rocm_result.display_device == "rocm"
+    assert resolve_device("auto", torch_module=RocmTorch, import_module=import_missing, system_name="Linux").runtime == "rocm"
     amd_result = resolve_device("amd", torch_module=NoCudaTorch, import_module=import_missing, system_name="Windows")
     assert amd_result.runtime == "cpu"
     assert amd_result.fallback_reason is not None
@@ -547,6 +568,7 @@ def test_learned_model_aliases_and_runtime_resolution() -> None:
     statuses = runtime_statuses(torch_module=NoCudaTorch, import_module=import_missing, system_name="Windows")
     assert statuses == {
         "cpu": "available",
+        "rocm": "unavailable",
         "cuda": "unavailable",
         "xpu": "unavailable",
         "mps": "unsupported",
@@ -555,6 +577,7 @@ def test_learned_model_aliases_and_runtime_resolution() -> None:
     mac_statuses = runtime_statuses(torch_module=MpsTorch, import_module=import_missing, system_name="Darwin")
     assert mac_statuses == {
         "cpu": "available",
+        "rocm": "unsupported",
         "cuda": "unavailable",
         "xpu": "unsupported",
         "mps": "available",

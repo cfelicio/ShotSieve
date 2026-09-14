@@ -275,7 +275,7 @@ def score_paths(backend, image_paths: Sequence[Path], *, batch_size: int = DEFAU
     total = len(image_paths)
     pool_workers = min(effective_batch_size, recommended_cpu_workers_fn(resource_profile, for_threads=True))
     runtime = getattr(backend, "runtime", None)
-    use_channels_last = runtime in {"cpu", "cuda"}
+    use_channels_last = runtime in {"cpu", "cuda", "rocm"}
     allow_prefetch_overlap = runtime != "cpu"
 
     with ThreadPoolExecutor(max_workers=pool_workers) as load_pool:

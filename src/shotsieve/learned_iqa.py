@@ -60,6 +60,7 @@ normalize_device_target = learned_iqa_runtime.normalize_device_target
 auto_runtime_order = learned_iqa_runtime.auto_runtime_order
 runtime_candidates = learned_iqa_runtime.runtime_candidates
 has_cuda = learned_iqa_runtime.has_cuda
+has_rocm = learned_iqa_runtime.has_rocm
 has_xpu = learned_iqa_runtime.has_xpu
 has_mps = learned_iqa_runtime.has_mps
 resolve_device = learned_iqa_runtime.resolve_device
@@ -234,7 +235,7 @@ def unavailable_backend_payload(
     catalog = ",".join(supported_learned_models())
     runtime_targets = ",".join(supported_runtime_targets())
     auto_priority = ",".join(auto_runtime_order())
-    vendor_aliases = "nvidia->cuda,amd->cpu(windows until ROCm),intel->xpu,apple->mps"
+    vendor_aliases = "nvidia->cuda,amd->rocm(with validated HIP build),intel->xpu,apple->mps"
     runtime_status_text = _runtime_status_text_from_torch_import(import_module=import_module, system_name=system_name)
     hardware = detect_hardware_capabilities()
     vram_mb = _coerce_vram_mb(hardware.get("vram_mb"))
@@ -432,6 +433,7 @@ __all__ = [
     "flatten_tensor",
     "has_cuda",
     "has_mps",
+    "has_rocm",
     "has_xpu",
     "import_pyiqa_runtime",
     "install_runtime_warning_filters",

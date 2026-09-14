@@ -99,3 +99,49 @@ def test_runtime_evidence_captures_xpu_identity_and_peak_memory() -> None:
     assert evidence["peak_memory_mb"] == 2.0
     assert evidence["driver_version"] == "test-driver"
     assert evidence["elapsed_seconds"] == 1.235
+
+
+def test_runtime_evidence_captures_rocm_identity_and_hip_version() -> None:
+    module = load_smoke_module()
+
+    class FakeProperties:
+        gcnArchName = "gfx1100"
+
+    class FakeCuda:
+        def synchronize(self):
+            return None
+
+        def max_memory_allocated(self):
+            return 3 * 1024 * 1024
+
+        def device_count(self):
+            return 1
+
+        def get_device_name(self, index):
+            assert index == 0
+            return "Radeon RX test device"
+
+        def get_device_properties(self, index):
+            assert index == 0
+            return FakeProperties()
+
+    fake_torch = types.SimpleNamespace(
+        __version__="2.9.1+rocm7.2.1",
+        version=types.SimpleNamespace(hip="7.2.1"),
+        cuda=FakeCuda(),
+    )
+
+    evidence = module._runtime_evidence(
+        measurement={"torch_module": fake_torch},
+        requested_runtime="rocm",
+        actual_runtime="rocm",
+        driver_version="26.2.2",
+        elapsed_seconds=2.5,
+    )
+
+    assert evidence["torch_runtime"] == "2.9.1+rocm7.2.1"
+    assert evidence["rocm_version"] == "7.2.1"
+    assert evidence["rocm_device_count"] == 1
+    assert evidence["rocm_device_name"] == "Radeon RX test device"
+    assert evidence["rocm_gpu_architecture"] == "gfx1100"
+    assert evidence["peak_memory_mb"] == 3.0

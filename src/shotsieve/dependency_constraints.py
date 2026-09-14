@@ -27,6 +27,14 @@ XPU_TORCH_REQUIREMENTS = (
     "torchvision==0.29.0+xpu",
 )
 
+# AMD's validated ROCm 7.2.1 Radeon wheels are a separate source-install
+# track.  They intentionally do not replace the common CPU/CUDA/MPS release
+# pair or enter the packaged runtime matrix.
+ROCM_TORCH_REQUIREMENTS = (
+    "torch==2.9.1+rocm7.2.1.lw.gitff65f5bc",
+    "torchvision==0.24.0+rocm7.2.1.gitb919bd0c",
+)
+
 MODEL_DEPENDENCY_DISTRIBUTIONS = (
     "pyiqa",
     "torch",
@@ -43,7 +51,13 @@ MODEL_DEPENDENCY_DISTRIBUTIONS = (
 
 def model_requirements_for_runtime(runtime: str) -> tuple[str, ...]:
     """Return the pinned model stack for a supported runtime family."""
-    torch_requirements = XPU_TORCH_REQUIREMENTS if runtime.strip().casefold() == "xpu" else TORCH_REQUIREMENTS
+    normalized_runtime = runtime.strip().casefold()
+    if normalized_runtime == "xpu":
+        torch_requirements = XPU_TORCH_REQUIREMENTS
+    elif normalized_runtime in {"amd", "rocm"}:
+        torch_requirements = ROCM_TORCH_REQUIREMENTS
+    else:
+        torch_requirements = TORCH_REQUIREMENTS
     return COMMON_MODEL_REQUIREMENTS + torch_requirements
 
 
@@ -63,6 +77,7 @@ def installed_model_dependency_versions() -> dict[str, str]:
 __all__ = [
     "COMMON_MODEL_REQUIREMENTS",
     "MODEL_DEPENDENCY_DISTRIBUTIONS",
+    "ROCM_TORCH_REQUIREMENTS",
     "TORCH_REQUIREMENTS",
     "XPU_TORCH_REQUIREMENTS",
     "installed_model_dependency_versions",

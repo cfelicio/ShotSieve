@@ -38,6 +38,7 @@ DEVICE_TARGET_ALIASES = {
     "xpu": "xpu",
     "intel": "intel",
     "amd": "amd",
+    "rocm": "rocm",
     "mps": "mps",
     "apple": "apple",
 }
@@ -60,7 +61,7 @@ MODEL_NAME_ALIASES = {
     "q-align": "qalign",
     "qalign": "qalign",
 }
-_SUPPORTED_RUNTIME_TARGETS = ("auto", "cpu", "cuda", "xpu", "mps", "nvidia", "amd", "intel", "apple")
+_SUPPORTED_RUNTIME_TARGETS = ("auto", "cpu", "cuda", "rocm", "xpu", "mps", "nvidia", "amd", "intel", "apple")
 
 
 @dataclass(frozen=True, slots=True)
@@ -89,7 +90,7 @@ class LearnedModelSpec:
         return payload
 
 
-_COMMON_RUNTIME_POLICY = ("cpu", "cuda", "xpu", "mps")
+_COMMON_RUNTIME_POLICY = ("cpu", "cuda", "rocm", "xpu", "mps")
 MODEL_CATALOG = (
     LearnedModelSpec(
         canonical_id="topiq_nr",

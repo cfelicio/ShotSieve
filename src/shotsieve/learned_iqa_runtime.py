@@ -30,11 +30,15 @@ TORCHSCRIPT_ARCHIVE_WARNING_PATTERN = r"'torch\.load' received a zip file that l
 TRANSFORMERS_GENERATION_FLAGS_WARNING_PATTERN = r"The following generation flags are not valid and may be ignored"
 TRANSFORMERS_RETURN_DICT_DEPRECATION_PATTERN = r"`use_return_dict` is deprecated! Use `return_dict` instead!"
 HF_UNAUTHENTICATED_REQUEST_WARNING_PATTERN = r"Warning: You are sending unauthenticated requests to the HF Hub"
-DEFAULT_RUNTIME_STATUS_TEXT = "cuda:unavailable,xpu:unavailable,mps:unsupported,cpu:available"
-RUNTIME_STATUS_ORDER = ("cuda", "xpu", "mps", "cpu")
+DEFAULT_RUNTIME_STATUS_TEXT = "rocm:unavailable,cuda:unavailable,xpu:unavailable,mps:unsupported,cpu:available"
+RUNTIME_STATUS_ORDER = ("rocm", "cuda", "xpu", "mps", "cpu")
 XPU_UNAVAILABLE_MESSAGE = (
     "XPU is unavailable in the installed Torch runtime; install the pinned "
     "source-only Intel XPU wheels and matching Intel GPU driver"
+)
+ROCM_UNAVAILABLE_MESSAGE = (
+    "ROCm is unavailable in the installed Torch runtime; install the pinned "
+    "source-only AMD ROCm wheels and matching ROCm/driver stack"
 )
 RESOURCE_PROFILES = {
     "aggressive": {"vram_factor": 0.80, "cpu_factor": 2.0, "ram_factor": 0.75},
@@ -109,9 +113,7 @@ def auto_runtime_order(system_name: str | None = None) -> tuple[str, ...]:
     system = current_system_name(system_name)
     if system == "Darwin":
         return ("mps", "cpu")
-    if system == "Linux":
-        return ("cuda", "xpu", "cpu")
-    return ("cuda", "xpu", "cpu")
+    return ("rocm", "cuda", "xpu", "cpu")
 
 
 def runtime_candidates(requested: str, *, system_name: str | None = None) -> tuple[str, ...]:
@@ -119,12 +121,12 @@ def runtime_candidates(requested: str, *, system_name: str | None = None) -> tup
     if requested == "auto":
         return auto_runtime_order(system)
     if requested == "amd":
-        return ("cpu",) if system == "Windows" else ("amd",)
+        return ("rocm", "cpu")
     if requested == "apple":
         return ("mps",) if system == "Darwin" else ("apple",)
     if requested == "intel":
         return ("xpu",)
-    if requested in {"cuda", "xpu", "mps", "cpu"}:
+    if requested in {"cuda", "rocm", "xpu", "mps", "cpu"}:
         return (requested,)
     return (requested,)
 
@@ -133,6 +135,16 @@ def has_cuda(torch_module) -> bool:
     try:
         cuda = getattr(torch_module, "cuda", None)
         return bool(cuda and cuda.is_available())
+    except Exception:
+        return False
+
+
+def has_rocm(torch_module) -> bool:
+    """Return whether Torch is a usable HIP/ROCm build with an accelerator."""
+    try:
+        version = getattr(torch_module, "version", None)
+        hip_version = getattr(version, "hip", None)
+        return bool(hip_version) and has_cuda(torch_module)
     except Exception:
         return False
 
@@ -169,18 +181,32 @@ def resolve_device(device: str | None, *, torch_module, import_module=importlib.
     if raw_requested in {"directml", "dml"}:
         failures.append("The previously selected DirectML runtime has been retired; using CPU.")
     if requested == "amd" and system == "Windows":
-        failures.append("AMD GPU acceleration is not validated on Windows; using CPU until native ROCm support is validated.")
+        failures.append("AMD GPU acceleration is supported only for explicitly listed Windows ROCm combinations; using CPU until that source track is validated.")
 
     for runtime in runtime_candidates(requested, system_name=system):
+        if runtime == "rocm":
+            if has_rocm(torch_module):
+                try:
+                    # ROCm exposes the PyTorch CUDA device API; retain a
+                    # distinct logical runtime so diagnostics never call AMD
+                    # hardware CUDA.
+                    device_object = torch_module.device("cuda")
+                    return ResolvedDevice(requested=requested, runtime="rocm", metric_device=device_object, tensor_device=device_object, display_device="rocm")
+                except Exception as exc:
+                    failures.append(f"ROCm device initialization failed: {_sanitize_runtime_cause(exc)}")
+            else:
+                failures.append(ROCM_UNAVAILABLE_MESSAGE)
+            continue
+
         if runtime == "cuda":
-            if has_cuda(torch_module):
+            if has_cuda(torch_module) and not has_rocm(torch_module):
                 try:
                     device_object = torch_module.device("cuda")
                     return ResolvedDevice(requested=requested, runtime="cuda", metric_device=device_object, tensor_device=device_object, display_device="cuda")
                 except Exception as exc:
                     failures.append(f"CUDA device initialization failed: {_sanitize_runtime_cause(exc)}")
             else:
-                failures.append("CUDA is unavailable in the installed Torch runtime")
+                failures.append("CUDA is unavailable in the installed Torch runtime (a HIP/ROCm build must be selected as ROCm)")
             continue
 
         if runtime == "xpu":
@@ -239,7 +265,9 @@ def runtime_statuses(*, torch_module, import_module=importlib.import_module, sys
     system = current_system_name(system_name)
     _ = import_module
     statuses = {"cpu": "available"}
-    statuses["cuda"] = "available" if has_cuda(torch_module) else "unavailable"
+    rocm_available = has_rocm(torch_module)
+    statuses["rocm"] = "available" if rocm_available else ("unsupported" if system == "Darwin" else "unavailable")
+    statuses["cuda"] = "available" if has_cuda(torch_module) and not rocm_available else "unavailable"
     statuses["xpu"] = "available" if has_xpu(torch_module) else ("unsupported" if system == "Darwin" else "unavailable")
     if system == "Darwin":
         statuses["mps"] = "available" if has_mps(torch_module) else "unavailable"
@@ -583,7 +611,7 @@ def unavailable_backend_payload(*, status: str, error: str | None = None, resour
     catalog = ",".join(supported_learned_models())
     runtime_targets = ",".join(supported_runtime_targets())
     auto_priority = ",".join(auto_runtime_order())
-    vendor_aliases = "nvidia->cuda,amd->cpu(windows until ROCm),intel->xpu,apple->mps"
+    vendor_aliases = "nvidia->cuda,amd->rocm(with validated HIP build),intel->xpu,apple->mps"
     runtime_status_text = _runtime_status_text_from_torch_import(import_module=import_module, system_name=system_name)
     hw = detect_hardware_capabilities()
     vram_mb = _coerce_vram_mb(hw.get("vram_mb"))
@@ -673,6 +701,7 @@ __all__ = [
     "HF_UNAUTHENTICATED_REQUEST_WARNING_PATTERN",
     "PKG_RESOURCES_DEPRECATION_PATTERN",
     "RESOURCE_PROFILES",
+    "ROCM_UNAVAILABLE_MESSAGE",
     "RUNTIME_STATUS_ORDER",
     "ResolvedDevice",
     "TIMM_LAYERS_DEPRECATION_PATTERN",
@@ -698,6 +727,7 @@ __all__ = [
     "ensure_pkg_resources_packaging_compat",
     "has_cuda",
     "has_mps",
+    "has_rocm",
     "has_xpu",
     "import_pyiqa_runtime",
     "install_runtime_warning_filters",

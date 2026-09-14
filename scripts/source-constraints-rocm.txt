@@ -1,0 +1,5 @@
+# Source-install-only AMD ROCm track. This file is not used by release packs.
+# The exact AMD ROCm 7.2.1 Linux wheels are installed from repo.radeon.com by
+# docs/amd-rocm.md. The build suffix is part of AMD's published wheel name.
+torch==2.9.1+rocm7.2.1.lw.gitff65f5bc
+torchvision==0.24.0+rocm7.2.1.gitb919bd0c

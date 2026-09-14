@@ -115,7 +115,7 @@ def _runtime_evidence(
         return evidence
 
     evidence["torch_runtime"] = str(getattr(torch_module, "__version__", "unknown"))
-    runtime_module = getattr(torch_module, actual, None)
+    runtime_module = getattr(torch_module, "cuda", None) if actual == "rocm" else getattr(torch_module, actual, None)
     if runtime_module is None:
         return evidence
 
@@ -133,7 +133,31 @@ def _runtime_evidence(
         except Exception:
             pass
 
-    if actual == "xpu":
+    if actual == "rocm":
+        hip_version = getattr(getattr(torch_module, "version", None), "hip", None)
+        evidence["rocm_version"] = str(hip_version or "not-reported")
+        device_count = getattr(runtime_module, "device_count", None)
+        if callable(device_count):
+            try:
+                evidence["rocm_device_count"] = int(device_count())
+            except Exception:
+                pass
+        get_device_name = getattr(runtime_module, "get_device_name", None)
+        if callable(get_device_name):
+            try:
+                evidence["rocm_device_name"] = str(get_device_name(0))
+            except Exception:
+                pass
+        get_device_properties = getattr(runtime_module, "get_device_properties", None)
+        if callable(get_device_properties):
+            try:
+                properties = get_device_properties(0)
+                architecture = getattr(properties, "gcnArchName", None) or getattr(properties, "name", None)
+                if architecture:
+                    evidence["rocm_gpu_architecture"] = str(architecture)
+            except Exception:
+                pass
+    elif actual == "xpu":
         device_count = getattr(runtime_module, "device_count", None)
         if callable(device_count):
             try:

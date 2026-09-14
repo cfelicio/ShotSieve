@@ -18,7 +18,10 @@ audited before publication. The current tested model integration selection is
 `pyiqa==0.1.16`, `timm==1.0.29`, `huggingface-hub==1.31.0`,
 `transformers==5.17.0`, and `openai-clip==1.0.1`; supported targets use
 `torch==2.14.0` and `torchvision==0.29.0`. The retired DirectML package and
-target are not part of the supported dependency or release matrix.
+target are not part of the supported dependency or release matrix. The
+source-only AMD track uses AMD-published ROCm 7.2.1 Torch wheels documented in
+`docs/amd-rocm.md`; those wheels and the ROCm runtime are not bundled in a
+release pack and must be audited under AMD's applicable terms.
 
 ---
 
@@ -61,6 +64,16 @@ ShotSieve product catalog.
 - **Terms:** subject to the licenses of the Q-Align implementation, its model card, and the underlying mPLUG-Owl2/LLaMA base models. Users must treat the downloaded weights as research-use only unless the upstream terms clearly grant broader rights.
 - **ShotSieve runtime boundary:** supported for CUDA and Apple MPS only; not supported on CPU or XPU. Q-Align weights are never bundled and are downloaded only during explicit model preparation or scoring.
 - **Authors:** Haoning Wu et al.
+
+## AMD ROCm source track
+
+- **Pinned validation family:** AMD ROCm 7.2.1 PyTorch wheels, Python 3.12;
+  see `scripts/source-constraints-rocm.txt` and `docs/amd-rocm.md`
+- **Distribution:** AMD-published wheels and system ROCm/AMDGPU components;
+  not included in ShotSieve runtime packs
+- **Terms:** review the [ROCm license and disclaimers](https://rocm.docs.amd.com/en/latest/about/license.html), AMD driver terms, and the exact wheel metadata before redistribution or commercial use
+- **Support boundary:** Linux-first, exact GPU/OS/driver/Python matrix only;
+  Windows PyTorch support is optional and narrower than the Linux stack
 
 ---
 
