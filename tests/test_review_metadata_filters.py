@@ -147,3 +147,43 @@ def test_metadata_filtering_and_sorting(test_server) -> None:
         "photos/screenshot.png",
         "photos/scan.tiff",
     ]
+
+    # Edge-size filters must stay consistent across the page, count, and
+    # selection-revision paths used by bulk Review actions.
+    edge_filtered = get_results("min_edge=5000")
+    assert edge_filtered["total"] == 2
+    assert {item["path"] for item in edge_filtered["items"]} == {
+        "photos/jpeg_24mp.jpg",
+        "photos/nikon_raw.nef",
+    }
+
+    count_url = f"{base_url}/api/files/count?min_edge=5000"
+    with urllib.request.urlopen(count_url) as resp:
+        edge_count = json.loads(resp.read().decode("utf-8"))
+    assert edge_count["total"] == edge_filtered["total"]
+    assert edge_count["selection_revision"] == edge_filtered["selection_revision"]
+
+    narrow_edge = get_results("max_edge=1000")
+    assert narrow_edge["total"] == 1
+    assert narrow_edge["items"][0]["path"] == "photos/screenshot.png"
+
+    batch_request = urllib.request.Request(
+        f"{base_url}/api/review/batch",
+        data=json.dumps({
+            "selection": {
+                "scope": "review-browser",
+                "marked": "all",
+                "issues": "all",
+                "min_edge": 5000,
+            },
+            "selection_revision": edge_filtered["selection_revision"],
+            "decision_state": "export",
+            "delete_marked": False,
+            "export_marked": True,
+        }).encode("utf-8"),
+        headers={"Content-Type": "application/json", "Origin": base_url},
+        method="POST",
+    )
+    with urllib.request.urlopen(batch_request) as resp:
+        batch_result = json.loads(resp.read().decode("utf-8"))
+    assert batch_result == {"updated": 2}

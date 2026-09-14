@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Sequence
 
 from shotsieve.config import RAW_CAMERA_EXTENSIONS
 from shotsieve.db import escape_like, roots_path_filter
@@ -28,6 +30,80 @@ SORT_ORDERS = {
 }
 
 
+@dataclass(frozen=True, slots=True)
+class _ReviewFilterRequest:
+    """Immutable normalized filters shared by Review query operations."""
+
+    root: str | None = None
+    marked: str = "all"
+    issues: str = "all"
+    query: str | None = None
+    min_score: float | None = None
+    max_score: float | None = None
+    formats: tuple[str, ...] | None = None
+    min_mp: float | None = None
+    max_mp: float | None = None
+    min_width: int | None = None
+    max_width: int | None = None
+    min_height: int | None = None
+    max_height: int | None = None
+    min_edge: int | None = None
+    max_edge: int | None = None
+    min_size: int | None = None
+    max_size: int | None = None
+    metadata: str = "all"
+
+
+def _normalize_review_filter_request(
+    *,
+    root: str | None = None,
+    marked: str = "all",
+    issues: str = "all",
+    query: str | None = None,
+    min_score: float | None = None,
+    max_score: float | None = None,
+    formats: Sequence[str] | None = None,
+    min_mp: float | None = None,
+    max_mp: float | None = None,
+    min_width: int | None = None,
+    max_width: int | None = None,
+    min_height: int | None = None,
+    max_height: int | None = None,
+    min_edge: int | None = None,
+    max_edge: int | None = None,
+    min_size: int | None = None,
+    max_size: int | None = None,
+    metadata: str = "all",
+) -> _ReviewFilterRequest:
+    normalized_formats = None
+    if formats is not None:
+        normalized_formats = tuple(
+            format_name.strip().lower()
+            for format_name in formats
+            if format_name.strip()
+        )
+    return _ReviewFilterRequest(
+        root=root,
+        marked=marked,
+        issues=issues,
+        query=query,
+        min_score=min_score,
+        max_score=max_score,
+        formats=normalized_formats,
+        min_mp=min_mp,
+        max_mp=max_mp,
+        min_width=min_width,
+        max_width=max_width,
+        min_height=min_height,
+        max_height=max_height,
+        min_edge=min_edge,
+        max_edge=max_edge,
+        min_size=min_size,
+        max_size=max_size,
+        metadata=metadata,
+    )
+
+
 def _build_file_filters(
     *,
     root: str | None = None,
@@ -51,7 +127,7 @@ def _build_file_filters(
     return conditions, params
 
 
-def _build_format_filters(*, formats: list[str] | None = None) -> tuple[list[str], list[object]]:
+def _build_format_filters(*, formats: Sequence[str] | None = None) -> tuple[list[str], list[object]]:
     if not formats:
         return [], []
     
@@ -260,7 +336,7 @@ def _build_review_browser_where(
     query: str | None = None,
     min_score: float | None = None,
     max_score: float | None = None,
-    formats: list[str] | None = None,
+    formats: Sequence[str] | None = None,
     min_mp: float | None = None,
     max_mp: float | None = None,
     min_width: int | None = None,
@@ -274,18 +350,62 @@ def _build_review_browser_where(
     metadata: str = "all",
 ) -> tuple[str, list[object]]:
     """Build the score-backed WHERE clause for the review browser queue."""
+    return _build_review_browser_where_from_request(
+        _normalize_review_filter_request(
+            root=root,
+            marked=marked,
+            issues=issues,
+            query=query,
+            min_score=min_score,
+            max_score=max_score,
+            formats=formats,
+            min_mp=min_mp,
+            max_mp=max_mp,
+            min_width=min_width,
+            max_width=max_width,
+            min_height=min_height,
+            max_height=max_height,
+            min_edge=min_edge,
+            max_edge=max_edge,
+            min_size=min_size,
+            max_size=max_size,
+            metadata=metadata,
+        )
+    )
+
+
+def _build_review_browser_where_from_request(
+    request: _ReviewFilterRequest,
+    *,
+    after_id: int | None = None,
+) -> tuple[str, list[object]]:
+    """Build browser predicates from one normalized filter request."""
     return _compile_where_clause(
-        _build_file_filters(root=root, query=query),
-        _build_score_filters(require_scored=True, min_score=min_score, max_score=max_score),
-        _build_review_state_filters(marked=marked),
-        _build_issue_filters(issues=issues),
-        _build_format_filters(formats=formats),
+        _build_file_filters(root=request.root, query=request.query),
+        _build_score_filters(require_scored=True, min_score=request.min_score, max_score=request.max_score),
+        _build_review_state_filters(marked=request.marked),
+        _build_issue_filters(issues=request.issues),
+        _build_format_filters(formats=request.formats),
         _build_resolution_filters(
-            min_mp=min_mp, max_mp=max_mp,
-            min_width=min_width, max_width=max_width,
-            min_height=min_height, max_height=max_height,
-            min_edge=min_edge, max_edge=max_edge,
+            min_mp=request.min_mp, max_mp=request.max_mp,
+            min_width=request.min_width, max_width=request.max_width,
+            min_height=request.min_height, max_height=request.max_height,
+            min_edge=request.min_edge, max_edge=request.max_edge,
         ),
-        _build_size_filters(min_size=min_size, max_size=max_size),
-        _build_metadata_status_filters(metadata=metadata),
+        _build_size_filters(min_size=request.min_size, max_size=request.max_size),
+        _build_metadata_status_filters(metadata=request.metadata),
+        _build_after_id_filter(after_id=after_id),
+    )
+
+
+def _build_review_state_where_from_request(
+    request: _ReviewFilterRequest,
+    *,
+    after_id: int | None = None,
+) -> tuple[str, list[object]]:
+    """Build review-state predicates from the same normalized request shape."""
+    return _compile_where_clause(
+        _build_file_filters(root=request.root, query=request.query),
+        _build_review_state_filters(marked=request.marked),
+        _build_after_id_filter(after_id=after_id),
     )

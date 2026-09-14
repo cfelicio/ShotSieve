@@ -318,6 +318,8 @@ def _parse_selection_payload(deps: WebRouteDependencies, payload: dict[str, obje
         selection["max_width"] = _optional_payload_int(deps, raw_selection.get("max_width"), name="selection.max_width")
         selection["min_height"] = _optional_payload_int(deps, raw_selection.get("min_height"), name="selection.min_height")
         selection["max_height"] = _optional_payload_int(deps, raw_selection.get("max_height"), name="selection.max_height")
+        selection["min_edge"] = _optional_payload_int(deps, raw_selection.get("min_edge"), name="selection.min_edge")
+        selection["max_edge"] = _optional_payload_int(deps, raw_selection.get("max_edge"), name="selection.max_edge")
         selection["min_size"] = _optional_payload_int(deps, raw_selection.get("min_size"), name="selection.min_size")
         selection["max_size"] = _optional_payload_int(deps, raw_selection.get("max_size"), name="selection.max_size")
         selection["metadata"] = deps.required_choice(
@@ -354,6 +356,8 @@ def _validate_selection_revision(connection: Any, deps: WebRouteDependencies, se
         max_width=selection.get("max_width"),
         min_height=selection.get("min_height"),
         max_height=selection.get("max_height"),
+        min_edge=selection.get("min_edge"),
+        max_edge=selection.get("max_edge"),
         min_size=selection.get("min_size"),
         max_size=selection.get("max_size"),
         metadata=selection.get("metadata", "all"),
@@ -385,6 +389,8 @@ def _validate_page_revision(connection: Any, deps: WebRouteDependencies, payload
         max_width=_optional_payload_int(deps, page_selection.get("max_width"), name="page_selection.max_width"),
         min_height=_optional_payload_int(deps, page_selection.get("min_height"), name="page_selection.min_height"),
         max_height=_optional_payload_int(deps, page_selection.get("max_height"), name="page_selection.max_height"),
+        min_edge=_optional_payload_int(deps, page_selection.get("min_edge"), name="page_selection.min_edge"),
+        max_edge=_optional_payload_int(deps, page_selection.get("max_edge"), name="page_selection.max_edge"),
         min_size=_optional_payload_int(deps, page_selection.get("min_size"), name="page_selection.min_size"),
         max_size=_optional_payload_int(deps, page_selection.get("max_size"), name="page_selection.max_size"),
         metadata=page_selection.get("metadata", "all"),
@@ -470,6 +476,8 @@ def _iter_selection_file_id_batches(connection: Any, deps: WebRouteDependencies,
                 max_width=selection.get("max_width"),
                 min_height=selection.get("min_height"),
                 max_height=selection.get("max_height"),
+                min_edge=selection.get("min_edge"),
+                max_edge=selection.get("max_edge"),
                 min_size=selection.get("min_size"),
                 max_size=selection.get("max_size"),
                 metadata=selection.get("metadata", "all"),

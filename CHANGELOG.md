@@ -21,6 +21,9 @@ All notable changes to this project will be documented in this file.
 - Shared the frontend scan/score tracked-job lifecycle for start, tracking,
   polling, cleanup, abort, and recovery handling while preserving their
   workflow-specific estimates, payloads, progress phases, and result messages.
+- Kept Review list, count, selection-revision, and bulk-selection requests on
+  one normalized filter contract, including edge-size filters, so visible
+  totals and guarded bulk operations target the same rows.
 - Made the frontend workflow facade composition-only: library, export, and
   compare behavior now stays in its owning module while `ShotSieveWorkflows`
   preserves the existing public method names and cross-module operation wiring.

@@ -110,6 +110,8 @@ Each model-smoke invocation records resolved model dependency versions. On failu
 
 ## Scan and catalog safety
 
+Review list, count, selection-revision, and bulk-selection queries use the same normalized filter set. This includes path, score, format, metadata, size, resolution, and edge-size filters, so the displayed page, total, revision guard, and materialized bulk-operation IDs cannot silently target different rows.
+
 Ordinary scans only update files discovered during that run. They do not remove cached rows, scores, or review decisions for files outside the selected recursion, extension, or ignore-rule coverage. Root and child-directory enumeration errors are reported with their path and operating-system detail rather than being treated as an empty scan.
 
 Verified missing-entry cleanup is intentionally separate from scanning. The Settings **Review Missing Entries** action previews all missing candidates below each selected root, shows affected review decisions, and requires explicit confirmation before applying. A root that cannot be fully enumerated is reported as unknown, never as an empty or missing-file result; a stale preview must be refreshed before it can apply. Do not use the removed unchecked “missing” cache action in scripts or clients.

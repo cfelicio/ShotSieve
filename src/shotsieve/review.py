@@ -34,10 +34,13 @@ from shotsieve.review_filters import (
     _build_metadata_status_filters,
     _build_resolution_filters,
     _build_review_browser_where,
+    _build_review_browser_where_from_request,
+    _build_review_state_where_from_request,
     _build_review_state_filters,
     _build_score_filters,
     _build_size_filters,
     _compile_where_clause,
+    _normalize_review_filter_request,
 )
 
 __all__ = [
@@ -304,16 +307,27 @@ def count_review_files(
 ) -> int:
     """Return the total count of files matching the score-backed review browser filters."""
     started_at = monotonic_seconds()
-    where_clause, params = _build_review_browser_where(
-        root=root, marked=marked, issues=issues,
-        query=query, min_score=min_score, max_score=max_score,
-        formats=formats, min_mp=min_mp, max_mp=max_mp,
-        min_width=min_width, max_width=max_width,
-        min_height=min_height, max_height=max_height,
-        min_edge=min_edge, max_edge=max_edge,
-        min_size=min_size, max_size=max_size,
+    filter_request = _normalize_review_filter_request(
+        root=root,
+        marked=marked,
+        issues=issues,
+        query=query,
+        min_score=min_score,
+        max_score=max_score,
+        formats=formats,
+        min_mp=min_mp,
+        max_mp=max_mp,
+        min_width=min_width,
+        max_width=max_width,
+        min_height=min_height,
+        max_height=max_height,
+        min_edge=min_edge,
+        max_edge=max_edge,
+        min_size=min_size,
+        max_size=max_size,
         metadata=metadata,
     )
+    where_clause, params = _build_review_browser_where_from_request(filter_request)
     sql = f"""
         SELECT COUNT(*) AS total
         FROM files
@@ -359,36 +373,34 @@ def review_selection_revision(
     metadata: str = "all",
 ) -> str:
     started_at = monotonic_seconds()
+    filter_request = _normalize_review_filter_request(
+        root=root,
+        marked=marked,
+        issues=issues,
+        query=query,
+        min_score=min_score,
+        max_score=max_score,
+        formats=formats,
+        min_mp=min_mp,
+        max_mp=max_mp,
+        min_width=min_width,
+        max_width=max_width,
+        min_height=min_height,
+        max_height=max_height,
+        min_edge=min_edge,
+        max_edge=max_edge,
+        min_size=min_size,
+        max_size=max_size,
+        metadata=metadata,
+    )
     if scope == "review-browser":
-        where_clause, params = _build_review_browser_where(
-            root=root,
-            marked=marked,
-            issues=issues,
-            query=query,
-            min_score=min_score,
-            max_score=max_score,
-            formats=formats,
-            min_mp=min_mp,
-            max_mp=max_mp,
-            min_width=min_width,
-            max_width=max_width,
-            min_height=min_height,
-            max_height=max_height,
-            min_edge=min_edge,
-            max_edge=max_edge,
-            min_size=min_size,
-            max_size=max_size,
-            metadata=metadata,
-        )
+        where_clause, params = _build_review_browser_where_from_request(filter_request)
         joins = """
             LEFT JOIN scores ON scores.file_id = files.id
             LEFT JOIN review_state ON review_state.file_id = files.id
         """
     elif scope == "review-state":
-        where_clause, params = _compile_where_clause(
-            _build_file_filters(root=root, query=query),
-            _build_review_state_filters(marked=marked),
-        )
+        where_clause, params = _build_review_state_where_from_request(filter_request)
         joins = "LEFT JOIN review_state ON review_state.file_id = files.id"
     else:
         raise ValueError("scope must be one of: review-browser, review-state")
@@ -460,16 +472,27 @@ def list_review_files(
 ) -> list[dict[str, object]]:
     started_at = monotonic_seconds()
     order_by = SORT_ORDERS.get(sort, SORT_ORDERS["score_asc"])
-    where_clause, params = _build_review_browser_where(
-        root=root, marked=marked, issues=issues,
-        query=query, min_score=min_score, max_score=max_score,
-        formats=formats, min_mp=min_mp, max_mp=max_mp,
-        min_width=min_width, max_width=max_width,
-        min_height=min_height, max_height=max_height,
-        min_edge=min_edge, max_edge=max_edge,
-        min_size=min_size, max_size=max_size,
+    filter_request = _normalize_review_filter_request(
+        root=root,
+        marked=marked,
+        issues=issues,
+        query=query,
+        min_score=min_score,
+        max_score=max_score,
+        formats=formats,
+        min_mp=min_mp,
+        max_mp=max_mp,
+        min_width=min_width,
+        max_width=max_width,
+        min_height=min_height,
+        max_height=max_height,
+        min_edge=min_edge,
+        max_edge=max_edge,
+        min_size=min_size,
+        max_size=max_size,
         metadata=metadata,
     )
+    where_clause, params = _build_review_browser_where_from_request(filter_request)
     sql_parts = [
         """
         SELECT files.id, files.path, files.format, files.preview_status, files.preview_path,
@@ -530,21 +553,29 @@ def list_review_browser_file_ids(
     after_id: int | None = None,
 ) -> list[int]:
     """Return score-backed review browser ids in ascending keyset order."""
-    where_clause, params = _compile_where_clause(
-        _build_file_filters(root=root, query=query),
-        _build_score_filters(require_scored=True, min_score=min_score, max_score=max_score),
-        _build_review_state_filters(marked=marked),
-        _build_issue_filters(issues=issues),
-        _build_format_filters(formats=formats),
-        _build_resolution_filters(
-            min_mp=min_mp, max_mp=max_mp,
-            min_width=min_width, max_width=max_width,
-            min_height=min_height, max_height=max_height,
-            min_edge=min_edge, max_edge=max_edge,
-        ),
-        _build_size_filters(min_size=min_size, max_size=max_size),
-        _build_metadata_status_filters(metadata=metadata),
-        _build_after_id_filter(after_id=after_id),
+    filter_request = _normalize_review_filter_request(
+        root=root,
+        marked=marked,
+        issues=issues,
+        query=query,
+        min_score=min_score,
+        max_score=max_score,
+        formats=formats,
+        min_mp=min_mp,
+        max_mp=max_mp,
+        min_width=min_width,
+        max_width=max_width,
+        min_height=min_height,
+        max_height=max_height,
+        min_edge=min_edge,
+        max_edge=max_edge,
+        min_size=min_size,
+        max_size=max_size,
+        metadata=metadata,
+    )
+    where_clause, params = _build_review_browser_where_from_request(
+        filter_request,
+        after_id=after_id,
     )
     sql = f"""
         SELECT files.id
@@ -572,10 +603,14 @@ def list_review_state_file_ids(
     after_id: int | None = None,
 ) -> list[int]:
     """Return file ids filtered by user review-state only, without requiring score rows."""
-    where_clause, params = _compile_where_clause(
-        _build_file_filters(root=root, query=query),
-        _build_review_state_filters(marked=marked),
-        _build_after_id_filter(after_id=after_id),
+    filter_request = _normalize_review_filter_request(
+        root=root,
+        marked=marked,
+        query=query,
+    )
+    where_clause, params = _build_review_state_where_from_request(
+        filter_request,
+        after_id=after_id,
     )
     sql = f"""
         SELECT files.id

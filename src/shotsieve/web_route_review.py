@@ -17,6 +17,32 @@ def _get_web_routes() -> Any:
     return sys.modules["shotsieve.web_routes"]
 
 
+def _review_filter_kwargs(deps: WebRouteDependencies, params: dict[str, list[str]]) -> dict[str, object]:
+    """Parse one set of Review filters for page, count, and revision."""
+    formats_raw = deps.first_value(params, "formats", None)
+    formats = [format_name.strip() for format_name in formats_raw.split(",") if format_name.strip()] if formats_raw else None
+    return {
+        "root": deps.first_value(params, "root", None),
+        "marked": deps.first_value(params, "marked", "all"),
+        "issues": deps.first_value(params, "issues", "all"),
+        "query": deps.first_value(params, "query", None),
+        "min_score": deps.float_or_none(deps.first_value(params, "min_score", None)),
+        "max_score": deps.float_or_none(deps.first_value(params, "max_score", None)),
+        "formats": formats,
+        "min_mp": deps.float_or_none(deps.first_value(params, "min_mp", None)),
+        "max_mp": deps.float_or_none(deps.first_value(params, "max_mp", None)),
+        "min_width": deps.optional_int(deps.first_value(params, "min_width", None)),
+        "max_width": deps.optional_int(deps.first_value(params, "max_width", None)),
+        "min_height": deps.optional_int(deps.first_value(params, "min_height", None)),
+        "max_height": deps.optional_int(deps.first_value(params, "max_height", None)),
+        "min_edge": deps.optional_int(deps.first_value(params, "min_edge", None)),
+        "max_edge": deps.optional_int(deps.first_value(params, "max_edge", None)),
+        "min_size": deps.optional_int(deps.first_value(params, "min_size", None)),
+        "max_size": deps.optional_int(deps.first_value(params, "max_size", None)),
+        "metadata": deps.first_value(params, "metadata", "all"),
+    }
+
+
 def _handle_overview_get_routes(handler: Any, context: WebRouteContext, parsed: Any) -> bool:
     deps = cast(WebRouteDependencies, context.dependencies)
     routes = _get_web_routes()
@@ -81,85 +107,26 @@ def _handle_review_get_routes(handler: Any, context: WebRouteContext, parsed: An
 
     if parsed.path == "/api/files":
         params = parse_qs(parsed.query)
-        formats_raw = deps.first_value(params, "formats", None)
-        formats = [f.strip() for f in formats_raw.split(",") if f.strip()] if formats_raw else None
-        min_mp = deps.float_or_none(deps.first_value(params, "min_mp", None))
-        max_mp = deps.float_or_none(deps.first_value(params, "max_mp", None))
-        min_width = deps.optional_int(deps.first_value(params, "min_width", None))
-        max_width = deps.optional_int(deps.first_value(params, "max_width", None))
-        min_height = deps.optional_int(deps.first_value(params, "min_height", None))
-        max_height = deps.optional_int(deps.first_value(params, "max_height", None))
-        min_edge = deps.optional_int(deps.first_value(params, "min_edge", None))
-        max_edge = deps.optional_int(deps.first_value(params, "max_edge", None))
-        min_size = deps.optional_int(deps.first_value(params, "min_size", None))
-        max_size = deps.optional_int(deps.first_value(params, "max_size", None))
-        metadata = deps.first_value(params, "metadata", "all")
+        filter_kwargs = _review_filter_kwargs(deps, params)
 
         with deps.database(context.db_path) as connection:
             snapshot_active = _begin_consistent_snapshot(connection)
             try:
                 payload = deps.list_review_files(
                     connection,
-                    root=deps.first_value(params, "root", None),
                     sort=deps.first_value(params, "sort", "score_asc"),
-                    marked=deps.first_value(params, "marked", "all"),
-                    issues=deps.first_value(params, "issues", "all"),
-                    query=deps.first_value(params, "query", None),
-                    min_score=deps.float_or_none(deps.first_value(params, "min_score", None)),
-                    max_score=deps.float_or_none(deps.first_value(params, "max_score", None)),
-                    formats=formats,
-                    min_mp=min_mp,
-                    max_mp=max_mp,
-                    min_width=min_width,
-                    max_width=max_width,
-                    min_height=min_height,
-                    max_height=max_height,
-                    min_edge=min_edge,
-                    max_edge=max_edge,
-                    min_size=min_size,
-                    max_size=max_size,
-                    metadata=metadata,
+                    **filter_kwargs,
                     limit=deps.int_or_default(deps.first_value(params, "limit", "60"), default=60, minimum=1, maximum=500),
                     offset=deps.int_or_default(deps.first_value(params, "offset", "0"), default=0, minimum=0),
                 )
                 total = deps.count_review_files(
                     connection,
-                    root=deps.first_value(params, "root", None),
-                    marked=deps.first_value(params, "marked", "all"),
-                    issues=deps.first_value(params, "issues", "all"),
-                    query=deps.first_value(params, "query", None),
-                    min_score=deps.float_or_none(deps.first_value(params, "min_score", None)),
-                    max_score=deps.float_or_none(deps.first_value(params, "max_score", None)),
-                    formats=formats,
-                    min_mp=min_mp,
-                    max_mp=max_mp,
-                    min_width=min_width,
-                    max_width=max_width,
-                    min_height=min_height,
-                    max_height=max_height,
-                    min_size=min_size,
-                    max_size=max_size,
-                    metadata=metadata,
+                    **filter_kwargs,
                 )
                 selection_revision = deps.review_selection_revision(
                     connection,
                     scope="review-browser",
-                    root=deps.first_value(params, "root", None),
-                    marked=deps.first_value(params, "marked", "all"),
-                    issues=deps.first_value(params, "issues", "all"),
-                    query=deps.first_value(params, "query", None),
-                    min_score=deps.float_or_none(deps.first_value(params, "min_score", None)),
-                    max_score=deps.float_or_none(deps.first_value(params, "max_score", None)),
-                    formats=formats,
-                    min_mp=min_mp,
-                    max_mp=max_mp,
-                    min_width=min_width,
-                    max_width=max_width,
-                    min_height=min_height,
-                    max_height=max_height,
-                    min_size=min_size,
-                    max_size=max_size,
-                    metadata=metadata,
+                    **filter_kwargs,
                 )
             except Exception:
                 _finish_consistent_snapshot(connection, active=snapshot_active, success=False)
@@ -171,59 +138,19 @@ def _handle_review_get_routes(handler: Any, context: WebRouteContext, parsed: An
 
     if parsed.path == "/api/files/count":
         params = parse_qs(parsed.query)
-        formats_raw = deps.first_value(params, "formats", None)
-        formats = [f.strip() for f in formats_raw.split(",") if f.strip()] if formats_raw else None
-        min_mp = deps.float_or_none(deps.first_value(params, "min_mp", None))
-        max_mp = deps.float_or_none(deps.first_value(params, "max_mp", None))
-        min_width = deps.optional_int(deps.first_value(params, "min_width", None))
-        max_width = deps.optional_int(deps.first_value(params, "max_width", None))
-        min_height = deps.optional_int(deps.first_value(params, "min_height", None))
-        max_height = deps.optional_int(deps.first_value(params, "max_height", None))
-        min_size = deps.optional_int(deps.first_value(params, "min_size", None))
-        max_size = deps.optional_int(deps.first_value(params, "max_size", None))
-        metadata = deps.first_value(params, "metadata", "all")
+        filter_kwargs = _review_filter_kwargs(deps, params)
 
         with deps.database(context.db_path) as connection:
             snapshot_active = _begin_consistent_snapshot(connection)
             try:
                 total = deps.count_review_files(
                     connection,
-                    root=deps.first_value(params, "root", None),
-                    marked=deps.first_value(params, "marked", "all"),
-                    issues=deps.first_value(params, "issues", "all"),
-                    query=deps.first_value(params, "query", None),
-                    min_score=deps.float_or_none(deps.first_value(params, "min_score", None)),
-                    max_score=deps.float_or_none(deps.first_value(params, "max_score", None)),
-                    formats=formats,
-                    min_mp=min_mp,
-                    max_mp=max_mp,
-                    min_width=min_width,
-                    max_width=max_width,
-                    min_height=min_height,
-                    max_height=max_height,
-                    min_size=min_size,
-                    max_size=max_size,
-                    metadata=metadata,
+                    **filter_kwargs,
                 )
                 selection_revision = deps.review_selection_revision(
                     connection,
                     scope="review-browser",
-                    root=deps.first_value(params, "root", None),
-                    marked=deps.first_value(params, "marked", "all"),
-                    issues=deps.first_value(params, "issues", "all"),
-                    query=deps.first_value(params, "query", None),
-                    min_score=deps.float_or_none(deps.first_value(params, "min_score", None)),
-                    max_score=deps.float_or_none(deps.first_value(params, "max_score", None)),
-                    formats=formats,
-                    min_mp=min_mp,
-                    max_mp=max_mp,
-                    min_width=min_width,
-                    max_width=max_width,
-                    min_height=min_height,
-                    max_height=max_height,
-                    min_size=min_size,
-                    max_size=max_size,
-                    metadata=metadata,
+                    **filter_kwargs,
                 )
             except Exception:
                 _finish_consistent_snapshot(connection, active=snapshot_active, success=False)
@@ -240,23 +167,24 @@ def _handle_review_get_routes(handler: Any, context: WebRouteContext, parsed: An
             name="marked",
             choices=("delete", "export", "none"),
         )
+        state_filter_kwargs = {
+            "marked": marked,
+            "root": deps.first_value(params, "root", None),
+            "query": deps.first_value(params, "query", None),
+        }
         with deps.database(context.db_path) as connection:
             snapshot_active = _begin_consistent_snapshot(connection)
             try:
                 ids = deps.list_review_state_file_ids(
                     connection,
-                    marked=marked,
-                    root=deps.first_value(params, "root", None),
-                    query=deps.first_value(params, "query", None),
+                    **state_filter_kwargs,
                     limit=deps.int_or_default(deps.first_value(params, "limit", "500"), default=500, minimum=1, maximum=1000),
                     offset=deps.int_or_default(deps.first_value(params, "offset", "0"), default=0, minimum=0),
                 )
                 selection_revision = deps.review_selection_revision(
                     connection,
                     scope="review-state",
-                    marked=marked,
-                    root=deps.first_value(params, "root", None),
-                    query=deps.first_value(params, "query", None),
+                    **state_filter_kwargs,
                 )
             except Exception:
                 _finish_consistent_snapshot(connection, active=snapshot_active, success=False)
