@@ -22,6 +22,9 @@ All notable changes to this project will be documented in this file.
   finalization into focused helpers while preserving progress, cancellation,
   preview/cache, partial-commit, diagnostic, and accounting behavior across
   inline and pooled processing paths.
+- Centralized HTTP response header/body writing and client-disconnect handling
+  across static, JSON, download, and JSON-error responses while preserving each
+  endpoint's status and cache/download header policy.
 - Refactored single-model scoring and learned-model comparison into focused
   planning, preview-outcome, batch-execution, and result-aggregation helpers
   while preserving scoring APIs, progress phases, summaries, diagnostics,

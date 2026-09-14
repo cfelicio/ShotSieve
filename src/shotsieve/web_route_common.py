@@ -518,50 +518,20 @@ def log_request_message(handler: Any, log: Any, format_string: str, *args: objec
     )
 
 
-def serve_static(handler: Any, name: str, content_type: str, *, static_dir: Path) -> None:
-    path = static_dir / name
-    if not path.exists():
-        handler.send_error(HTTPStatus.NOT_FOUND, "Static asset not found")
-        return
-    data = path.read_bytes()
-    handler.send_response(HTTPStatus.OK)
-    handler.send_header("Content-Type", content_type)
-    handler.send_header("Content-Length", str(len(data)))
-    handler.send_header("Cache-Control", "no-cache, must-revalidate")
-    handler.end_headers()
-    try:
-        handler.wfile.write(data)
-    except Exception as exc:
-        if _is_ignorable_client_disconnect(exc):
-            return
-        raise
-
-
-def send_json(handler: Any, payload: object) -> None:
-    body = json.dumps(payload).encode("utf-8")
-    handler.send_response(HTTPStatus.OK)
-    handler.send_header("Content-Type", "application/json; charset=utf-8")
-    handler.send_header("Content-Length", str(len(body)))
-    handler.end_headers()
-    try:
-        handler.wfile.write(body)
-    except Exception as exc:
-        if _is_ignorable_client_disconnect(exc):
-            return
-        raise
-
-
-def send_bytes(
+def _send_body(
     handler: Any,
     body: bytes,
     *,
+    status: HTTPStatus,
     content_type: str,
-    download_name: str | None = None,
+    cache_control: str | None,
+    download_name: str | None,
 ) -> None:
-    handler.send_response(HTTPStatus.OK)
+    handler.send_response(status)
     handler.send_header("Content-Type", content_type)
     handler.send_header("Content-Length", str(len(body)))
-    handler.send_header("Cache-Control", "no-cache, must-revalidate")
+    if cache_control is not None:
+        handler.send_header("Cache-Control", cache_control)
     if download_name:
         handler.send_header("Content-Disposition", f'attachment; filename="{download_name}"')
     handler.end_headers()
@@ -573,15 +543,58 @@ def send_bytes(
         raise
 
 
+def serve_static(handler: Any, name: str, content_type: str, *, static_dir: Path) -> None:
+    path = static_dir / name
+    if not path.exists():
+        handler.send_error(HTTPStatus.NOT_FOUND, "Static asset not found")
+        return
+    data = path.read_bytes()
+    _send_body(
+        handler,
+        data,
+        status=HTTPStatus.OK,
+        content_type=content_type,
+        cache_control="no-cache, must-revalidate",
+        download_name=None,
+    )
+
+
+def send_json(handler: Any, payload: object) -> None:
+    body = json.dumps(payload).encode("utf-8")
+    _send_body(
+        handler,
+        body,
+        status=HTTPStatus.OK,
+        content_type="application/json; charset=utf-8",
+        cache_control=None,
+        download_name=None,
+    )
+
+
+def send_bytes(
+    handler: Any,
+    body: bytes,
+    *,
+    content_type: str,
+    download_name: str | None = None,
+) -> None:
+    _send_body(
+        handler,
+        body,
+        status=HTTPStatus.OK,
+        content_type=content_type,
+        cache_control="no-cache, must-revalidate",
+        download_name=download_name,
+    )
+
+
 def send_json_error(handler: Any, status: HTTPStatus, message: str) -> None:
     body = json.dumps({"error": message}).encode("utf-8")
-    handler.send_response(status)
-    handler.send_header("Content-Type", "application/json; charset=utf-8")
-    handler.send_header("Content-Length", str(len(body)))
-    handler.end_headers()
-    try:
-        handler.wfile.write(body)
-    except Exception as exc:
-        if _is_ignorable_client_disconnect(exc):
-            return
-        raise
+    _send_body(
+        handler,
+        body,
+        status=status,
+        content_type="application/json; charset=utf-8",
+        cache_control=None,
+        download_name=None,
+    )
