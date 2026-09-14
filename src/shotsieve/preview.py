@@ -215,7 +215,12 @@ def generate_preview(
 
 
 def _prepare_standard_preview_image(image: Image.Image) -> Image.Image:
-    """Backward-compatible wrapper for the shared preview conversion policy."""
+    """Backward-compatible wrapper for the shared preview conversion policy.
+
+    This private name is not used by ShotSieve itself, but older integrations
+    may import it from the preview module. Keep the shim until a compatibility
+    review explicitly retires that import seam.
+    """
     return prepare_image_for_rgb(image, apply_exif_orientation=False)
 
 

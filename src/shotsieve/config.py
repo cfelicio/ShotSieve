@@ -26,6 +26,12 @@ ALL_PREVIEWABLE_EXTENSIONS = RAW_CAMERA_EXTENSIONS | HEIF_EXTENSIONS | PIL_PREVI
 PREVIEW_PRIORITY_EXTENSIONS = RAW_CAMERA_EXTENSIONS | HEIF_EXTENSIONS | frozenset({".tif", ".tiff"})
 
 #: Formats browsers can render natively.
+#:
+#: Compatibility note: this uppercase export predates the current catalog and
+#: media-serving policy. It remains available for integrations that import the
+#: format vocabulary, but it is intentionally not an allowlist: the source
+#: media endpoint must continue to return the original catalog file, including
+#: formats that require a generated preview for browser display.
 BROWSER_SAFE_EXTENSIONS = frozenset({".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp", ".avif"})
 
 #: Formats that ``_load_single_image`` (PIL) can open without optional deps.

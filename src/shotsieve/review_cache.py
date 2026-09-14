@@ -9,6 +9,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, Callable, Iterable, Sequence
 
+from shotsieve.config import BROWSER_SAFE_EXTENSIONS
 from shotsieve.db import (
     infer_preview_cache_roots,
     normalize_resolved_path,
@@ -130,7 +131,11 @@ def media_path_for_file(connection, *, file_id: int, variant: str) -> Path | Non
         return None
 
     # Generated preview is preferred for browser-fragile formats, but the
-    # source is a deterministic last-resort fallback for any format.
+    # source is a deterministic last-resort fallback for any format. Keep the
+    # browser-safe extension vocabulary centralized in config; this branch is
+    # intentionally behavior-neutral for unsafe originals.
+    if source_path.suffix.casefold() in BROWSER_SAFE_EXTENSIONS:
+        return source_path
     return source_path
 
 

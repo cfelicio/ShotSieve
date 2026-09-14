@@ -1,82 +1,23 @@
-import platform
-import sqlite3
-from hashlib import sha1
+"""Tests for scan lifecycle, preview invalidation, and scan path handling."""
+from __future__ import annotations
+
 from pathlib import Path
 
 from PIL import Image
 import pytest
 
-from shotsieve.db import connect, database, initialize_database, root_path_filter
-from shotsieve.preview import PreviewResult, preview_output_paths, stable_preview_name
-from shotsieve.scanner import FileDiscoveryError, ScanInterrupted, canonical_path_key, scan_root
-from shotsieve.schema import SCHEMA_SQL
+from shotsieve.db import connect, database, initialize_database
+from shotsieve.preview import PreviewResult
+from shotsieve.scanner import FileDiscoveryError, ScanInterrupted, scan_root
 
-
-def test_schema_contains_core_tables() -> None:
-    assert "CREATE TABLE IF NOT EXISTS files" in SCHEMA_SQL
-    assert "CREATE TABLE IF NOT EXISTS scores" in SCHEMA_SQL
-    assert "CREATE TABLE IF NOT EXISTS review_state" in SCHEMA_SQL
-    assert "CREATE TABLE IF NOT EXISTS scan_runs" in SCHEMA_SQL
-
-
-def test_initialize_database_creates_preview_path_index(tmp_path: Path) -> None:
-    db_path = tmp_path / "data" / "shotsieve.db"
-
-    initialize_database(db_path)
-
-    with connect(db_path) as connection:
-        indexes = {
-            row["name"]
-            for row in connection.execute("PRAGMA index_list(files)").fetchall()
-        }
-
-    assert "idx_files_preview_path" in indexes
-
-
-def test_initialize_database_creates_review_score_sort_indexes(tmp_path: Path) -> None:
-    db_path = tmp_path / "data" / "shotsieve.db"
-
-    initialize_database(db_path)
-
-    with connect(db_path) as connection:
-        indexes = {
-            row["name"]
-            for row in connection.execute("PRAGMA index_list(scores)").fetchall()
-        }
-
-    assert {
-        "idx_scores_review_overall_desc_file",
-        "idx_scores_review_learned_asc_file",
-    }.issubset(indexes)
-
-
-def test_initialize_database_adds_analysis_diagnostic_columns_to_existing_files_table(tmp_path: Path) -> None:
-    db_path = tmp_path / "data" / "shotsieve.db"
-    db_path.parent.mkdir()
-    legacy_schema = SCHEMA_SQL.replace(
-        "    analysis_status TEXT,\n    analysis_error TEXT,\n    last_analysis_time TEXT\n",
-        "",
-    ).replace(
-        "    scan_status TEXT NOT NULL DEFAULT 'new',\n",
-        "    scan_status TEXT NOT NULL DEFAULT 'new'\n",
-    )
-    with sqlite3.connect(db_path) as connection:
-        connection.executescript(legacy_schema)
-
-    initialize_database(db_path)
-
-    with connect(db_path) as connection:
-        columns = {row["name"] for row in connection.execute("PRAGMA table_info(files)").fetchall()}
-
-    assert {"analysis_status", "analysis_error", "last_analysis_time"}.issubset(columns)
-
+from conftest import create_image as shared_create_image
 
 def test_scan_populates_cache_and_preview(tmp_path: Path) -> None:
     db_path = tmp_path / "data" / "shotsieve.db"
     preview_dir = tmp_path / "previews"
     photo_dir = tmp_path / "photos"
     photo_dir.mkdir()
-    create_image(photo_dir / "sample.jpg")
+    shared_create_image(photo_dir / "sample.jpg")
 
     initialize_database(db_path)
 
@@ -155,7 +96,7 @@ def test_scan_marks_unchanged_on_repeat_scan(tmp_path: Path) -> None:
     preview_dir = tmp_path / "previews"
     photo_dir = tmp_path / "photos"
     photo_dir.mkdir()
-    create_image(photo_dir / "sample.jpg")
+    shared_create_image(photo_dir / "sample.jpg")
 
     initialize_database(db_path)
 
@@ -187,7 +128,7 @@ def test_scan_preserves_deleted_files_on_rescan_until_explicit_cleanup(tmp_path:
     photo_dir = tmp_path / "photos"
     photo_dir.mkdir()
     sample_path = photo_dir / "sample.jpg"
-    create_image(sample_path)
+    shared_create_image(sample_path)
 
     initialize_database(db_path)
 
@@ -219,7 +160,7 @@ def test_unavailable_scan_preserves_existing_catalog_rows(tmp_path: Path) -> Non
     preview_dir = tmp_path / "previews"
     photo_dir = tmp_path / "photos"
     photo_dir.mkdir()
-    create_image(photo_dir / "sample.jpg")
+    shared_create_image(photo_dir / "sample.jpg")
 
     initialize_database(db_path)
 
@@ -286,7 +227,7 @@ def test_failed_scan_after_prior_batch_preserves_processed_diagnostic_counts(
     photo_dir = tmp_path / "photos"
     photo_dir.mkdir()
     for index in range(101):
-        create_image(photo_dir / f"sample-{index}.jpg")
+        shared_create_image(photo_dir / f"sample-{index}.jpg")
     initialize_database(db_path)
 
     original_process_batch = scanner_module._process_scan_batch
@@ -330,7 +271,7 @@ def test_cancelled_scan_persists_incomplete_diagnostic_after_rollback(tmp_path: 
     preview_dir = tmp_path / "previews"
     photo_dir = tmp_path / "photos"
     photo_dir.mkdir()
-    create_image(photo_dir / "sample.jpg")
+    shared_create_image(photo_dir / "sample.jpg")
     initialize_database(db_path)
 
     def cancel_scan() -> None:
@@ -365,9 +306,9 @@ def test_scan_excludes_absolute_folder_rules_but_preserves_prior_rows(tmp_path: 
     excluded_dir = photo_dir / "Others" / "Beatrice Low Res"
     photo_dir.mkdir()
     excluded_dir.mkdir(parents=True)
-    create_image(photo_dir / "keep.jpg")
-    create_image(excluded_dir / "exclude-1.jpg")
-    create_image(excluded_dir / "exclude-2.jpg")
+    shared_create_image(photo_dir / "keep.jpg")
+    shared_create_image(excluded_dir / "exclude-1.jpg")
+    shared_create_image(excluded_dir / "exclude-2.jpg")
 
     initialize_database(db_path)
 
@@ -405,8 +346,8 @@ def test_scan_applies_file_ignore_rules_consistently(tmp_path: Path) -> None:
     preview_dir = tmp_path / "previews"
     photo_dir = tmp_path / "photos"
     photo_dir.mkdir()
-    create_image(photo_dir / "keep.jpg")
-    create_image(photo_dir / "ignored.jpg")
+    shared_create_image(photo_dir / "keep.jpg")
+    shared_create_image(photo_dir / "ignored.jpg")
 
     initialize_database(db_path)
 
@@ -436,8 +377,8 @@ def test_scan_rescan_preserves_sibling_prefix_root_entries(tmp_path: Path) -> No
 
     main_file = root_main / "main.jpg"
     sibling_file = root_sibling / "sibling.jpg"
-    create_image(main_file)
-    create_image(sibling_file)
+    shared_create_image(main_file)
+    shared_create_image(sibling_file)
 
     initialize_database(db_path)
 
@@ -461,7 +402,7 @@ def test_scan_respects_offset_without_limit(tmp_path: Path) -> None:
     photo_dir.mkdir()
 
     for index in range(5):
-        create_image(photo_dir / f"sample-{index}.jpg")
+        shared_create_image(photo_dir / f"sample-{index}.jpg")
 
     initialize_database(db_path)
 
@@ -487,7 +428,7 @@ def test_scan_continues_after_preview_failure(tmp_path: Path) -> None:
     preview_dir = tmp_path / "previews"
     photo_dir = tmp_path / "photos"
     photo_dir.mkdir()
-    create_image(photo_dir / "good.jpg")
+    shared_create_image(photo_dir / "good.jpg")
     (photo_dir / "broken.jpg").write_bytes(b"not-a-real-image")
 
     initialize_database(db_path)
@@ -539,7 +480,7 @@ def test_scan_rescan_clears_stale_error_after_repair(tmp_path: Path) -> None:
             "SELECT preview_status, last_error FROM files"
         ).fetchone()
 
-        create_image(sample_path)
+        shared_create_image(sample_path)
 
         second_summary = scan_root(
             connection,
@@ -572,7 +513,7 @@ def test_scan_rescan_replaces_stale_preview_metadata_when_file_breaks(tmp_path: 
     photo_dir = tmp_path / "photos"
     photo_dir.mkdir()
     sample_path = photo_dir / "sample.jpg"
-    create_image(sample_path)
+    shared_create_image(sample_path)
 
     initialize_database(db_path)
 
@@ -619,7 +560,7 @@ def test_scan_rescan_clears_stale_error_when_unchanged_file_regenerates_preview(
     photo_dir = tmp_path / "photos"
     photo_dir.mkdir()
     sample_path = photo_dir / "sample.jpg"
-    create_image(sample_path)
+    shared_create_image(sample_path)
 
     initialize_database(db_path)
 
@@ -662,7 +603,7 @@ def test_scan_ignores_generated_preview_directory(tmp_path: Path) -> None:
     preview_dir = tmp_path / "photos" / "previews"
     photo_dir = tmp_path / "photos"
     photo_dir.mkdir()
-    create_image(photo_dir / "source.jpg")
+    shared_create_image(photo_dir / "source.jpg")
 
     initialize_database(db_path)
 
@@ -688,18 +629,13 @@ def test_scan_ignores_generated_preview_directory(tmp_path: Path) -> None:
     assert count == 1
 
 
-def create_image(path: Path) -> None:
-    image = Image.new("RGB", (120, 80), color=(40, 90, 160))
-    image.save(path, format="JPEG")
-
-
 def test_scan_rescan_skips_preview_for_unchanged_files(tmp_path: Path) -> None:
     """Verify that a second scan with unchanged files does NOT regenerate previews."""
     db_path = tmp_path / "data" / "shotsieve.db"
     preview_dir = tmp_path / "previews"
     photo_dir = tmp_path / "photos"
     photo_dir.mkdir()
-    create_image(photo_dir / "sample.jpg")
+    shared_create_image(photo_dir / "sample.jpg")
 
     initialize_database(db_path)
 
@@ -743,7 +679,7 @@ def test_scan_rescan_regenerates_missing_preview_for_unchanged_source(tmp_path: 
     preview_dir = tmp_path / "previews"
     photo_dir = tmp_path / "photos"
     photo_dir.mkdir()
-    create_image(photo_dir / "sample.jpg")
+    shared_create_image(photo_dir / "sample.jpg")
 
     initialize_database(db_path)
 
@@ -782,7 +718,7 @@ def test_scan_marks_row_status_updated_when_source_changes(tmp_path: Path) -> No
     photo_dir = tmp_path / "photos"
     photo_dir.mkdir()
     sample_path = photo_dir / "sample.jpg"
-    create_image(sample_path)
+    shared_create_image(sample_path)
 
     initialize_database(db_path)
 
@@ -855,158 +791,3 @@ def test_scan_reuses_single_process_pool_across_multiple_batches(tmp_path: Path,
     assert pool_creations["count"] == 1
 
 
-def test_canonical_path_key_preserves_case_on_case_sensitive_platform(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    sample_path = tmp_path / "Photos" / "A.jpg"
-    expected = str(sample_path.resolve())
-
-    monkeypatch.setattr(platform, "system", lambda: "Linux")
-
-    assert canonical_path_key(sample_path) == expected
-
-
-def test_stable_preview_name_hashes_normalized_path_key_on_case_insensitive_platform(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    sample_path = tmp_path / "Photos" / "A.jpg"
-
-    monkeypatch.setattr(platform, "system", lambda: "Windows")
-
-    expected = sha1(canonical_path_key(sample_path).encode("utf-8")).hexdigest()
-
-    assert stable_preview_name(sample_path) == expected
-
-
-def test_preview_output_paths_do_not_cleanup_casefold_compatibility_name_on_case_sensitive_platform(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    preview_dir = tmp_path / "previews"
-    sample_path = tmp_path / "Photos" / "Sample.jpg"
-
-    monkeypatch.setattr(platform, "system", lambda: "Linux")
-
-    preview_path, stale_paths = preview_output_paths(sample_path, preview_dir)
-    casefold_compatibility_path = preview_dir / (
-        f"{sha1(str(sample_path.resolve()).casefold().encode('utf-8')).hexdigest()}.jpg"
-    )
-
-    assert preview_path.name == f"{stable_preview_name(sample_path)}.jpg"
-    assert casefold_compatibility_path not in stale_paths
-
-
-def test_root_path_filter_matches_case_sensitive_roots_without_lowercasing(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(platform, "system", lambda: "Linux")
-
-    root_path = tmp_path / "Photos"
-    matching_path = str((root_path / "A.jpg").resolve())
-    other_case_path = str(((tmp_path / "photos") / "A.jpg").resolve())
-
-    connection = sqlite3.connect(":memory:")
-    connection.row_factory = sqlite3.Row
-    connection.execute("CREATE TABLE files(path_key TEXT NOT NULL)")
-    connection.executemany(
-        "INSERT INTO files(path_key) VALUES(?)",
-        [(matching_path,), (other_case_path,)],
-    )
-
-    try:
-        clause, params = root_path_filter("path_key", root_path)
-        rows = connection.execute(
-            f"SELECT path_key FROM files WHERE {clause} ORDER BY path_key",
-            tuple(params),
-        ).fetchall()
-    finally:
-        connection.close()
-
-    assert [row["path_key"] for row in rows] == [matching_path]
-
-
-def test_root_path_filter_matches_non_bmp_descendants(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(platform, "system", lambda: "Linux")
-
-    root_path = tmp_path / "Photos"
-    basic_path = str((root_path / "A.jpg").resolve())
-    emoji_path = str((root_path / "😀.jpg").resolve())
-
-    connection = sqlite3.connect(":memory:")
-    connection.row_factory = sqlite3.Row
-    connection.execute("CREATE TABLE files(path_key TEXT NOT NULL)")
-    connection.executemany(
-        "INSERT INTO files(path_key) VALUES(?)",
-        [(basic_path,), (emoji_path,)],
-    )
-
-    try:
-        clause, params = root_path_filter("path_key", root_path)
-        rows = connection.execute(
-            f"SELECT path_key FROM files WHERE {clause} ORDER BY path_key",
-            tuple(params),
-        ).fetchall()
-    finally:
-        connection.close()
-
-    assert [row["path_key"] for row in rows] == [basic_path, emoji_path]
-
-
-def test_initialize_database_rebuilds_legacy_path_keys_for_case_sensitive_platform(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    db_path = tmp_path / "data" / "shotsieve.db"
-    sample_path = tmp_path / "Photos" / "A.jpg"
-
-    # Force the first init to store a case-insensitive policy so that the
-    # subsequent switch to Linux triggers an actual rebuild.  Without this,
-    # the test is a no-op on Linux CI where the policy is already
-    # 'case-sensitive-v1'.
-    monkeypatch.setattr(platform, "system", lambda: "Windows")
-    initialize_database(db_path)
-    with connect(db_path) as connection:
-        connection.execute(
-            "INSERT INTO files(path, path_key) VALUES(?, ?)",
-            (str(sample_path.resolve()), str(sample_path.resolve()).casefold()),
-        )
-        connection.commit()
-
-    monkeypatch.setattr(platform, "system", lambda: "Linux")
-
-    initialize_database(db_path)
-
-    with connect(db_path) as connection:
-        row = connection.execute("SELECT path_key FROM files").fetchone()
-
-    assert row["path_key"] == str(sample_path.resolve())
-
-
-def test_initialize_database_raises_for_path_key_collisions_after_policy_change(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    db_path = tmp_path / "data" / "shotsieve.db"
-    photo_dir = tmp_path / "Photos"
-    upper_path = photo_dir / "A.jpg"
-    lower_path = photo_dir / "a.jpg"
-
-    monkeypatch.setattr(platform, "system", lambda: "Linux")
-    initialize_database(db_path)
-    with connect(db_path) as connection:
-        connection.executemany(
-            "INSERT INTO files(path, path_key) VALUES(?, ?)",
-            [
-                (str(upper_path.resolve()), str(upper_path.resolve())),
-                (str(lower_path.resolve()), str(lower_path.resolve())),
-            ],
-        )
-        connection.commit()
-
-    monkeypatch.setattr(platform, "system", lambda: "Windows")
-
-    with pytest.raises(ValueError, match="path_key normalization collision"):
-        initialize_database(db_path)

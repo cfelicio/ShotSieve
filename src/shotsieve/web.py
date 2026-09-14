@@ -80,6 +80,9 @@ _required_choice = _request_helpers.required_choice
 _required_int = _request_helpers.required_int
 _required_int_list = _request_helpers.required_int_list
 _required_path = _request_helpers.required_path
+# Compatibility alias for integrations that imported this private helper from
+# ``shotsieve.web`` before request parsing moved to ``web_request``. Internal
+# routes use the request-helper module directly; keep the alias intentionally.
 _required_path_list = _request_helpers.required_path_list
 
 _is_allowed_post_origin = _security_helpers.is_allowed_post_origin
