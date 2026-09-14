@@ -233,47 +233,21 @@ def test_import_pyiqa_runtime_uses_injected_import_module_for_optional_dependenc
     assert ensure_calls == [fake_import_module]
 
 
-def test_qalign_is_accelerator_only() -> None:
-    assert learned_iqa_module.is_model_runtime_compatible("qalign", torch_version="2.6.0", runtime="cuda") is True
-    assert learned_iqa_module.is_model_runtime_compatible("qalign", torch_version=None, runtime="mps") is True
-    assert learned_iqa_module.is_model_runtime_compatible("qalign", torch_version="2.6.0", runtime="cpu") is False
-def test_qalign_is_rejected_on_cpu_before_metric_creation(monkeypatch: pytest.MonkeyPatch) -> None:
-    class FakePyiqa:
-        @staticmethod
-        def list_models(metric_mode: str):
-            assert metric_mode == "NR"
-            return ["qalign"]
-
-    class FakeTorch:
-        __version__ = "2.13.0+cpu"
-
-        @staticmethod
-        def device(name: str) -> str:
-            return name
-
-        class cuda:
-            @staticmethod
-            def is_available() -> bool:
-                return False
-
-    metric_calls: list[str] = []
-    monkeypatch.setattr(learned_iqa_module, "import_pyiqa_runtime", lambda: (FakePyiqa, FakeTorch))
-    monkeypatch.setattr(learned_iqa_module, "create_metric_safely", lambda *_args, **_kwargs: metric_calls.append("called"))
-
-    with pytest.raises(learned_iqa_module.LearnedBackendUnavailableError, match="not compatible with runtime 'cpu'"):
-        learned_iqa_module.PyiqaBackend("qalign", device="cpu")
-
-    assert metric_calls == []
+def test_qrealign_mini_supports_cpu_and_accelerators() -> None:
+    for runtime in ("cpu", "cuda", "rocm", "xpu", "mps"):
+        assert learned_iqa_module.is_model_runtime_compatible(
+            "qrealign-mini", torch_version="2.6.0", runtime=runtime
+        ) is True
 
 
-def test_qalign_version_probe_accepts_supported_accelerator(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_qrealign_version_probe_accepts_supported_runtime(monkeypatch: pytest.MonkeyPatch) -> None:
     class FakePyiqa:
         __version__ = "0.1.16"
 
         @staticmethod
         def list_models(metric_mode: str):
             assert metric_mode == "NR"
-            return ["qalign"]
+            return ["qrealign-mini"]
 
     class FakeTorch:
         __version__ = "2.13.0+cu126"
@@ -289,17 +263,17 @@ def test_qalign_version_probe_accepts_supported_accelerator(monkeypatch: pytest.
 
     monkeypatch.setattr(learned_iqa_module, "import_pyiqa_runtime", lambda: (FakePyiqa, FakeTorch))
 
-    assert learned_iqa_module.resolve_learned_model_version("q-align", device="cuda") == "pyiqa:0.1.16:qalign:cuda"
+    assert learned_iqa_module.resolve_learned_model_version("q-realign", device="cuda") == "pyiqa:0.1.16:qrealign-mini:cuda"
 
 
 def test_model_catalog_contains_only_reviewed_product_models() -> None:
     from shotsieve import learned_iqa_catalog as catalog_module
 
-    assert catalog_module.SUPPORTED_MODEL_NAMES == ("topiq_nr", "clipiqa", "qalign")
-    assert [entry["canonical_id"] for entry in catalog_module.model_catalog_payload()] == ["topiq_nr", "clipiqa", "qalign"]
+    assert catalog_module.SUPPORTED_MODEL_NAMES == ("topiq_nr", "clipiqa", "qrealign-mini")
+    assert [entry["canonical_id"] for entry in catalog_module.model_catalog_payload()] == ["topiq_nr", "clipiqa", "qrealign-mini"]
     assert all(entry["available"] is False for entry in catalog_module.model_catalog_payload())
     assert catalog_module.validate_model_name(" TOPIQ-NR ") == "topiq_nr"
-    assert catalog_module.validate_model_name("q-align") == "qalign"
+    assert catalog_module.validate_model_name("q-realign") == "qrealign-mini"
 
 
 def test_runtime_model_discovery_does_not_readvertise_catalog_on_failure(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -313,8 +287,8 @@ def test_runtime_model_discovery_does_not_readvertise_catalog_on_failure(monkeyp
     assert learned_iqa_module.runtime_curated_learned_models() == ()
 
 
-def test_runtime_compatible_model_names_filters_qalign_from_cpu() -> None:
-    models = ["topiq_nr", "clipiqa", "qalign"]
+def test_runtime_compatible_model_names_keeps_qrealign_mini_on_cpu() -> None:
+    models = ["topiq_nr", "clipiqa", "qrealign-mini"]
 
     filtered_cpu = learned_iqa_module.runtime_compatible_model_names(
         models,
@@ -332,18 +306,17 @@ def test_runtime_compatible_model_names_filters_qalign_from_cpu() -> None:
         runtime="mps",
     )
 
-    assert "qalign" not in filtered_cpu
-    assert filtered_cpu == ["topiq_nr", "clipiqa"]
-    assert filtered_cuda == ["topiq_nr", "clipiqa", "qalign"]
-    assert filtered_mps == ["topiq_nr", "clipiqa", "qalign"]
+    assert filtered_cpu == ["topiq_nr", "clipiqa", "qrealign-mini"]
+    assert filtered_cuda == ["topiq_nr", "clipiqa", "qrealign-mini"]
+    assert filtered_mps == ["topiq_nr", "clipiqa", "qrealign-mini"]
 
 
-def test_available_backends_excludes_qalign_on_cpu_runtime_even_on_older_torch(monkeypatch) -> None:
+def test_available_backends_includes_qrealign_mini_on_cpu_runtime_even_on_older_torch(monkeypatch) -> None:
     class FakePyiqa:
         @staticmethod
         def list_models(metric_mode: str):
             assert metric_mode == "NR"
-            return ["topiq_nr", "arniqa", "qalign"]
+            return ["topiq_nr", "arniqa", "qrealign-mini"]
 
     class FakeTorch:
         __version__ = "2.3.1"
@@ -368,15 +341,15 @@ def test_available_backends_excludes_qalign_on_cpu_runtime_even_on_older_torch(m
 
     available_text = str(payload["modern_models_available"] or "")
     available = available_text.split(",") if available_text else []
-    assert "qalign" not in available
+    assert "qrealign-mini" in available
 
 
-def test_available_backends_excludes_qalign_on_cpu_runtime_with_new_torch(monkeypatch) -> None:
+def test_available_backends_includes_qrealign_mini_on_cpu_runtime_with_new_torch(monkeypatch) -> None:
     class FakePyiqa:
         @staticmethod
         def list_models(metric_mode: str):
             assert metric_mode == "NR"
-            return ["topiq_nr", "clipiqa", "qalign"]
+            return ["topiq_nr", "clipiqa", "qrealign-mini"]
 
     class FakeTorch:
         __version__ = "2.11.0+cpu"
@@ -401,7 +374,7 @@ def test_available_backends_excludes_qalign_on_cpu_runtime_with_new_torch(monkey
     available_text = str(payload["modern_models_available"] or "")
     available = available_text.split(",") if available_text else []
 
-    assert "qalign" not in available
+    assert "qrealign-mini" in available
 
 
 def test_global_torch_load_workaround_is_removed() -> None:

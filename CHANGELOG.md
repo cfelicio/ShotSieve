@@ -33,7 +33,8 @@ All notable changes to this project will be documented in this file.
 - Retired the unsupported PyTorch DirectML adapter and Windows-DML release target. Windows AMD hardware now reports an explicit CPU fallback until native ROCm validation passes; Windows ML/ONNX remains deferred.
 - Added a source-only Intel XPU track with pinned PyTorch XPU wheels, Windows/Linux installation guidance, native tensor verification, and one-image smoke reports that capture runtime, score, cache, and peak-memory evidence. No packaged XPU target is advertised.
 - Added a Linux-first, source-only AMD ROCm track with exact AMD ROCm 7.2.1 PyTorch wheels, HIP-aware runtime resolution, AMD/ROCm smoke evidence, narrow Windows guidance, and no packaged ROCm target.
-- Restored Q-Align (`qalign`) to the supported learned-IQA product catalog for CUDA and Apple MPS, with accelerator-only preparation, one-image batching, and explicit CPU/XPU exclusion; other PyIQA names remain disabled for new runs while historical rows stay readable.
+- Added Q-ReAlign Mini (`qrealign-mini`) as the sole Q-ReAlign catalog entry, including Qwen3.5-VL model metadata, a four-image batch cap, revision-aware readiness fingerprints, sanitized diagnostics, and updated model/license notices. Fresh CUDA/CPU/XPU/ROCm evidence remains open.
+- Removed the obsolete predecessor integration from the selectable learned-IQA catalog; stored scores are not migrated or relabeled.
 - Removed the process-global Torch loader workaround. Runtime discovery now reports empty/unavailable model state when the supported models are not ready, and explicit unavailable accelerators fail with actionable guidance while Auto reports CPU fallback reasons.
 - Added selected-model preparation with runtime-specific validation, atomic readiness records, cache-path/version invalidation, sanitized failure diagnostics, and retained cancellation state.
 - Made optional AI runtime acquisition explicit: ordinary noninteractive launches no longer install or repair learned-IQA/CUDA sidecars automatically; Settings now provides one job-backed Install / Repair AI support action with target/cache paths, diagnostics, retry, and restart guidance. The existing `SHOTSIEVE_BOOTSTRAP_AUTO_INSTALL_*` environment variables remain available for deliberate startup automation.
@@ -42,8 +43,8 @@ All notable changes to this project will be documented in this file.
 - Aligned model smoke, release-target, and sidecar installs on the tested learned-IQA dependency stack, with release-time `pip check` validation and no DirectML target.
 - Model smoke now records resolved dependency versions and retains sanitized JSON failure reports without uploading caches, weights, or generated images.
 - CI now runs on direct `main` pushes, adds a Python 3.14 core suite, smoke-tests an installed wheel outside the checkout, and fails browser coverage when Chromium cannot launch in CI while preserving local skips.
-- Pinned the optional learned-IQA integration to `pyiqa==0.1.16` and documented separate package, checkpoint, cache, and Q-Align/base-model licensing boundaries.
-- Added offline pull-request CI and a separate weekly/manual CPU smoke workflow for TOPIQ and CLIPIQA; accelerator-specific Q-Align smoke remains a target-host release gate and never publishes weights or photos.
+- Pinned the optional learned-IQA integration to `pyiqa==0.1.16` and documented separate package, checkpoint, cache, and Q-ReAlign/Qwen3.5-VL base-model licensing boundaries.
+- Added offline pull-request CI and a separate weekly/manual CPU smoke workflow for TOPIQ and CLIPIQA; accelerator-specific Q-ReAlign Mini smoke remains a target-host release gate and never publishes weights or photos.
 - Added a fixed 40-million-pixel decode budget for exceptional preview and direct learned-IQA source fallbacks, with per-file resource-limit diagnostics and file-attributed header warnings. Ready previews and usable RAW embedded thumbnails remain preferred, and corrupt RAW thumbnails can still fall back to bounded demosaicing.
 
 ### Fixed

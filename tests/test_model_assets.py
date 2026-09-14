@@ -21,7 +21,7 @@ def test_gpu_memory_error_with_documentation_url_is_not_network_failure() -> Non
     cause = RuntimeError(
         "CUDA out of memory. See https://docs.pytorch.org/docs/stable/notes/cuda.html"
     )
-    wrapped = RuntimeError("Failed to initialize learned IQA model 'qalign'")
+    wrapped = RuntimeError("Failed to initialize learned IQA model 'qrealign-mini'")
     wrapped.__cause__ = cause
     report = model_assets.classify_preparation_error(wrapped, phase="preparing_model", environ={})
     assert report["category"] == "runtime_out_of_memory"
@@ -112,44 +112,33 @@ def test_prepare_model_cancellation_is_retained_as_incomplete_diagnostic(tmp_pat
     assert record["recovery_action"]
 
 
-def test_preparation_uses_requested_accelerator_for_qalign(tmp_path: Path) -> None:
+def test_preparation_uses_requested_accelerator_for_qrealign_mini(tmp_path: Path) -> None:
     calls: list[tuple[str, object]] = []
 
-    class QAlignBackend(_Backend):
+    class QReAlignBackend(_Backend):
         runtime = "cuda"
 
     def factory(model: str, *, device: str):
         calls.append(("build", (model, device)))
-        return QAlignBackend(calls)
+        return QReAlignBackend(calls)
 
     result = model_assets.prepare_model(
-        "q-align",
+        "q-realign",
         data_dir=tmp_path,
         device="cuda",
         backend_factory=factory,
     )
 
     assert result["state"] == "prepared"
-    assert result["model"] == "qalign"
+    assert result["model"] == "qrealign-mini"
     assert result["requested_runtime"] == "cuda"
     assert result["tested_runtime"] == "cuda"
     assert result["asset_check"]["method"] == "backend_initialization_and_inference"
-    assert calls[0] == ("build", ("qalign", "cuda"))
+    assert calls[0] == ("build", ("qrealign-mini", "cuda"))
+    assert result["model_revision"] == "fe1f45a7574c9e9d908875af9f7e90cb946aa19f"
+    assert result["expected_resources"]["checkpoint_revision"] == "fe1f45a7574c9e9d908875af9f7e90cb946aa19f"
+    assert result["disk_estimate"]["weight_mb"] == 2210
     assert calls[-1] == ("close", None)
-
-
-def test_preparation_rejects_qalign_on_cpu_after_backend_resolution(tmp_path: Path) -> None:
-    with pytest.raises(RuntimeError, match="not compatible with model 'qalign'"):
-        model_assets.prepare_model(
-            "qalign",
-            data_dir=tmp_path,
-            device="cpu",
-            backend_factory=lambda *_args, **_kwargs: _Backend([]),
-        )
-
-    record = json.loads(model_assets.preparation_record_path(tmp_path).read_text(encoding="utf-8"))
-    assert record["state"] == "failed"
-    assert record["requested_runtime"] == "cpu"
 
 
 def test_readiness_context_change_invalidates_previous_record_without_scanning_cache(tmp_path: Path) -> None:

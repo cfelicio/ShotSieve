@@ -56,14 +56,17 @@ The supported plain `clipiqa` model does not download a separate learned
 CLIPIQA prompt checkpoint. The optional `clipiqa+` variants are outside the
 ShotSieve product catalog.
 
-## Q-Align (`qalign`)
+## Q-ReAlign Mini (`qrealign-mini`)
 
-- **Paper:** [Q-Align: Teaching LMMs for Visual Scoring via Discrete Text-Defined Levels](https://arxiv.org/abs/2312.17091)
-- **Implementation:** pyiqa's Q-Align integration, which downloads the Q-Future `one-align` model from Hugging Face
-- **Repository:** [Q-Future/Q-Align](https://github.com/Q-Future/Q-Align)
-- **Terms:** subject to the licenses of the Q-Align implementation, its model card, and the underlying mPLUG-Owl2/LLaMA base models. Users must treat the downloaded weights as research-use only unless the upstream terms clearly grant broader rights.
-- **ShotSieve runtime boundary:** supported for CUDA and Apple MPS only; not supported on CPU or XPU. Q-Align weights are never bundled and are downloaded only during explicit model preparation or scoring.
-- **Authors:** Haoning Wu et al.
+- **Model card:** [Q-Future Q-ReAlign Mini 0.8B](https://huggingface.co/q-future/Q-ReAlign-Mini-0.8B)
+- **Repository:** [Q-Future/Q-ReAlign](https://github.com/Q-Future/Q-ReAlign)
+- **PyIQA metric:** `qrealign-mini` in `pyiqa==0.1.16`; its `qrealign` alias also selects Mini
+- **Checkpoint:** `q-future/Q-ReAlign-Mini-0.8B`, about 2.21 GB of safetensors
+- **Pinned model revision:** `fe1f45a7574c9e9d908875af9f7e90cb946aa19f` (model-card commit)
+- **Model-card license:** Apache-2.0, as declared by the checkpoint repository
+- **Base model:** Qwen3.5-VL (`qwen3_5`); review the [Qwen3.5 source and license](https://github.com/QwenLM/Qwen3.5) and the exact base-model terms before redistribution or commercial use
+- **Terms boundary:** the Q-ReAlign checkpoint, Qwen3.5-VL base/model terms, Q-ReAlign implementation, PyIQA code, and downloaded tokenizer/processor assets are separate review boundaries. ShotSieve does not bundle any of them.
+- **Runtime boundary:** the initial product size is Mini only, with a ShotSieve batch maximum of four. CPU and accelerator execution are exposed through the model/runtime compatibility catalog, but each target still requires the fresh online/offline evidence in `manualsteps.md` before it is claimed as validated.
 
 ## AMD ROCm source track
 
@@ -100,4 +103,4 @@ insufficient.
 | pyiqa 0.1.16 | PolyForm Noncommercial 1.0.0 plus included notices | Do not assume commercial permission |
 | TOPIQ assets | Package, checkpoint, and backbone terms are separate | Verify each asset before use |
 | CLIPIQA assets | pyiqa code plus OpenAI CLIP RN50 terms | Verify both code and checkpoint terms |
-| Q-Align assets | Downloaded on demand under upstream model/base-model terms | Verify research/commercial rights before use |
+| Q-ReAlign Mini assets | Downloaded on demand under Q-ReAlign, Qwen3.5-VL, and processor/base-model terms | Verify exact checkpoint and base-model rights before use |

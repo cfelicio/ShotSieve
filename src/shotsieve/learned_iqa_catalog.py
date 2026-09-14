@@ -10,21 +10,21 @@ DEFAULT_DEVICE_POLICY = "auto (platform-aware accelerator, then cpu)"
 DEFAULT_INPUT_SIZES = {
     "topiq_nr": 384,
     "clipiqa": 224,
-    "qalign": 384,
+    "qrealign-mini": 384,
 }
 MAX_BATCH_SIZES = {
     "topiq_nr": 4,
     "clipiqa": 4,
-    "qalign": 1,
+    "qrealign-mini": 4,
 }
 MODEL_WEIGHT_MB = {
     "clipiqa": 600,
-    "qalign": 16410,
+    "qrealign-mini": 2210,
     "topiq_nr": 80,
 }
 PER_IMAGE_ACTIVATION_MB = {
     "clipiqa": 60,
-    "qalign": 800,
+    "qrealign-mini": 320,
     "topiq_nr": 8,
 }
 DEVICE_TARGET_ALIASES = {
@@ -58,8 +58,16 @@ MODEL_NAME_ALIASES = {
     "clipiqa": "clipiqa",
     "quali-clip": "qualiclip",
     "qualiclip": "qualiclip",
-    "q-align": "qalign",
-    "qalign": "qalign",
+    "q-realign": "qrealign-mini",
+    "q-realignmini": "qrealign-mini",
+    "qrealign": "qrealign-mini",
+    "qrealignmini": "qrealign-mini",
+    "q-realign-mini": "qrealign-mini",
+    "qrealign-mini": "qrealign-mini",
+    "q-realign_mini": "qrealign-mini",
+    "qrealign_mini": "qrealign-mini",
+    "q-realign-mini-0.8b": "qrealign-mini",
+    "qrealign-mini-0.8b": "qrealign-mini",
 }
 _SUPPORTED_RUNTIME_TARGETS = ("auto", "cpu", "cuda", "rocm", "xpu", "mps", "nvidia", "amd", "intel", "apple")
 
@@ -78,6 +86,8 @@ class LearnedModelSpec:
     cache_families: tuple[str, ...]
     required_cache_roots: tuple[str, ...]
     first_use_disclosure: str
+    upstream_model_id: str | None = None
+    checkpoint_revision: str | None = None
 
     def to_payload(self, *, available: bool = False) -> dict[str, object]:
         payload = asdict(self)
@@ -121,18 +131,27 @@ MODEL_CATALOG = (
         first_use_disclosure="First use may download the OpenAI CLIP RN50 checkpoint; plain CLIPIQA uses its packaged prompt pairs and does not add a separate CLIPIQA checkpoint.",
     ),
     LearnedModelSpec(
-        canonical_id="qalign",
-        aliases=("qalign", "q-align"),
-        label="Q-Align",
-        description="Large multimodal quality model for accelerator-backed scoring; batch size is limited to one.",
-        supported_runtimes=("cuda", "mps"),
+        canonical_id="qrealign-mini",
+        aliases=(
+            "qrealign-mini",
+            "qrealign",
+            "q-realign",
+            "q-realign-mini",
+            "qrealign_mini",
+            "q-realign-mini-0.8b",
+        ),
+        label="Q-ReAlign Mini",
+        description="Compact Qwen3.5-VL quality judge; higher scores indicate better perceptual quality.",
+        supported_runtimes=_COMMON_RUNTIME_POLICY,
         input_size=384,
-        default_batch_size=1,
-        max_batch_size=1,
-        resource_labels=("very large model", "high memory", "accelerator required"),
+        default_batch_size=4,
+        max_batch_size=4,
+        resource_labels=("2.2 GB weights", "under-4 GB claim", "CPU-compatible"),
         cache_families=("Hugging Face Hub cache",),
         required_cache_roots=("hf_hub_cache",),
-        first_use_disclosure="First use downloads approximately 16.4 GB of Q-Future one-align weights, plus tokenizer and configuration files. Allow additional cache and loading memory. Requires a compatible CUDA or Apple MPS runtime; Q-Align supports one image per inference batch.",
+        first_use_disclosure="First use downloads the Q-Future Q-ReAlign-Mini-0.8B checkpoint (about 2.2 GB of safetensors), tokenizer, processor, and configuration files. The authors claim under 4 GB of GPU memory and CPU support; verify actual peak memory and throughput on each target.",
+        upstream_model_id="q-future/Q-ReAlign-Mini-0.8B",
+        checkpoint_revision="fe1f45a7574c9e9d908875af9f7e90cb946aa19f",
     ),
 )
 

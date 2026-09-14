@@ -118,9 +118,8 @@ python scripts/model_smoke.py \
   --report-path ./build/audit-reports/xpu-topiq_nr-offline.json
 ```
 
-Repeat those two commands with `clipiqa`. Repeat with
-`qrealign-mini` only after W04 adds the model to the product catalog; its
-absence before W04 is expected and is not an XPU failure. Use a fresh cache
+Repeat those two commands with `clipiqa` and, if Q-ReAlign Mini is included in
+the target claim, with `qrealign-mini`. Use a fresh cache
 and data directory for every model. Never put source photos, model weights, or
 private paths in a report intended for sharing.
 

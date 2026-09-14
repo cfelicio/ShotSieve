@@ -116,11 +116,11 @@ def _frontend_learned_options(*, resource_profile: str | None = None) -> dict[st
         "runtime_status": "rocm:unavailable,cuda:unavailable,xpu:unavailable,mps:unsupported,cpu:available",
         "auto_runtime_priority": "rocm,cuda,xpu,cpu",
         "vendor_aliases": "nvidia->cuda,amd->rocm(with validated HIP build),intel->xpu,apple->mps",
-        "modern_model_catalog": "topiq_nr,clipiqa,qalign",
+        "modern_model_catalog": "topiq_nr,clipiqa,qrealign-mini",
         "modern_models_available": "topiq_nr,clipiqa",
         "model_catalog": model_catalog_payload(available_models=("topiq_nr", "clipiqa")),
         "hardware": {"cpu_count": 4, "ram_mb": 8192, "vram_mb": None},
-        "recommended_batch_sizes": {"topiq_nr": 4, "clipiqa": 4, "qalign": 1},
+        "recommended_batch_sizes": {"topiq_nr": 4, "clipiqa": 4, "qrealign-mini": 4},
         "resource_profile": resource_profile or "normal",
     }
 

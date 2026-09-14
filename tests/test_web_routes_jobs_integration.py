@@ -190,11 +190,9 @@ class TestWebRoutesJobsIntegration:
         assert payload["preview_modes"] == ["fast", "auto", "high-quality"]
         assert payload["raw_preview_auto_min_long_edge"] == 1024
         assert "technical-only" not in payload["learned_models"]
-        assert set(payload["learned_models"]).issubset({"topiq_nr", "clipiqa", "qalign"})
-        if payload["learned"]["default_runtime"] in {"cuda", "mps"}:
-            assert "qalign" in payload["learned_models"]
-        else:
-            assert "qalign" not in payload["learned_models"]
+        assert set(payload["learned_models"]).issubset({"topiq_nr", "clipiqa", "qrealign-mini"})
+        if payload["learned"].get("modern_models_available"):
+            assert "qrealign-mini" in payload["learned_models"]
         assert "auto_runtime_priority" in payload["learned"]
         assert "cpu" in payload["learned"]["auto_runtime_priority"]
         assert payload["runtime_targets"] == ["auto", "cpu", "cuda", "xpu", "mps"]
@@ -348,7 +346,7 @@ class TestWebRoutesJobsIntegration:
         assert result["error_report"]["category"] == "network_or_hub"
         assert "token=secret" not in json.dumps(result)
 
-    def test_options_payload_hides_qalign_for_installed_cpu_runtime(self, test_server, monkeypatch):
+    def test_options_payload_keeps_qrealign_mini_for_installed_cpu_runtime(self, test_server, monkeypatch):
         base_url, _, _ = test_server
         from shotsieve import web as web_module
         import shotsieve.learned_iqa as learned_iqa_module
@@ -357,7 +355,7 @@ class TestWebRoutesJobsIntegration:
             @staticmethod
             def list_models(metric_mode: str):
                 assert metric_mode == "NR"
-                return ["topiq_nr", "clipiqa", "qalign"]
+                return ["topiq_nr", "clipiqa", "qrealign-mini"]
 
         class FakeTorch:
             __version__ = "2.11.0+cpu"
@@ -384,7 +382,7 @@ class TestWebRoutesJobsIntegration:
         payload = json.loads(response.read().decode("utf-8"))
 
         assert payload["learned"]["default_runtime"] == "cpu"
-        assert payload["learned_models"] == ["topiq_nr", "clipiqa"]
+        assert payload["learned_models"] == ["topiq_nr", "clipiqa", "qrealign-mini"]
 
     def test_options_payload_keeps_product_catalog_for_installed_accelerator_runtime(self, test_server, monkeypatch):
         base_url, _, _ = test_server
@@ -396,7 +394,7 @@ class TestWebRoutesJobsIntegration:
             @staticmethod
             def list_models(metric_mode: str):
                 assert metric_mode == "NR"
-                return ["topiq_nr", "clipiqa", "qalign"]
+                return ["topiq_nr", "clipiqa", "qrealign-mini"]
 
         class FakeTorch:
             __version__ = "2.11.0+cu124"
@@ -424,7 +422,7 @@ class TestWebRoutesJobsIntegration:
         payload = json.loads(response.read().decode("utf-8"))
 
         assert payload["learned"]["default_runtime"] == "cuda"
-        assert payload["learned_models"] == ["topiq_nr", "clipiqa", "qalign"]
+        assert payload["learned_models"] == ["topiq_nr", "clipiqa", "qrealign-mini"]
 
     def test_options_route_uses_refreshed_hardware_cache_after_invalidation(self, test_server, monkeypatch):
         base_url, _, _ = test_server

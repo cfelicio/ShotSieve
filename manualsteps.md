@@ -4,8 +4,8 @@ Updated 2026-09-13.
 
 This is the remaining candidate, target, hardware, storage, and human-review
 checklist. Most bounded implementation work is complete. Active model work is
-tracked in `implement.md`: Q-ReAlign Mini is the forward model candidate, while
-the original Q-ALIGN investigation is historical. DirectML retirement
+tracked in `implement.md`: Q-ReAlign Mini is now integrated as the forward model.
+DirectML retirement
 implementation is complete, but its remaining release and hardware validation
 gates are still open; Windows ML/ONNX is deferred, and native XPU/ROCm are
 separate unvalidated target tracks. I06 and the candidate-specific gates remain
@@ -31,8 +31,6 @@ These are disposable build locations: move or copy a cache to a durable
 location and pass it via `--model-cache-dir` before deleting build output.
 Q-ReAlign Mini's published safetensors are about 2.2 GB; allow
 additional tokenizer/configuration, temporary loading, and runtime memory. The
-old Q-ALIGN cache is approximately 16.4 GB and is retained only for historical
-diagnostics or an explicitly requested legacy validation.
 
 For a normal source environment upgrade, use the appropriate target constraints
 from `docs/building.md`. For a portable install, run Settings > Install / Repair
@@ -65,29 +63,14 @@ browser skips must not be recorded as passes; CI treats launch problems as error
   uninterrupted all-green browser run.
 - Focused Ruff `--isolated --select F,E9`, Python compilation and `git diff --check`
   passed. A bare Ruff invocation inherits unrelated extra rules in this workspace.
-- The original Q-ALIGN weights and tokenizer/configuration files downloaded
-  successfully at revision `dcc603b95aa0ebd82afa696d4a1e20d11fc80ddb`. Its
-  real CUDA initialization **failed with out-of-memory** on the RTX 5060 Ti
-  (15.93 GiB usable capacity). No successful legacy Q-ALIGN inference or offline
-  scoring is claimed.
+- **Q-ReAlign Mini is integrated but has not yet been downloaded or scored in this
+  checkout.** Run the fresh-cache and network-disabled checks below and record the
+  immutable model revision `fe1f45a7574c9e9d908875af9f7e90cb946aa19f`, exact
+  dependency versions, score range, elapsed time, and peak memory. Do not treat
+  the upstream under-4-GB estimate as local validation.
 
-- **Q-ReAlign Mini has not yet been downloaded or scored in this checkout.**
-  After its catalog/backend integration lands, run the fresh-cache and
-  network-disabled checks described in R01 and record the model revision, exact
-  dependency versions, score range, and peak memory. Do not treat the upstream
-  under-4-GB estimate as local validation.
-
-The failed legacy report is `build/audit-reports/latest-qalign-cuda-online.json`.
-It predates the diagnostic fix and incorrectly labels OOM as `network_or_hub`;
-`qalign-diagnostic-regression.json` records the corrected classification from
-that captured error, not a repeated inference run. The app now classifies it as
-`runtime_out_of_memory`. Loader/CLIP versions are also included in readiness
-fingerprints, so upgrades invalidate a previous check.
-
-The original Q-ALIGN larger-GPU smoke is no longer a release requirement for the
-forward model. Run it only if legacy support is deliberately retained. Q-ReAlign
-Mini still requires a fresh online and new-process offline smoke after code
-integration. DirectML is being retired rather than ported: its available Torch
+Q-ReAlign Mini still requires a fresh online and new-process offline smoke after
+code integration. DirectML is being retired rather than ported: its available Torch
 2.4.1 stack conflicts with Q-ReAlign's published Torch >=2.6 requirement, so
 installing Python 3.12 or downloading the weights does not establish support.
 
@@ -144,9 +127,8 @@ Still required before checking the retirement gate:
 
 ## Q-ReAlign Mini validation after integration
 
-Run these steps only after `implement.md`'s Q-ReAlign catalog/backend item is
-implemented. Use a fresh cache and disposable data directory for each target;
-do not point the test at the old `qalign` cache.
+Use a fresh cache and disposable data directory for each target. Do not reuse a
+cache from another model or runtime.
 
 ```powershell
 $python = "build/audit-latest/Scripts/python.exe"
@@ -162,6 +144,16 @@ $data = "$PWD/build/audit-qrealign-mini-data"
 & $python scripts/model_smoke.py --model qrealign-mini --device cuda --offline `
   --cache-dir $cache --data-dir $data `
   --report-path build/audit-reports/qrealign-mini-cuda-offline.json
+
+# Repeat in a fresh CPU cache/data directory when CPU support is being claimed.
+$cpuCache = "$PWD/build/audit-qrealign-mini-cpu-cache"
+$cpuData = "$PWD/build/audit-qrealign-mini-cpu-data"
+& $python scripts/model_smoke.py --model qrealign-mini --device cpu `
+  --cache-dir $cpuCache --data-dir $cpuData `
+  --report-path build/audit-reports/qrealign-mini-cpu-online.json
+& $python scripts/model_smoke.py --model qrealign-mini --device cpu --offline `
+  --cache-dir $cpuCache --data-dir $cpuData `
+  --report-path build/audit-reports/qrealign-mini-cpu-offline.json
 ```
 
 Repeat with `--device cpu` if CPU support is a release target. While the online
@@ -170,6 +162,14 @@ time, model revision, resolved versions, and the returned score range. Confirm
 the offline process makes no network connection and that failure reports redact
 local image paths and model artifacts. Do not add a DirectML model run to release
 evidence; DirectML removal is covered by the retirement checklist below.
+
+Validation attempt on 2026-09-13: the CUDA online command was started with the
+exact `build/audit-latest` environment and a fresh cache. It remained in
+`preparing_model` for about 150 seconds without creating the model cache or a
+report, so it was stopped before inference. The resulting pending
+`model-preparation.json` is diagnostic context only, not a pass; rerun the
+online step when external model acquisition completes, then perform the CPU
+and new-process offline checks.
 
 ## DirectML retirement verification
 
@@ -236,7 +236,7 @@ AMD hardware or model gates below.
   supported Linux host, install the official PyTorch XPU wheel and matching
   driver in an isolated environment using [docs/intel-xpu.md](docs/intel-xpu.md)
   and `scripts/source-constraints-xpu.txt`. Run TOPIQ and CLIPIQA on one
-  disposable JPEG, then run Q-ReAlign Mini only after W04 adds it. Repeat each
+  disposable JPEG, then run Q-ReAlign Mini when the target advertises it. Repeat each
   model from a complete network-disabled cache. Record the Torch/XPU wheel,
   Python, driver, runtime, cache paths, raw/normalized score, elapsed time,
   and peak memory from the smoke report. A source-install pass does not
@@ -255,7 +255,7 @@ AMD hardware or model gates below.
   exact supported ROCm/PyTorch pair in a fresh Python 3.12 environment using
   [docs/amd-rocm.md](docs/amd-rocm.md) and
   `scripts/source-constraints-rocm.txt`. Run TOPIQ and CLIPIQA on one
-  disposable JPEG, then Q-ReAlign Mini only after W04 adds it. Repeat every
+  disposable JPEG, then Q-ReAlign Mini when the target advertises it. Repeat every
   model from a complete network-disabled cache. Record the ROCm version, GPU
   architecture, driver, Python, Torch build, cache paths, raw/normalized
   scores, elapsed time, and peak memory. Keep unsupported Radeon cards on CPU.
@@ -273,12 +273,11 @@ AMD hardware or model gates below.
 ## Historical evidence from the previous pass
 
 - Fixed the narrow Settings layout overflow by allowing the flex column to shrink within the mobile grid track.
-- Full offline suite after Q-Align restoration: **584 passed, 52 skipped, 1 warning** in 145.51 seconds.
-- Restored Q-Align/runtime/scoring/web focused suite: **96 passed**.
+- Full offline suite from the previous pass: **584 passed, 52 skipped, 1 warning** in 145.51 seconds.
 - Focused responsive/accessibility suite: **35 passed**.
 - Focused local file-operation/scanner regression suite: **45 passed, 1 warning**.
 - Ruff `F,E9`, Python compilation, `git diff --check`, and the release/build tests passed.
-- Fresh isolated online and new-process offline CPU smokes passed for TOPIQ and CLIPIQA. Q-Align is restored to the catalog and has offline-capable code paths, but no Q-Align weight download was performed in that previous pass. Resolved versions for the CPU smokes were `pyiqa 0.1.16`, `timm 1.0.28`, `huggingface-hub 1.24.0`, `transformers 5.14.1`, `openai-clip 1.0.1`, `torch 2.13.0+cu126`, and `torchvision 0.28.0+cu126`; the local environment's `pip check` passed.
+- Fresh isolated online and new-process offline CPU smokes passed for TOPIQ and CLIPIQA in that previous pass. Resolved versions for the CPU smokes were `pyiqa 0.1.16`, `timm 1.0.28`, `huggingface-hub 1.24.0`, `transformers 5.14.1`, `openai-clip 1.0.1`, `torch 2.13.0+cu126`, and `torchvision 0.28.0+cu126`; the local environment's `pip check` passed.
 - A local Windows CPU bundle was built, its launcher started, and its bundled server scanned one generated JPEG and scored it with `topiq_nr` on CPU: `files_scored=1`, `learned_scored=1`, `files_failed=0`.
 - The CPU archive contained 21,552 entries, one launcher, and zero `.safetensors`, `.ckpt`, `.pth`, or `.pt` files.
 
@@ -313,7 +312,7 @@ For each shipped target:
 
 1. Confirm target Python/Torch constraints resolve, `pip check` passes, and the produced launcher responds to `--help`.
 2. Start the extracted bundle with an isolated data directory and externally prepared model cache.
-3. Scan and score one disposable JPEG. Confirm the requested and actual runtime in the result or diagnostic. Use Q-ReAlign Mini where the target advertises it; do not substitute the legacy Q-ALIGN cache.
+3. Scan and score one disposable JPEG. Confirm the requested and actual runtime in the result or diagnostic. Use Q-ReAlign Mini where the target advertises it.
 4. Inspect the staged bundle and archive for model weights, exact package versions, notices, and asset/license terms. Preserve the archive hash and release-manifest evidence.
 
 ## R03 — advertised accelerators
@@ -339,8 +338,7 @@ Linux CUDA and macOS MPS. CUDA 13.0 also requires a compatible installed NVIDIA
 driver; the local driver passed, but older-driver compatibility is not claimed.
 
 No Q-ReAlign Mini download or inference has yet been completed in either
-environment. Record it as unverified until the model catalog integration and the
-fresh-cache checks below pass.
+environment. Record it as unverified until the fresh-cache checks below pass.
 
 Torch 2.6 is only Q-ReAlign's minimum supported loader version; do not downgrade
 the current 2.14.0 retained stack to 2.6. Use the exact Torch/driver wheel pair

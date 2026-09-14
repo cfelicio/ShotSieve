@@ -48,7 +48,6 @@ def test_learned_iqa_split_runtime_and_catalog_modules_preserve_facade_exports()
             def is_available() -> bool:
                 return False
 
-    assert catalog_module.normalize_model_name("Q-Align") == learned_iqa_module.normalize_model_name("Q-Align")
     assert catalog_module.supported_learned_models() == learned_iqa_module.supported_learned_models()
     assert catalog_module.supported_runtime_targets() == learned_iqa_module.supported_runtime_targets()
     assert runtime_module.resolve_device(
@@ -436,7 +435,7 @@ def test_learned_model_catalog_exposes_all_supported_backends() -> None:
     models = supported_learned_models()
     runtimes = supported_runtime_targets()
 
-    assert models == ("topiq_nr", "clipiqa", "qalign")
+    assert models == ("topiq_nr", "clipiqa", "qrealign-mini")
     assert "musiq" not in models
     assert "musiq-spaq" not in models
     assert "maniqa" not in models
@@ -534,7 +533,8 @@ def test_learned_model_aliases_and_runtime_resolution() -> None:
 
     assert normalize_model_name("TOPIQ-NR") == "topiq_nr"
     assert normalize_model_name("topiq_nr_spaq") == "topiq_nr-spaq"
-    assert normalize_model_name("Q-Align") == "qalign"
+    assert normalize_model_name("Q-ReAlign Mini") == "qrealign-mini"
+    assert normalize_model_name("qrealign") == "qrealign-mini"
     assert normalize_model_name("Quali-Clip") == "qualiclip"
     assert normalize_device_target("NVIDIA") == "cuda"
     assert normalize_device_target("AMD", system_name="Windows") == "amd"

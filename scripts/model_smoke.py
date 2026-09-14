@@ -22,7 +22,7 @@ _PRIVATE_ARTIFACT_PATH_PATTERN = re.compile(
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--model", required=True, help="Supported model id, such as topiq_nr, clipiqa, or qalign")
+    parser.add_argument("--model", required=True, help="Supported model id, such as topiq_nr, clipiqa, or qrealign-mini")
     parser.add_argument("--cache-dir", required=True, type=Path)
     parser.add_argument("--data-dir", required=True, type=Path)
     parser.add_argument(
@@ -203,6 +203,7 @@ def main() -> None:
             "tested_runtime": record.get("tested_runtime"),
             "processed_counts": record.get("processed_counts"),
             "model_version": record.get("model_version"),
+            "model_revision": record.get("model_revision"),
             "validation_scores": record.get("validation_scores", []),
             "cache_paths": record.get("cache_paths"),
             "dependency_versions": dependency_versions,

@@ -172,8 +172,14 @@ def _dependency_fingerprint(
     dependency_versions: Mapping[str, str],
     environ: Mapping[str, str],
 ) -> str:
+    spec = _model_spec(model_name)
     payload = {
+        # Include the upstream identity and immutable revision so a readiness
+        # record can never be reused for a renamed checkpoint or a changed
+        # Q-ReAlign Mini revision.
         "model": model_name,
+        "upstream_model_id": spec.upstream_model_id,
+        "checkpoint_revision": spec.checkpoint_revision,
         "python": platform.python_version(),
         "platform": platform.platform(),
         "cache_paths": dict(cache_paths),
@@ -192,6 +198,8 @@ def expected_resources(model_name: str) -> dict[str, object]:
     spec = _model_spec(model_name)
     return {
         "status": "candidates",
+        "upstream_model_id": spec.upstream_model_id,
+        "checkpoint_revision": spec.checkpoint_revision,
         "cache_families": list(spec.cache_families),
         "first_use_disclosure": spec.first_use_disclosure,
         "resource_labels": list(spec.resource_labels),
@@ -204,10 +212,16 @@ def storage_estimate(model_name: str) -> dict[str, object]:
     return {
         "status": "advisory",
         "model_input_size": spec.input_size,
-        "weight_mb": None,
+        "weight_mb": 2210 if spec.canonical_id == "qrealign-mini" else None,
         "temporary_overhead_mb": None,
         "total_mb": None,
-        "note": "Upstream assets and temporary download overhead vary; verify free space before preparation.",
+        "note": (
+            "The Q-ReAlign Mini safetensors file is about 2.21 GB; tokenizer, processor, "
+            "temporary loading, and runtime memory are additional. Verify free space and "
+            "record actual peak memory and throughput before claiming support."
+            if spec.canonical_id == "qrealign-mini"
+            else "Upstream assets and temporary download overhead vary; verify free space before preparation."
+        ),
     }
 
 
@@ -220,11 +234,14 @@ def _base_record(
     dependency_fingerprint: str,
     environ: Mapping[str, str],
 ) -> dict[str, object]:
+    model_spec = _model_spec(model_name)
     now = _utc_now()
     return {
         "state": "preparing",
         "readiness": "last_check",
         "model": model_name,
+        "upstream_model_id": model_spec.upstream_model_id,
+        "model_revision": model_spec.checkpoint_revision,
         "process_id": os.getpid(),
         "started_at": now,
         "updated_at": now,
@@ -482,9 +499,9 @@ def classify_preparation_error(
     if {"outofmemoryerror", "memoryerror"} & type_names or "out of memory" in messages:
         category = "runtime_out_of_memory"
         recovery = (
-            "Free accelerator/system memory or use a smaller model, then choose Prepare selected model. "
-            "Q-Align's default FP16 weights alone require about 16.4 GB before inference overhead; "
-            "a 16 GB GPU may not fit the model even at batch size one."
+            "Free accelerator/system memory, lower the batch size, or use a smaller model, then choose Prepare selected model. "
+            "Q-ReAlign Mini's safetensors are about 2.2 GB before processor, temporary loading, "
+            "and inference overhead; record actual peak memory on the target host."
         )
     elif offline and any(token in messages for token in ("not found in cache", "offline", "local_files_only", "no cached")):
         category = "missing_offline_assets"
@@ -562,12 +579,19 @@ def build_model_diagnostic(
     model_text = str(model_name).strip() if model_name is not None and str(model_name).strip() else None
     requested_text = str(requested_runtime).strip().casefold() if requested_runtime is not None and str(requested_runtime).strip() else "auto"
     actual_text = str(actual_runtime).strip().casefold() if actual_runtime is not None and str(actual_runtime).strip() else "unknown"
+    model_revision = None
+    if model_text:
+        try:
+            model_revision = _model_spec(validate_model_name(model_text)).checkpoint_revision
+        except (ValueError, StopIteration):
+            pass
     return {
         "schema_version": MODEL_DIAGNOSTIC_SCHEMA_VERSION,
         **report,
         "model": model_text,
         "requested_runtime": requested_text,
         "actual_runtime": actual_text,
+        "model_revision": model_revision,
         "cache_paths": paths,
         "cache_volumes": effective_cache_volumes(cache_paths=paths),
         "offline": _offline_flags(env),

@@ -144,8 +144,8 @@ python scripts/model_smoke.py \
   --report-path ./build/audit-reports/rocm-topiq_nr-offline.json
 ```
 
-Repeat both commands with `clipiqa`. Repeat with `qrealign-mini` only after
-W04 adds that model to the product catalog. The report records the raw and
+Repeat both commands with `clipiqa`. If Q-ReAlign Mini is included in the
+target claim, repeat them with `qrealign-mini`. The report records the raw and
 normalized score, model revision, resolved dependency versions, cache paths,
 logical runtime, HIP/ROCm version, GPU name/architecture, elapsed time, peak
 memory, and supplied driver version. Never share source photos, weights, or

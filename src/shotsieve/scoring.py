@@ -753,7 +753,7 @@ def compare_learned_models(
 
         # Use per-model optimal batch size instead of a single global size.
         # This prevents lightweight models (e.g., TOPIQ at batch=128) from being
-        # throttled to the batch size of a heavy model (e.g., Q-Align at batch=1).
+        # throttled to the batch size of a heavy model (e.g., Q-ReAlign Mini).
         model_batch_size = recommended_batch_size(
             model_name, vram_mb=_detect_vram_lazy(), resource_profile=resource_profile,
         )

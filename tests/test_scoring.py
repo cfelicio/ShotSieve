@@ -14,16 +14,16 @@ from shotsieve.scanner import scan_root
 from shotsieve.scoring import score_files
 
 
-def test_score_accepts_qalign_as_a_supported_model(tmp_path: Path) -> None:
+def test_score_accepts_qrealign_mini_alias_as_a_supported_model(tmp_path: Path) -> None:
     db_path = tmp_path / "data" / "shotsieve.db"
     preview_dir = tmp_path / "previews"
     photo_dir = tmp_path / "photos"
     photo_dir.mkdir()
     create_image(photo_dir / "sample.jpg")
 
-    class FakeQAlignBackend:
-        name = "qalign"
-        model_version = "fake:qalign:cuda"
+    class FakeQReAlignBackend:
+        name = "qrealign-mini"
+        model_version = "fake:qrealign-mini:cuda"
         runtime = "cuda"
 
         def score_paths(self, image_paths, *, batch_size: int = 1, resource_profile: str | None = None):
@@ -41,9 +41,9 @@ def test_score_accepts_qalign_as_a_supported_model(tmp_path: Path) -> None:
         )
         summary = score_files(
             connection,
-            learned_backend_name="q-align",
+            learned_backend_name="q-realign",
             learned_device="cuda",
-            learned_backend_factory=lambda _model_name: FakeQAlignBackend(),
+            learned_backend_factory=lambda _model_name: FakeQReAlignBackend(),
         )
 
     assert summary.files_scored == 1

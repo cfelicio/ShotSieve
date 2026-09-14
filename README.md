@@ -126,9 +126,9 @@ The supported in-app model catalog is intentionally small:
 
 - `topiq_nr` is the default model
 - `clipiqa` is a fast secondary option for quick comparisons
-- `qalign` is the large accelerator-backed option for CUDA and Apple MPS
+- `qrealign-mini` is the compact Q-ReAlign Mini option for CPU and compatible accelerators
 
-TReS, QualiCLIP, ARNIQA, and other PyIQA names are not supported for new scoring or comparison runs. Q-Align is not available on CPU or XPU. Older stored scores remain readable and are shown using their saved raw model name; disabling a model does not delete those rows.
+TReS, QualiCLIP, ARNIQA, and other PyIQA names are not supported for new scoring or comparison runs. Q-ReAlign Mini is a distinct Qwen3.5-VL-based checkpoint, and its CPU/accelerator support remains subject to model-specific validation. Stored scores retain their saved model name; disabling or replacing a model does not relabel or delete those rows.
 
 Runtime names you may see in settings or developer docs:
 
@@ -207,7 +207,7 @@ The browser-focused frontend checks are intentionally about **visual QA** and vi
 - [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md): third-party model and library licensing
 - [LICENSE](LICENSE): GNU Affero General Public License v3.0 or later (AGPLv3+)
 
-ShotSieve uses AI models and libraries with their own terms. The learned-IQA extra currently pins `pyiqa==0.1.16`, whose PolyForm Noncommercial license and included notices must be reviewed with the model/checkpoint terms before commercial use. No model weights are bundled; supported assets may be downloaded into the configured upstream caches. Q-Align remains subject to its model-card and underlying base-model terms and is supported only on validated accelerator paths. See [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md) for the per-component audit boundary.
+ShotSieve uses AI models and libraries with their own terms. The learned-IQA extra currently pins `pyiqa==0.1.16`, whose PolyForm Noncommercial license and included notices must be reviewed with the model/checkpoint terms before commercial use. No model weights are bundled; supported assets may be downloaded into the configured upstream caches. Q-ReAlign Mini remains subject to its model card, Qwen3.5-VL/base-model terms, and the separate PyIQA package terms. See [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md) for the per-component audit boundary.
 
 ## Project docs
 
