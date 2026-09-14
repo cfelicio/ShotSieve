@@ -18,6 +18,9 @@ All notable changes to this project will be documented in this file.
 
 ### Changed
 
+- Shared the frontend scan/score tracked-job lifecycle for start, tracking,
+  polling, cleanup, abort, and recovery handling while preserving their
+  workflow-specific estimates, payloads, progress phases, and result messages.
 - Made the frontend workflow facade composition-only: library, export, and
   compare behavior now stays in its owning module while `ShotSieveWorkflows`
   preserves the existing public method names and cross-module operation wiring.

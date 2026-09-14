@@ -94,36 +94,79 @@
       });
     }
 
-    async function runTrackedOperation({ startPath, payload, fallbackLabel, failureMessage }) {
+    async function runTrackedJob({
+      startPath,
+      payload,
+      kind,
+      label,
+      startFailureMessage,
+      statusPath,
+      resultPath,
+      cancelPath,
+      stateKey,
+      poll,
+      onStarted,
+      onUnknown,
+      shouldFinish,
+      onFinished,
+    }) {
       const startPayload = await postJson(startPath, payload, { signal: state.abortController?.signal });
       const jobId = String(startPayload?.job_id || "");
       if (!jobId) {
-        throw new Error(`${fallbackLabel} failed to start.`);
+        throw new Error(startFailureMessage || `${label} failed to start.`);
       }
 
-      state.operationJobId = jobId;
-      state.operationStatusPath = "/api/operations/status";
-      state.operationCancelPath = "/api/operations/cancel";
-      state.operationStatusUnknown = false;
-      state.operationProgressSignature = null;
-      state.operationProgressChangedAt = Date.now();
-      state.latestOperationRequest = { startPath, payload: { ...payload }, fallbackLabel, failureMessage };
-      trackJob({
-        kind: "operation",
-        jobId,
-        statusPath: "/api/operations/status",
-        resultPath: "/api/operations/result",
-        cancelPath: "/api/operations/cancel",
-        label: fallbackLabel,
-      });
+      state[stateKey] = jobId;
+      if (typeof onStarted === "function") {
+        onStarted(jobId);
+      }
+      trackJob({ kind, jobId, statusPath, resultPath, cancelPath, label });
 
       try {
-        const result = await pollOperationJob(jobId, { fallbackLabel, failureMessage });
+        const result = await poll(jobId);
         clearTrackedJob(jobId);
         return result;
       } catch (error) {
         if (error?.name !== "AbortError") {
           markTrackedJobUnknown(error);
+          if (typeof onUnknown === "function") {
+            onUnknown(error, jobId);
+          }
+        }
+        throw error;
+      } finally {
+        if (!state.abortController?.signal?.aborted
+          && !state.recoveryJob
+          && (typeof shouldFinish !== "function" || shouldFinish())) {
+          state[stateKey] = null;
+          if (typeof onFinished === "function") {
+            onFinished();
+          }
+        }
+      }
+    }
+
+    async function runTrackedOperation({ startPath, payload, fallbackLabel, failureMessage }) {
+      return runTrackedJob({
+        startPath,
+        payload,
+        kind: "operation",
+        label: fallbackLabel,
+        startFailureMessage: `${fallbackLabel} failed to start.`,
+        statusPath: "/api/operations/status",
+        resultPath: "/api/operations/result",
+        cancelPath: "/api/operations/cancel",
+        stateKey: "operationJobId",
+        poll: (jobId) => pollOperationJob(jobId, { fallbackLabel, failureMessage }),
+        onStarted: () => {
+          state.operationStatusPath = "/api/operations/status";
+          state.operationCancelPath = "/api/operations/cancel";
+          state.operationStatusUnknown = false;
+          state.operationProgressSignature = null;
+          state.operationProgressChangedAt = Date.now();
+          state.latestOperationRequest = { startPath, payload: { ...payload }, fallbackLabel, failureMessage };
+        },
+        onUnknown: (error) => {
           state.operationStatusUnknown = true;
           const unknownResult = {
             ...(state.latestOperationResult || {}),
@@ -136,15 +179,13 @@
           if (typeof state.operationResultHandler === "function") {
             state.operationResultHandler(unknownResult, state.latestOperationRequest);
           }
-        }
-        throw error;
-      } finally {
-        if (!state.abortController?.signal?.aborted && !state.recoveryJob && !state.operationStatusUnknown) {
-          state.operationJobId = null;
+        },
+        shouldFinish: () => !state.operationStatusUnknown,
+        onFinished: () => {
           state.operationStatusPath = null;
           state.operationCancelPath = null;
-        }
-      }
+        },
+      });
     }
 
     async function checkTrackedJob() {
@@ -260,7 +301,7 @@
         ? "Scanning and generating previews..."
         : "Scanning metadata only for faster discovery...");
 
-      const scanJobStart = await postJson("/api/scan/start", {
+      const scanPayload = {
         roots: root.split("|").map(r => r.trim()).filter(Boolean),
         extensions: document.getElementById("extensions-input").value.trim() || null,
         ignore_rules: (document.getElementById("ignore-rules-input")?.value || "")
@@ -272,36 +313,19 @@
         generate_previews: generatePreviews,
         files_total_hint: filesTotalRef.value,
         resource_profile: currentResourceProfile(),
-      }, { signal: state.abortController?.signal });
-
-      const scanJobId = String(scanJobStart?.job_id || "");
-      if (!scanJobId) {
-        throw new Error("Scan job failed to start.");
-      }
-
-      state.scanJobId = scanJobId;
-      trackJob({
+      };
+      const result = await runTrackedJob({
+        startPath: "/api/scan/start",
+        payload: scanPayload,
         kind: "scan",
-        jobId: scanJobId,
+        label: "Scan",
+        startFailureMessage: "Scan job failed to start.",
         statusPath: "/api/scan/status",
         resultPath: "/api/scan/result",
         cancelPath: "/api/scan/cancel",
-        label: "Scan",
+        stateKey: "scanJobId",
+        poll: (jobId) => pollScanJob(jobId, { filesTotalRef, pipeline }),
       });
-      let result = null;
-      try {
-        result = await pollScanJob(scanJobId, { filesTotalRef, pipeline });
-        clearTrackedJob(scanJobId);
-      } catch (error) {
-        if (error?.name !== "AbortError") {
-          markTrackedJobUnknown(error);
-        }
-        throw error;
-      } finally {
-        if (!state.abortController?.signal?.aborted && !state.recoveryJob) {
-          state.scanJobId = null;
-        }
-      }
 
       if (pipeline) {
         const donePercent = (Number(pipeline.stepIndex) / Number(pipeline.totalSteps)) * 100;
@@ -359,43 +383,26 @@
         rowsTotal = null;
       }
 
-      const scoreJobStart = await postJson("/api/score/start", {
+      const scorePayload = {
         root,
         learned_backend_name: learnedBackend,
         device: runtimeTarget || null,
         batch_size: requestedBatchSize,
         force: false,
         resource_profile: currentResourceProfile(),
-      }, { signal: state.abortController?.signal });
-
-      const scoreJobId = String(scoreJobStart?.job_id || "");
-      if (!scoreJobId) {
-        throw new Error("Score job failed to start.");
-      }
-
-      state.scoreJobId = scoreJobId;
-      trackJob({
+      };
+      const result = await runTrackedJob({
+        startPath: "/api/score/start",
+        payload: scorePayload,
         kind: "score",
-        jobId: scoreJobId,
+        label: "Scoring",
+        startFailureMessage: "Score job failed to start.",
         statusPath: "/api/score/status",
         resultPath: "/api/score/result",
         cancelPath: "/api/score/cancel",
-        label: "Scoring",
+        stateKey: "scoreJobId",
+        poll: (jobId) => pollScoreJob(jobId, { rowsTotal, pipeline }),
       });
-      let result = null;
-      try {
-        result = await pollScoreJob(scoreJobId, { rowsTotal, pipeline });
-        clearTrackedJob(scoreJobId);
-      } catch (error) {
-        if (error?.name !== "AbortError") {
-          markTrackedJobUnknown(error);
-        }
-        throw error;
-      } finally {
-        if (!state.abortController?.signal?.aborted && !state.recoveryJob) {
-          state.scoreJobId = null;
-        }
-      }
 
       if (result?.job_status === "failed" || result?.diagnostic) {
         const diagnostic = result?.diagnostic || result?.error_report || {};

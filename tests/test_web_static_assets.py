@@ -754,10 +754,23 @@ class TestStaticAssetHeaders:
         assert "async function runScan(rootOverride = null, { generatePreviews = true, pipeline = null } = {})" in body
         assert "Scanning metadata only for faster discovery" in body
         assert "runScan(null, { generatePreviews: false })" in body
-        scan_start = body.index('const scanJobStart = await postJson("/api/scan/start", {')
-        scan_payload = body[scan_start : scan_start + 800]
+        scan_payload_start = body.index("const scanPayload = {")
+        scan_payload = body[scan_payload_start : scan_payload_start + 800]
         assert 'ignore_rules: (document.getElementById("ignore-rules-input")?.value || "")' in scan_payload
+        assert 'startPath: "/api/scan/start"' in body
         assert 'preview_mode:' not in body
+
+    def test_static_js_scan_and_score_share_tracked_job_lifecycle(self, test_server):
+        base_url, _, _ = test_server
+        body = urlopen(f"{base_url}/app-workflow-library.js").read().decode("utf-8")
+
+        assert "async function runTrackedJob({" in body
+        assert "const result = await poll(jobId);" in body
+        assert "state[stateKey] = jobId;" in body
+        assert "state[stateKey] = null;" in body
+        assert 'stateKey: "scanJobId"' in body
+        assert 'stateKey: "scoreJobId"' in body
+        assert "onUnknown" in body
 
     def test_static_js_uses_backend_default_raw_preview_mode_without_selector(self, test_server):
         base_url, _, _ = test_server

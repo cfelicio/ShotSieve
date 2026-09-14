@@ -29,3 +29,18 @@ selection handling. The facade supplies shared bridge objects while composing
 them so each module sees the completed peer at call time. Keep public names
 stable when changing ownership; callers in `app.js` and `app-events.js` use the
 facade rather than importing feature modules directly.
+
+## Scan and score job lifecycle
+
+`app-workflow-library.js` uses its private `runTrackedJob` seam for the shared
+start, job identity, tracking, polling, successful cleanup, and unresolved-job
+handling used by scan, score, and file-operation workflows. The busy controller
+still owns server-side cancellation and recovery presentation: an aborted job
+keeps its identity long enough to request cancellation, while a lost
+non-abort status request remains available to **Check status**.
+
+`runScan` and `runScore` retain their own estimate requests, start payloads,
+poller options, progress phases, result messages, diagnostics, and workspace
+refresh behavior. Changes to those workflow-specific contracts should stay in
+the owning function; changes to tracked-job cleanup or recovery belong in the
+shared seam and its lifecycle tests.

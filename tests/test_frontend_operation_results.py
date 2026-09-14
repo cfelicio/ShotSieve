@@ -367,3 +367,161 @@ def test_unresolved_job_blocks_new_work_and_check_status_refreshes(chromium_page
     assert result["refreshes"] == 1
     assert result["recoveryCleared"] is True
     assert result["scanCleared"] is True
+
+
+def test_scan_and_score_share_job_lifecycle_without_losing_kind_specific_polling(chromium_page):
+    page, _ = chromium_page
+    results = page.evaluate(
+        """
+        async () => {
+          async function runScenario(kind, outcome) {
+            const calls = [];
+            const state = {
+              abortController: { signal: { aborted: outcome === "abort" } },
+              activeJob: null,
+              recoveryJob: null,
+              options: {
+                default_scoring_mode: "topiq_nr",
+                learned_models: ["topiq_nr"],
+                learned: { recommended_batch_sizes: { topiq_nr: 4 } },
+              },
+              scanJobId: null,
+              scoreJobId: null,
+            };
+            let clearCalls = 0;
+            let markCalls = 0;
+            const busy = {
+              clearTrackedJob: (jobId) => {
+                clearCalls += 1;
+                if (state.activeJob?.jobId === jobId) state.activeJob = null;
+              },
+              markTrackedJobUnknown: (error) => {
+                markCalls += 1;
+                const job = state.activeJob || state.recoveryJob;
+                state.recoveryJob = { ...job, status: "unknown", error: error.message };
+                state.activeJob = null;
+              },
+              setBusyMessage: () => {},
+              setBusyPhaseProgress: () => {},
+              setBusyProgress: () => {},
+              trackJob: (job) => {
+                calls.push(["track", job]);
+                state.activeJob = { ...job };
+                state.recoveryJob = null;
+              },
+            };
+            const failIfNeeded = () => {
+              if (outcome === "success") return;
+              const error = new Error(`${kind} status request lost`);
+              if (outcome === "abort") error.name = "AbortError";
+              throw error;
+            };
+            const pollingModule = {
+              pollJob: async () => ({}),
+              pollScanJob: async (jobId, options) => {
+                calls.push(["poll-scan", jobId, options.filesTotalRef.value, options.pipeline.stepIndex]);
+                failIfNeeded();
+                return { files_seen: 1, files_added: 1, files_updated: 0, files_removed: 0 };
+              },
+              pollScoreJob: async (jobId, options) => {
+                calls.push(["poll-score", jobId, options.rowsTotal, options.pipeline.stepIndex]);
+                failIfNeeded();
+                return { rows_loaded: 1, files_scored: 1, learned_scored: 1, files_skipped: 0, files_failed: 0 };
+              },
+              pollModelPreparationJob: async () => ({}),
+              createResultFetcher: () => async () => ({}),
+              createStatusFetcher: () => async () => ({ status: "completed" }),
+            };
+            const library = window.ShotSieveWorkflowLibrary.createWorkflowLibrary({
+              state,
+              api: {
+                fetchJson: async () => ({}),
+                postJson: async (url) => {
+                  calls.push(["post", url]);
+                  if (url === "/api/score-estimate") return { rows_total: 3 };
+                  return { job_id: `${kind}-job` };
+                },
+              },
+              busy,
+              compare: { currentResourceProfile: () => "normal", scoreBatchSize: () => 4 },
+              formatting: { escapeHtml: (value) => value, formatDuration: () => "0s" },
+              notifications: { addLogEntry: () => {}, showToast: () => {} },
+              pollingModule,
+              review: { refreshWorkspace: async () => {}, syncReviewRoot: () => {} },
+              ui: { currentLibraryRoot: () => "C:/photos", saveUiState: () => {}, setTab: () => {} },
+              workflowExport: {},
+            });
+
+            let errorName = null;
+            try {
+              if (kind === "scan") {
+                await library.runScan("C:/photos", {
+                  generatePreviews: false,
+                  pipeline: { stepIndex: 1, totalSteps: 3 },
+                });
+              } else {
+                await library.runScore("C:/photos", {
+                  pipeline: { stepIndex: 2, totalSteps: 3 },
+                });
+              }
+            } catch (error) {
+              errorName = error.name;
+            }
+            return {
+              kind,
+              outcome,
+              errorName,
+              jobId: state[`${kind}JobId`],
+              recoveryJobId: state.recoveryJob?.jobId || null,
+              activeJobId: state.activeJob?.jobId || null,
+              clearCalls,
+              markCalls,
+              tracked: calls.find((entry) => entry[0] === "track")?.[1] || null,
+              poll: calls.find((entry) => entry[0] === `poll-${kind}`) || null,
+            };
+          }
+
+          const scenarios = [];
+          for (const kind of ["scan", "score"]) {
+            for (const outcome of ["success", "abort", "recovery"]) {
+              scenarios.push(await runScenario(kind, outcome));
+            }
+          }
+          return scenarios;
+        }
+        """,
+    )
+
+    for result in results:
+        assert result["tracked"]["kind"] == result["kind"]
+        assert result["tracked"]["statusPath"] == f"/api/{result['kind']}/status"
+        assert result["tracked"]["resultPath"] == f"/api/{result['kind']}/result"
+        assert result["tracked"]["cancelPath"] == f"/api/{result['kind']}/cancel"
+        assert result["poll"][1] == f"{result['kind']}-job"
+
+        if result["kind"] == "scan":
+            assert result["poll"][2:] == [3, 1]
+        else:
+            assert result["poll"][2:] == [3, 2]
+
+        if result["outcome"] == "success":
+            assert result["errorName"] is None
+            assert result["jobId"] is None
+            assert result["recoveryJobId"] is None
+            assert result["activeJobId"] is None
+            assert result["clearCalls"] == 1
+            assert result["markCalls"] == 0
+        elif result["outcome"] == "abort":
+            assert result["errorName"] == "AbortError"
+            assert result["jobId"] == f"{result['kind']}-job"
+            assert result["recoveryJobId"] is None
+            assert result["activeJobId"] == f"{result['kind']}-job"
+            assert result["clearCalls"] == 0
+            assert result["markCalls"] == 0
+        else:
+            assert result["errorName"] == "Error"
+            assert result["jobId"] == f"{result['kind']}-job"
+            assert result["recoveryJobId"] == f"{result['kind']}-job"
+            assert result["activeJobId"] is None
+            assert result["clearCalls"] == 0
+            assert result["markCalls"] == 1
