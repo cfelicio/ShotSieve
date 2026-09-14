@@ -18,6 +18,10 @@ All notable changes to this project will be documented in this file.
 
 ### Changed
 
+- Refactored single-model scoring and learned-model comparison into focused
+  planning, preview-outcome, batch-execution, and result-aggregation helpers
+  while preserving scoring APIs, progress phases, summaries, diagnostics,
+  comparison payloads, backend release behavior, and injection seams.
 - Expanded the opt-in performance baseline to 100,000 rows in one active library plus global-scope coverage, with early/middle/deep Review pages, score/path/date sorts, representative filters, named-machine metadata, and separate timings/query plans for list, count, and selection revision.
 - Added one shared, versioned image conversion policy for previews and learned-IQA inputs: EXIF-aware RGBA normalization, white-matte transparency compositing, and high-bit grayscale preservation. Legacy previews and scores are invalidated by conversion version without changing catalog decisions.
 - Ordinary scans now preserve cached catalog rows, scores, and review decisions that are outside the current scan coverage.

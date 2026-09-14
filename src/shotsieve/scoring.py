@@ -187,6 +187,262 @@ class PreparedAnalysisBatch:
     has_ready_generated_preview: bool = False
 
 
+@dataclass(slots=True)
+class _ScorePlan:
+    """Rows and counters produced before preview/model work begins."""
+
+    rows_for_scoring: list[object] = field(default_factory=list)
+    files_considered: int = 0
+
+
+@dataclass(slots=True)
+class _ScorePreviewOutcome:
+    """Persistence outcomes that belong to the pre-inference phase."""
+
+    files_skipped: int = 0
+    files_failed: int = 0
+
+
+@dataclass(slots=True)
+class _ScoreBatchOutcome:
+    """Counters accumulated while one learned backend scores its batches."""
+
+    files_scored: int = 0
+    learned_scored: int = 0
+    files_failed: int = 0
+
+
+def _build_score_plan(
+    rows,
+    *,
+    force: bool,
+    selected_backend: str,
+    version_resolver: Callable[[str], str | None] | None,
+    custom_backend_factory: bool,
+) -> _ScorePlan:
+    """Select rows needing work and apply same-backend version invalidation.
+
+    The resolver is deliberately supplied by :func:`score_files`. That keeps
+    the default model-version probe and the custom test/integration seam at the
+    public workflow boundary while making row selection independently testable.
+    """
+    plan = _ScorePlan()
+    version_check_candidates: list[object] = []
+
+    for row in rows:
+        if needs_score_update(row, force=force, learned_backend_name=selected_backend):
+            plan.rows_for_scoring.append(row)
+            continue
+
+        if row["existing_score_id"] is not None and row["learned_backend"] == selected_backend:
+            version_check_candidates.append(row)
+
+    if version_check_candidates:
+        if version_resolver is not None:
+            try:
+                resolved_model_version = version_resolver(selected_backend)
+            except Exception as exc:
+                log.warning(
+                    "Falling back to rescoring same-backend cached rows for '%s' because version probing failed: %s",
+                    selected_backend,
+                    exc,
+                )
+                plan.rows_for_scoring.extend(version_check_candidates)
+            else:
+                if not resolved_model_version:
+                    log.warning(
+                        "Falling back to rescoring same-backend cached rows for '%s' because version probing returned no version.",
+                        selected_backend,
+                    )
+                    plan.rows_for_scoring.extend(version_check_candidates)
+                else:
+                    expected_model_version = _db_model_version(resolved_model_version)
+                    plan.rows_for_scoring.extend(
+                        row
+                        for row in version_check_candidates
+                        if needs_score_update(
+                            row,
+                            force=False,
+                            learned_backend_name=selected_backend,
+                            expected_model_version=expected_model_version,
+                        )
+                    )
+        elif custom_backend_factory:
+            log.warning(
+                "Custom learned_backend_factory supplied without learned_model_version_resolver; "
+                "same-backend model-version invalidation is skipped for '%s'.",
+                selected_backend,
+            )
+
+    plan.files_considered = len(plan.rows_for_scoring)
+    return plan
+
+
+def _drop_stale_score_row(connection, row) -> None:
+    if row["existing_score_id"] is not None:
+        delete_score_row(connection, file_id=_row_int(row, "id"))
+
+
+def _record_analysis_outcome(
+    connection,
+    row,
+    *,
+    status: str,
+    error: str | None = None,
+) -> None:
+    connection.execute(
+        """
+        UPDATE files
+        SET analysis_status = ?, analysis_error = ?, last_analysis_time = ?
+        WHERE id = ?
+        """,
+        (status, error, utc_now(), _row_int(row, "id")),
+    )
+
+
+def _persist_generated_preview_results(
+    connection,
+    prepared: PreparedAnalysisBatch,
+    *,
+    preview_dir: Path | None,
+) -> None:
+    """Persist generated previews and register a successful cache location."""
+    if prepared.has_ready_generated_preview and preview_dir is not None:
+        try:
+            set_preview_cache_root(connection, preview_dir)
+        except ValueError:
+            pass
+
+    for generated_preview in prepared.generated_preview_results:
+        persist_generated_preview(
+            connection,
+            row_id=_row_int(generated_preview.row, "id"),
+            preview_result=generated_preview.preview_result,
+        )
+
+
+def _persist_score_preview_outcomes(
+    connection,
+    prepared: PreparedAnalysisBatch,
+    *,
+    preview_dir: Path | None,
+) -> _ScorePreviewOutcome:
+    """Persist preview results and mark rows that cannot reach inference."""
+    _persist_generated_preview_results(connection, prepared, preview_dir=preview_dir)
+    outcome = _ScorePreviewOutcome()
+
+    for row in prepared.unavailable_rows:
+        _drop_stale_score_row(connection, row)
+        _record_analysis_outcome(
+            connection,
+            row,
+            status="skipped",
+            error="No usable source image or ready preview is available for analysis.",
+        )
+        outcome.files_skipped += 1
+
+    for unresolved_preview in prepared.unresolved_preview_results:
+        _drop_stale_score_row(connection, unresolved_preview.row)
+        if unresolved_preview.preview_result.status == "failed":
+            _record_analysis_outcome(
+                connection,
+                unresolved_preview.row,
+                status="failed",
+                error=unresolved_preview.preview_result.error_text
+                or "Preview generation failed before analysis.",
+            )
+            outcome.files_failed += 1
+        else:
+            _record_analysis_outcome(
+                connection,
+                unresolved_preview.row,
+                status="skipped",
+                error="A preview was unavailable for analysis.",
+            )
+            outcome.files_skipped += 1
+
+    return outcome
+
+
+def _run_score_batches(
+    connection,
+    pending_learned: list[tuple[object, Path]],
+    *,
+    backend: LearnedIqaBackend,
+    learned_batch_size: int,
+    resource_profile: str | None,
+    progress_callback: Callable[[AnalysisProgress], None] | None,
+) -> _ScoreBatchOutcome:
+    """Run inference batches and persist each learned score outcome."""
+    outcome = _ScoreBatchOutcome()
+    files_total = len(pending_learned)
+    if progress_callback is not None:
+        progress_callback(
+            AnalysisProgress(
+                model_name=backend.name,
+                model_index=1,
+                model_count=1,
+                files_processed=0,
+                files_total=files_total,
+                phase="scoring",
+            )
+        )
+
+    # Keep scoring updates frequent enough to avoid long visible stalls at 0/N.
+    progress_chunk_size = max(learned_batch_size, 12)
+    for chunk_start in range(0, files_total, progress_chunk_size):
+        chunk_end = min(chunk_start + progress_chunk_size, files_total)
+        chunk = pending_learned[chunk_start:chunk_end]
+        learned_results = backend.score_paths(
+            [analysis_path for _, analysis_path in chunk],
+            batch_size=learned_batch_size,
+            resource_profile=resource_profile,
+        )
+
+        for (row, _), learned_result in zip(chunk, learned_results, strict=True):
+            if _is_failed_learned_result(learned_result):
+                delete_score_row(connection, file_id=_row_int(row, "id"))
+                _record_analysis_outcome(
+                    connection,
+                    row,
+                    status="failed",
+                    error=learned_result.error or "The learned quality model returned no score.",
+                )
+                outcome.files_failed += 1
+                log.warning(
+                    "Failed to score %s with backend %s: %s",
+                    _row_text(row, "path"),
+                    backend.name,
+                    learned_result.error or "unknown learned IQA failure",
+                )
+                continue
+
+            upsert_score_row(
+                connection,
+                row,
+                learned=learned_result,
+                learned_backend=backend.name,
+                learned_model_version=backend.model_version,
+            )
+            _record_analysis_outcome(connection, row, status="ready")
+            outcome.files_scored += 1
+            outcome.learned_scored += 1
+
+        if progress_callback is not None:
+            progress_callback(
+                AnalysisProgress(
+                    model_name=backend.name,
+                    model_index=1,
+                    model_count=1,
+                    files_processed=chunk_end,
+                    files_total=files_total,
+                    phase="scoring",
+                )
+            )
+
+    return outcome
+
+
 def _prepare_analysis_candidates(
     rows,
     *,
@@ -301,12 +557,18 @@ def score_files(
     progress_callback: Callable[[AnalysisProgress], None] | None = None,
     resource_profile: str | None = None,
 ) -> ScoreSummary:
+    """Score catalog rows while preserving the public progress/lifecycle contract."""
     summary = ScoreSummary()
     selected_backend = validate_model_name(learned_backend_name or DEFAULT_MODEL_NAME)
 
     rows = fetch_score_rows(connection, raw_root=raw_root, limit=limit, offset=offset)
     summary.rows_loaded = len(rows)
-    factory = learned_backend_factory or (lambda model_name: build_learned_backend(model_name, device=learned_device))
+    if learned_backend_factory is None:
+        def factory(model_name: str) -> LearnedIqaBackend:
+            return build_learned_backend(model_name, device=learned_device)
+    else:
+        factory = learned_backend_factory
+
     version_resolver = learned_model_version_resolver
     if version_resolver is None and learned_backend_factory is None:
         def resolve_model_version(model_name: str) -> str | None:
@@ -322,73 +584,15 @@ def score_files(
                 raise
 
         version_resolver = resolve_model_version
-    pending_learned: list[tuple[object, Path]] = []
-    rows_for_scoring: list[object] = []
-    version_check_candidates: list[object] = []
 
-    def drop_stale_score_row(row) -> None:
-        if row["existing_score_id"] is not None:
-            delete_score_row(connection, file_id=int(row["id"]))
-
-    def record_analysis_outcome(row, *, status: str, error: str | None = None) -> None:
-        connection.execute(
-            """
-            UPDATE files
-            SET analysis_status = ?, analysis_error = ?, last_analysis_time = ?
-            WHERE id = ?
-            """,
-            (status, error, utc_now(), _row_int(row, "id")),
-        )
-
-    def queue_row_for_scoring(row) -> None:
-        summary.files_considered += 1
-        rows_for_scoring.append(row)
-
-    for row in rows:
-        if needs_score_update(row, force=force, learned_backend_name=selected_backend):
-            queue_row_for_scoring(row)
-            continue
-
-        if row["existing_score_id"] is not None and row["learned_backend"] == selected_backend:
-            version_check_candidates.append(row)
-            continue
-
-    if version_check_candidates:
-        if version_resolver is not None:
-            try:
-                resolved_model_version = version_resolver(selected_backend)
-            except Exception as exc:
-                log.warning(
-                    "Falling back to rescoring same-backend cached rows for '%s' because version probing failed: %s",
-                    selected_backend,
-                    exc,
-                )
-                for row in version_check_candidates:
-                    queue_row_for_scoring(row)
-            else:
-                if not resolved_model_version:
-                    log.warning(
-                        "Falling back to rescoring same-backend cached rows for '%s' because version probing returned no version.",
-                        selected_backend,
-                    )
-                    for row in version_check_candidates:
-                        queue_row_for_scoring(row)
-                else:
-                    expected_model_version = _db_model_version(resolved_model_version)
-                    for row in version_check_candidates:
-                        if needs_score_update(
-                            row,
-                            force=False,
-                            learned_backend_name=selected_backend,
-                            expected_model_version=expected_model_version,
-                        ):
-                            queue_row_for_scoring(row)
-        elif learned_backend_factory is not None:
-            log.warning(
-                "Custom learned_backend_factory supplied without learned_model_version_resolver; "
-                "same-backend model-version invalidation is skipped for '%s'.",
-                selected_backend,
-            )
+    plan = _build_score_plan(
+        rows,
+        force=force,
+        selected_backend=selected_backend,
+        version_resolver=version_resolver,
+        custom_backend_factory=learned_backend_factory is not None,
+    )
+    summary.files_considered = plan.files_considered
 
     def _score_preview_start(total: int) -> None:
         if progress_callback is not None:
@@ -417,7 +621,7 @@ def score_files(
             )
 
     prepared = _prepare_analysis_candidates(
-        rows_for_scoring,
+        plan.rows_for_scoring,
         preview_dir=preview_dir,
         preview_workers=preview_workers,
         raw_preview_mode=raw_preview_mode,
@@ -426,49 +630,18 @@ def score_files(
         preview_start_callback=_score_preview_start,
     )
 
-    pending_learned.extend(
+    pending_learned = [
         (candidate.row, candidate.analysis_path)
         for candidate in prepared.analysis_candidates
+    ]
+
+    preview_outcome = _persist_score_preview_outcomes(
+        connection,
+        prepared,
+        preview_dir=preview_dir,
     )
-
-    if prepared.has_ready_generated_preview and preview_dir is not None:
-        try:
-            set_preview_cache_root(connection, preview_dir)
-        except ValueError:
-            pass
-
-    for generated_preview in prepared.generated_preview_results:
-        persist_generated_preview(
-            connection,
-            row_id=_row_int(generated_preview.row, "id"),
-            preview_result=generated_preview.preview_result,
-        )
-
-    for row in prepared.unavailable_rows:
-        drop_stale_score_row(row)
-        record_analysis_outcome(
-            row,
-            status="skipped",
-            error="No usable source image or ready preview is available for analysis.",
-        )
-        summary.files_skipped += 1
-
-    for unresolved_preview in prepared.unresolved_preview_results:
-        drop_stale_score_row(unresolved_preview.row)
-        if unresolved_preview.preview_result.status == "failed":
-            record_analysis_outcome(
-                unresolved_preview.row,
-                status="failed",
-                error=unresolved_preview.preview_result.error_text or "Preview generation failed before analysis.",
-            )
-            summary.files_failed += 1
-        else:
-            record_analysis_outcome(
-                unresolved_preview.row,
-                status="skipped",
-                error="A preview was unavailable for analysis.",
-            )
-            summary.files_skipped += 1
+    summary.files_skipped += preview_outcome.files_skipped
+    summary.files_failed += preview_outcome.files_failed
 
     if not pending_learned:
         return summary
@@ -489,70 +662,17 @@ def score_files(
     backend = None
     try:
         backend = factory(selected_backend)
-        # Keep scoring updates frequent enough to avoid long visible stalls at 0/N.
-        progress_chunk_size = max(learned_batch_size, 12)
-
-        if progress_callback is not None:
-            progress_callback(
-                AnalysisProgress(
-                    model_name=backend.name,
-                    model_index=1,
-                    model_count=1,
-                    files_processed=0,
-                    files_total=files_total,
-                    phase="scoring",
-                )
-            )
-
-        for chunk_start in range(0, files_total, progress_chunk_size):
-            chunk_end = min(chunk_start + progress_chunk_size, files_total)
-            chunk = pending_learned[chunk_start:chunk_end]
-
-            learned_results = backend.score_paths(
-                [analysis_path for _, analysis_path in chunk],
-                batch_size=learned_batch_size,
-                resource_profile=resource_profile,
-            )
-
-            for (row, _), learned_result in zip(chunk, learned_results, strict=True):
-                if _is_failed_learned_result(learned_result):
-                    delete_score_row(connection, file_id=_row_int(row, "id"))
-                    record_analysis_outcome(
-                        row,
-                        status="failed",
-                        error=learned_result.error or "The learned quality model returned no score.",
-                    )
-                    summary.files_failed += 1
-                    log.warning(
-                        "Failed to score %s with backend %s: %s",
-                        _row_text(row, "path"),
-                        backend.name,
-                        learned_result.error or "unknown learned IQA failure",
-                    )
-                    continue
-
-                upsert_score_row(
-                    connection,
-                    row,
-                    learned=learned_result,
-                    learned_backend=backend.name,
-                    learned_model_version=backend.model_version,
-                )
-                record_analysis_outcome(row, status="ready")
-                summary.files_scored += 1
-                summary.learned_scored += 1
-
-            if progress_callback is not None:
-                progress_callback(
-                    AnalysisProgress(
-                        model_name=backend.name,
-                        model_index=1,
-                        model_count=1,
-                        files_processed=chunk_end,
-                        files_total=files_total,
-                        phase="scoring",
-                    )
-                )
+        outcome = _run_score_batches(
+            connection,
+            pending_learned,
+            backend=backend,
+            learned_batch_size=learned_batch_size,
+            resource_profile=resource_profile,
+            progress_callback=progress_callback,
+        )
+        summary.files_scored += outcome.files_scored
+        summary.learned_scored += outcome.learned_scored
+        summary.files_failed += outcome.files_failed
     except Exception as exc:
         attach_model_diagnostic(
             exc,
@@ -612,6 +732,181 @@ def _compare_failure_detail(
         "reason": reason_text,
         "stage": stage,
     }
+
+
+def _accumulate_comparison_result(
+    summary: ModelComparisonSummary,
+    row: dict[str, object],
+    *,
+    backend_name: str,
+    learned_result: LearnedScoreResult,
+    failed_file_ids: set[int],
+) -> None:
+    """Add one model result to a stable side-by-side comparison row."""
+    prefix = backend_name
+    if _is_failed_learned_result(learned_result):
+        row[f"{prefix}_score"] = None
+        row[f"{prefix}_confidence"] = None
+        row[f"{prefix}_raw"] = None
+        row[f"{prefix}_error"] = learned_result.error
+        failed_file_ids.add(_coerce_int(row["file_id"]))
+        summary.files_failed = len(failed_file_ids)
+        return
+
+    row[f"{prefix}_score"] = learned_result.normalized_score
+    row[f"{prefix}_confidence"] = learned_result.confidence
+    row[f"{prefix}_raw"] = learned_result.raw_score
+    row[f"{prefix}_error"] = None
+
+
+def _run_comparison_model(
+    summary: ModelComparisonSummary,
+    candidate_rows: list[dict[str, object]],
+    analysis_paths: list[Path],
+    *,
+    model_name: str,
+    model_index: int,
+    model_count: int,
+    learned_device: str | None,
+    learned_batch_size: int,
+    compare_chunk_size: int | None,
+    learned_backend_factory: Callable[[str], LearnedIqaBackend],
+    progress_callback: Callable[[AnalysisProgress], None] | None,
+    release_backends: bool,
+    resource_profile: str | None,
+    failed_file_ids: set[int],
+) -> None:
+    """Load, run, and release one comparison model."""
+    if progress_callback is not None:
+        progress_callback(
+            AnalysisProgress(
+                model_name=model_name,
+                model_index=model_index,
+                model_count=model_count,
+                files_processed=0,
+                files_total=len(candidate_rows),
+                phase="loading",
+            )
+        )
+
+    model_started_at = time.perf_counter()
+    backend = None
+
+    # Use per-model optimal batch size instead of a single global size. This
+    # prevents lightweight models from being throttled by a heavier model.
+    model_batch_size = recommended_batch_size(
+        model_name,
+        vram_mb=_detect_vram_lazy(),
+        resource_profile=resource_profile,
+    )
+    # An explicit caller batch size remains an upper bound. The default means
+    # "use the model recommendation" rather than "use the default literally".
+    effective_batch_size = (
+        min(max(1, learned_batch_size), model_batch_size)
+        if learned_batch_size != DEFAULT_BATCH_SIZE
+        else model_batch_size
+    )
+    effective_compare_chunk_size = max(effective_batch_size, effective_batch_size * 16)
+    if compare_chunk_size is not None:
+        effective_compare_chunk_size = max(1, compare_chunk_size)
+
+    try:
+        backend = learned_backend_factory(model_name)
+        if progress_callback is not None:
+            progress_callback(
+                AnalysisProgress(
+                    model_name=backend.name,
+                    model_index=model_index,
+                    model_count=model_count,
+                    files_processed=0,
+                    files_total=len(candidate_rows),
+                    phase="scoring",
+                )
+            )
+
+        for chunk_start in range(0, len(candidate_rows), effective_compare_chunk_size):
+            chunk_end = min(chunk_start + effective_compare_chunk_size, len(candidate_rows))
+            learned_results = backend.score_paths(
+                analysis_paths[chunk_start:chunk_end],
+                batch_size=effective_batch_size,
+                resource_profile=resource_profile,
+            )
+            for row, learned_result in zip(
+                candidate_rows[chunk_start:chunk_end],
+                learned_results,
+                strict=True,
+            ):
+                _accumulate_comparison_result(
+                    summary,
+                    row,
+                    backend_name=backend.name,
+                    learned_result=learned_result,
+                    failed_file_ids=failed_file_ids,
+                )
+
+            if progress_callback is not None:
+                progress_callback(
+                    AnalysisProgress(
+                        model_name=backend.name,
+                        model_index=model_index,
+                        model_count=model_count,
+                        files_processed=chunk_end,
+                        files_total=len(candidate_rows),
+                        phase="scoring",
+                    )
+                )
+
+        summary.model_timings_seconds[backend.name] = round(
+            time.perf_counter() - model_started_at,
+            4,
+        )
+    except Exception as exc:
+        attach_model_diagnostic(
+            exc,
+            phase="comparing",
+            model_name=model_name,
+            requested_runtime=learned_device,
+            actual_runtime=getattr(backend, "runtime", None),
+        )
+        raise
+    finally:
+        if release_backends and backend is not None:
+            release_learned_backend(backend)
+
+
+def _run_comparison_models(
+    summary: ModelComparisonSummary,
+    candidate_rows: list[dict[str, object]],
+    analysis_paths: list[Path],
+    *,
+    learned_device: str | None,
+    learned_batch_size: int,
+    compare_chunk_size: int | None,
+    learned_backend_factory: Callable[[str], LearnedIqaBackend],
+    progress_callback: Callable[[AnalysisProgress], None] | None,
+    release_backends: bool,
+    resource_profile: str | None,
+    failed_file_ids: set[int],
+) -> None:
+    """Execute the comparison model loop against shared prepared inputs."""
+    model_count = len(summary.model_names)
+    for model_index, model_name in enumerate(summary.model_names, start=1):
+        _run_comparison_model(
+            summary,
+            candidate_rows,
+            analysis_paths,
+            model_name=model_name,
+            model_index=model_index,
+            model_count=model_count,
+            learned_device=learned_device,
+            learned_batch_size=learned_batch_size,
+            compare_chunk_size=compare_chunk_size,
+            learned_backend_factory=learned_backend_factory,
+            progress_callback=progress_callback,
+            release_backends=release_backends,
+            resource_profile=resource_profile,
+            failed_file_ids=failed_file_ids,
+        )
 
 
 def compare_learned_models(
@@ -698,18 +993,7 @@ def compare_learned_models(
         candidate_rows.append({"file_id": _row_int(candidate.row, "id"), "path": _row_text(candidate.row, "path")})
         analysis_paths.append(candidate.analysis_path)
 
-    if prepared.has_ready_generated_preview and preview_dir is not None:
-        try:
-            set_preview_cache_root(connection, preview_dir)
-        except ValueError:
-            pass
-
-    for generated_preview in prepared.generated_preview_results:
-        persist_generated_preview(
-            connection,
-            row_id=_row_int(generated_preview.row, "id"),
-            preview_result=generated_preview.preview_result,
-        )
+    _persist_generated_preview_results(connection, prepared, preview_dir=preview_dir)
 
     summary.files_skipped += len(prepared.unavailable_rows)
 
@@ -733,99 +1017,24 @@ def compare_learned_models(
         summary.elapsed_seconds = round(time.perf_counter() - started_at, 4)
         return summary
 
-    factory = learned_backend_factory or (lambda model_name: build_learned_backend(model_name, device=learned_device))
-    files_total = len(candidate_rows)
-    for model_index, model_name in enumerate(unique_models, start=1):
-        if progress_callback is not None:
-            progress_callback(
-                AnalysisProgress(
-                    model_name=model_name,
-                    model_index=model_index,
-                    model_count=len(unique_models),
-                    files_processed=0,
-                    files_total=files_total,
-                    phase="loading",
-                )
-            )
-
-        model_started_at = time.perf_counter()
-        backend = None
-
-        # Use per-model optimal batch size instead of a single global size.
-        # This prevents lightweight models (e.g., TOPIQ at batch=128) from being
-        # throttled to the batch size of a heavy model (e.g., Q-ReAlign Mini).
-        model_batch_size = recommended_batch_size(
-            model_name, vram_mb=_detect_vram_lazy(), resource_profile=resource_profile,
-        )
-        # If the caller explicitly passed a batch_size, use the smaller of the two
-        # to respect any user/UI override while still not exceeding hardware limits.
-        effective_batch_size = min(max(1, learned_batch_size), model_batch_size) if learned_batch_size != DEFAULT_BATCH_SIZE else model_batch_size
-
-        # Progress-reporting chunk: group ~16 GPU batches for less UI chatter
-        effective_compare_chunk_size = max(effective_batch_size, effective_batch_size * 16)
-        if compare_chunk_size is not None:
-            effective_compare_chunk_size = max(1, compare_chunk_size)
-
-        try:
-            backend = factory(model_name)
-            if progress_callback is not None:
-                progress_callback(
-                    AnalysisProgress(
-                        model_name=backend.name,
-                        model_index=model_index,
-                        model_count=len(unique_models),
-                        files_processed=0,
-                        files_total=files_total,
-                        phase="scoring",
-                    )
-                )
-
-            for chunk_start in range(0, files_total, effective_compare_chunk_size):
-                chunk_end = min(chunk_start + effective_compare_chunk_size, files_total)
-                chunk_paths = analysis_paths[chunk_start:chunk_end]
-                learned_results = backend.score_paths(chunk_paths, batch_size=effective_batch_size, resource_profile=resource_profile)
-
-                for row, learned_result in zip(candidate_rows[chunk_start:chunk_end], learned_results, strict=True):
-                    prefix = backend.name
-                    if _is_failed_learned_result(learned_result):
-                        row[f"{prefix}_score"] = None
-                        row[f"{prefix}_confidence"] = None
-                        row[f"{prefix}_raw"] = None
-                        row[f"{prefix}_error"] = learned_result.error
-                        failed_file_ids.add(_coerce_int(row["file_id"]))
-                        summary.files_failed = len(failed_file_ids)
-                        continue
-
-                    row[f"{prefix}_score"] = learned_result.normalized_score
-                    row[f"{prefix}_confidence"] = learned_result.confidence
-                    row[f"{prefix}_raw"] = learned_result.raw_score
-                    row[f"{prefix}_error"] = None
-
-                if progress_callback is not None:
-                    progress_callback(
-                        AnalysisProgress(
-                            model_name=backend.name,
-                            model_index=model_index,
-                            model_count=len(unique_models),
-                            files_processed=chunk_end,
-                            files_total=files_total,
-                            phase="scoring",
-                        )
-                    )
-
-            summary.model_timings_seconds[backend.name] = round(time.perf_counter() - model_started_at, 4)
-        except Exception as exc:
-            attach_model_diagnostic(
-                exc,
-                phase="comparing",
-                model_name=model_name,
-                requested_runtime=learned_device,
-                actual_runtime=getattr(backend, "runtime", None),
-            )
-            raise
-        finally:
-            if release_backends and backend is not None:
-                release_learned_backend(backend)
+    if learned_backend_factory is None:
+        def factory(model_name: str) -> LearnedIqaBackend:
+            return build_learned_backend(model_name, device=learned_device)
+    else:
+        factory = learned_backend_factory
+    _run_comparison_models(
+        summary,
+        candidate_rows,
+        analysis_paths,
+        learned_device=learned_device,
+        learned_batch_size=learned_batch_size,
+        compare_chunk_size=compare_chunk_size,
+        learned_backend_factory=factory,
+        progress_callback=progress_callback,
+        release_backends=release_backends,
+        resource_profile=resource_profile,
+        failed_file_ids=failed_file_ids,
+    )
 
     summary.rows = candidate_rows
     summary.elapsed_seconds = round(time.perf_counter() - started_at, 4)
