@@ -7,8 +7,9 @@ from PIL import Image
 import pytest
 
 from shotsieve.db import connect, database, initialize_database
+from shotsieve.models import ScanSummary
 from shotsieve.preview import PreviewResult
-from shotsieve.scanner import FileDiscoveryError, ScanInterrupted, scan_root
+from shotsieve.scanner import FileDiscoveryError, ScanInterrupted, _process_scan_batch, scan_root
 
 from conftest import create_image as shared_create_image
 
@@ -789,5 +790,78 @@ def test_scan_reuses_single_process_pool_across_multiple_batches(tmp_path: Path,
         )
 
     assert pool_creations["count"] == 1
+
+
+@pytest.mark.parametrize("execution", ["inline", "parallel"])
+def test_scan_batch_execution_strategies_share_accounting(
+    execution: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Inline and pooled batches persist the same success/failure totals."""
+    from concurrent.futures import ThreadPoolExecutor
+    import shotsieve.scanner as scanner_module
+
+    db_path = tmp_path / "data" / "shotsieve.db"
+    preview_dir = tmp_path / "previews"
+    photo_dir = tmp_path / "photos"
+    photo_dir.mkdir()
+    paths = [photo_dir / name for name in ("good-a.jpg", "broken.jpg", "good-b.jpg")]
+    for path in paths:
+        path.write_bytes(b"source")
+    initialize_database(db_path)
+
+    def fake_gather_file_metadata(path: Path, **_kwargs) -> dict:
+        if path.name == "broken.jpg":
+            raise OSError("metadata failure")
+        return {
+            "path": str(path),
+            "path_key": scanner_module.canonical_path_key(path),
+            "size_bytes": 6,
+            "modified_time": 1.0,
+            "format": "jpg",
+            "last_scan_time": "scan-time",
+            "width": 120,
+            "height": 80,
+            "capture_time": None,
+            "preview_path": None,
+            "preview_status": "ready",
+            "preview_conversion_version": "test",
+            "last_error": None,
+            "scan_status": "new",
+            "analysis_status": None,
+            "analysis_error": None,
+            "last_analysis_time": None,
+            "preserve_metadata": False,
+        }
+
+    monkeypatch.setattr(scanner_module, "gather_file_metadata", fake_gather_file_metadata)
+    monkeypatch.setattr(scanner_module, "_POOL_THRESHOLD", 100 if execution == "inline" else 0)
+
+    with connect(db_path) as connection:
+        summary = ScanSummary()
+        executor = ThreadPoolExecutor(max_workers=2) if execution == "parallel" else None
+        try:
+            _process_scan_batch(
+                paths,
+                connection,
+                summary,
+                2,
+                preview_dir=preview_dir,
+                rescan_all=False,
+                generate_previews=True,
+                executor=executor,
+            )
+        finally:
+            if executor is not None:
+                executor.shutdown(wait=True)
+        stored_count = connection.execute("SELECT COUNT(*) AS count FROM files").fetchone()["count"]
+
+    assert (summary.files_added, summary.files_failed, summary.last_batch_error, stored_count) == (
+        2,
+        1,
+        "metadata failure",
+        2,
+    )
 
 

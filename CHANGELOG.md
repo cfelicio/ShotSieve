@@ -18,6 +18,10 @@ All notable changes to this project will be documented in this file.
 
 ### Changed
 
+- Refactored scanner discovery, batch flushing, executor setup, and scan-run
+  finalization into focused helpers while preserving progress, cancellation,
+  preview/cache, partial-commit, diagnostic, and accounting behavior across
+  inline and pooled processing paths.
 - Refactored single-model scoring and learned-model comparison into focused
   planning, preview-outcome, batch-execution, and result-aggregation helpers
   while preserving scoring APIs, progress phases, summaries, diagnostics,

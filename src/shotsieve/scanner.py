@@ -3,6 +3,7 @@ import fnmatch
 import os
 import stat
 from collections.abc import Callable, Iterable, Sequence
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -229,6 +230,17 @@ class ScanInterrupted(InterruptedError):
         self.processed_count = processed_count
 
 
+@dataclass(slots=True)
+class _ScanIterationState:
+    """Mutable state shared by discovery, batching, and failure finalization."""
+
+    remaining_offset: int
+    processed_count: int = 0
+    preview_root_claimed: bool = False
+    last_error: str | None = None
+    pending_paths: list[Path] = field(default_factory=list)
+
+
 def scan_root(
     connection,
     *,
@@ -249,9 +261,7 @@ def scan_root(
 ) -> ScanSummary:
     summary = ScanSummary()
     started_time = utc_now()
-    requested_offset = max(0, int(offset))
-    remaining_offset = requested_offset
-    last_error: str | None = None
+    scan_state = _ScanIterationState(remaining_offset=max(0, int(offset)))
 
     cursor = connection.execute(
         """
@@ -269,10 +279,7 @@ def scan_root(
     existing_preview_roots.extend(infer_preview_cache_roots(connection))
     existing_preview_roots = list(dict.fromkeys(existing_preview_roots))
 
-    preview_root_claimed = False
-    processed_count = 0
     total_hint = max(0, int(files_total_hint or 0))
-    pending_paths: list[Path] = []
     if not generate_previews and stored_preview_root is None and not existing_preview_roots:
         try:
             set_preview_cache_root(connection, preview_dir)
@@ -297,192 +304,57 @@ def scan_root(
         )
 
         
+        from shotsieve.learned_iqa import recommended_cpu_workers
+
         # Scale workers with CPU cores and available RAM.
         # recommended_cpu_workers() caps workers based on RAM to prevent OOM
         # on machines with many cores but limited memory.
-        from shotsieve.learned_iqa import recommended_cpu_workers
         max_workers = recommended_cpu_workers(resource_profile)
-        if generate_previews and max_workers > 1:
-            shared_executor = concurrent.futures.ProcessPoolExecutor(max_workers=max_workers)
-
-        # Collect files first so we know the count before deciding on strategy.
-        for path in file_stream:
-            _run_cancel_check(cancel_check)
-            if remaining_offset > 0:
-                remaining_offset -= 1
-                summary.offset_consumed += 1
-                continue
-            if limit is not None and processed_count >= limit:
-                break
-            processed_count += 1
-            summary.files_seen += 1
-            if progress_callback is not None:
-                try:
-                    progress_callback(processed_count, total_hint, "scanning")
-                except InterruptedError:
-                    processed_count = max(0, processed_count - 1)
-                    summary.files_seen = max(0, summary.files_seen - 1)
-                    raise
-            pending_paths.append(path)
-
-            # Flush in batches to keep memory low.  The batch is processed
-            # either inline or via the pool depending on its size.
-            if len(pending_paths) >= 100:
-                _run_cancel_check(cancel_check)
-                existing_rows = _load_existing_rows(connection, pending_paths)
-                if generate_previews and not preview_root_claimed and _batch_requires_preview_generation(
-                    pending_paths,
-                    existing_rows=existing_rows,
-                    rescan_all=rescan_all,
-                ):
-                    try:
-                        set_preview_cache_root(connection, preview_dir)
-                        preview_root_claimed = True
-                    except ValueError:
-                        preview_root_claimed = False
-                queued_count = len(pending_paths)
-                try:
-                    _process_scan_batch(
-                        pending_paths, connection, summary, max_workers,
-                        preview_dir=preview_dir, rescan_all=rescan_all,
-                        generate_previews=generate_previews,
-                        raw_preview_mode=raw_preview_mode,
-                        executor=shared_executor,
-                        existing_rows=existing_rows,
-                        cancel_check=cancel_check,
-                    )
-                except ScanBatchInterrupted as exc:
-                    skipped_count = max(0, queued_count - exc.attempted_count)
-                    processed_count = max(0, processed_count - skipped_count)
-                    summary.files_seen = max(0, summary.files_seen - skipped_count)
-                    pending_paths = []
-                    raise InterruptedError(str(exc)) from exc
-                last_error = last_error or summary.last_batch_error
-                pending_paths = []
-
-        # Handle remaining files.
-        if pending_paths:
-            _run_cancel_check(cancel_check)
-            existing_rows = _load_existing_rows(connection, pending_paths)
-            if generate_previews and not preview_root_claimed and _batch_requires_preview_generation(
-                pending_paths,
-                existing_rows=existing_rows,
-                rescan_all=rescan_all,
-            ):
-                try:
-                    set_preview_cache_root(connection, preview_dir)
-                    preview_root_claimed = True
-                except ValueError:
-                    preview_root_claimed = False
-            queued_count = len(pending_paths)
-            try:
-                _process_scan_batch(
-                    pending_paths, connection, summary, max_workers,
-                    preview_dir=preview_dir, rescan_all=rescan_all,
-                    generate_previews=generate_previews,
-                    raw_preview_mode=raw_preview_mode,
-                    executor=shared_executor,
-                    existing_rows=existing_rows,
-                    cancel_check=cancel_check,
-                )
-            except ScanBatchInterrupted as exc:
-                skipped_count = max(0, queued_count - exc.attempted_count)
-                processed_count = max(0, processed_count - skipped_count)
-                summary.files_seen = max(0, summary.files_seen - skipped_count)
-                pending_paths = []
-                raise InterruptedError(str(exc)) from exc
-            last_error = last_error or summary.last_batch_error
+        shared_executor = _create_scan_executor(generate_previews, max_workers)
+        _scan_discovered_files(
+            file_stream,
+            connection,
+            summary,
+            scan_state,
+            max_workers,
+            limit=limit,
+            total_hint=total_hint,
+            progress_callback=progress_callback,
+            preview_dir=preview_dir,
+            rescan_all=rescan_all,
+            generate_previews=generate_previews,
+            raw_preview_mode=raw_preview_mode,
+            executor=shared_executor,
+            cancel_check=cancel_check,
+        )
 
         if progress_callback is not None:
-            final_total = total_hint or processed_count
-            progress_callback(processed_count, final_total, "scanning")
+            final_total = total_hint or scan_state.processed_count
+            progress_callback(scan_state.processed_count, final_total, "scanning")
 
-        connection.execute(
-            """
-            UPDATE scan_runs
-            SET completed_time = ?,
-                files_seen = ?,
-                files_added = ?,
-                files_updated = ?,
-                files_unchanged = ?,
-                files_removed = ?,
-                status = ?,
-                error_text = ?
-            WHERE id = ?
-            """,
-            (
-                utc_now(),
-                summary.files_seen,
-                summary.files_added,
-                summary.files_updated,
-                summary.files_unchanged,
-                summary.files_removed,
-                "completed_with_errors" if summary.files_failed else "completed",
-                last_error,
-                scan_run_id,
-            ),
+        _finalize_completed_scan(
+            connection,
+            scan_run_id,
+            summary,
+            last_error=scan_state.last_error,
         )
     except Exception as exc:
-        if pending_paths:
-            unflushed_count = len(pending_paths)
-            processed_count = max(0, processed_count - unflushed_count)
+        if scan_state.pending_paths:
+            unflushed_count = len(scan_state.pending_paths)
+            scan_state.processed_count = max(0, scan_state.processed_count - unflushed_count)
             summary.files_seen = max(0, summary.files_seen - unflushed_count)
-            pending_paths = []
-        if progress_callback is not None:
-            final_total = max(total_hint, processed_count)
-            try:
-                progress_callback(processed_count, final_total, "failed")
-            except InterruptedError:
-                pass
-        completed_time = utc_now()
-        error_text = str(exc) or exc.__class__.__name__
-        diagnostic = ScanRunDiagnostic(
-            root_path=str(root.resolve()),
+            scan_state.pending_paths.clear()
+        _finalize_failed_scan(
+            connection,
+            scan_run_id,
+            root=root,
             started_time=started_time,
-            completed_time=completed_time,
-            status="failed",
-            files_seen=summary.files_seen,
-            files_added=summary.files_added,
-            files_updated=summary.files_updated,
-            files_unchanged=summary.files_unchanged,
-            files_removed=summary.files_removed,
-            error_text=error_text,
+            summary=summary,
+            exc=exc,
+            progress_callback=progress_callback,
+            processed_count=scan_state.processed_count,
+            total_hint=total_hint,
         )
-        try:
-            connection.execute(
-                """
-                UPDATE scan_runs
-                SET completed_time = ?,
-                    files_seen = ?,
-                    files_added = ?,
-                    files_updated = ?,
-                    files_unchanged = ?,
-                    files_removed = ?,
-                    status = 'failed',
-                    error_text = ?
-                WHERE id = ?
-                """,
-                (
-                    completed_time,
-                    summary.files_seen,
-                    summary.files_added,
-                    summary.files_updated,
-                    summary.files_unchanged,
-                    summary.files_removed,
-                    error_text,
-                    scan_run_id,
-                ),
-            )
-        except Exception as diagnostic_update_error:
-            attach_scan_run_diagnostic(diagnostic_update_error, diagnostic)
-            raise exc from diagnostic_update_error
-        finally:
-            attach_scan_run_diagnostic(exc, diagnostic)
-        if isinstance(exc, InterruptedError):
-            interrupted = ScanInterrupted(error_text, processed_count=processed_count)
-            attach_scan_run_diagnostic(interrupted, diagnostic)
-            raise interrupted from exc
-        raise
     finally:
         if shared_executor is not None:
             shared_executor.shutdown(wait=True)
@@ -493,10 +365,245 @@ def scan_root(
 _POOL_THRESHOLD = 4  # Use inline processing for batches smaller than this.
 
 
+def _create_scan_executor(
+    generate_previews: bool,
+    max_workers: int,
+) -> concurrent.futures.ProcessPoolExecutor | None:
+    """Create the shared preview executor when the scan can use one."""
+    if generate_previews and max_workers > 1:
+        return concurrent.futures.ProcessPoolExecutor(max_workers=max_workers)
+    return None
+
+
+def _scan_discovered_files(
+    file_stream: Iterable[Path],
+    connection,
+    summary: ScanSummary,
+    state: _ScanIterationState,
+    max_workers: int,
+    *,
+    limit: int | None,
+    total_hint: int,
+    progress_callback: Callable[[int, int, str], None] | None,
+    preview_dir: Path,
+    rescan_all: bool,
+    generate_previews: bool,
+    raw_preview_mode: str,
+    executor: concurrent.futures.ProcessPoolExecutor | None,
+    cancel_check: Callable[[], None] | None,
+) -> None:
+    """Collect discovered paths and flush both full and tail batches."""
+    for path in file_stream:
+        _run_cancel_check(cancel_check)
+        if state.remaining_offset > 0:
+            state.remaining_offset -= 1
+            summary.offset_consumed += 1
+            continue
+        if limit is not None and state.processed_count >= limit:
+            break
+
+        state.processed_count += 1
+        summary.files_seen += 1
+        if progress_callback is not None:
+            try:
+                progress_callback(state.processed_count, total_hint, "scanning")
+            except InterruptedError:
+                state.processed_count = max(0, state.processed_count - 1)
+                summary.files_seen = max(0, summary.files_seen - 1)
+                raise
+        state.pending_paths.append(path)
+
+        if len(state.pending_paths) >= 100:
+            _flush_pending_batch(
+                connection,
+                summary,
+                state,
+                max_workers,
+                preview_dir=preview_dir,
+                rescan_all=rescan_all,
+                generate_previews=generate_previews,
+                raw_preview_mode=raw_preview_mode,
+                executor=executor,
+                cancel_check=cancel_check,
+            )
+
+    if state.pending_paths:
+        _flush_pending_batch(
+            connection,
+            summary,
+            state,
+            max_workers,
+            preview_dir=preview_dir,
+            rescan_all=rescan_all,
+            generate_previews=generate_previews,
+            raw_preview_mode=raw_preview_mode,
+            executor=executor,
+            cancel_check=cancel_check,
+        )
+
+
+def _flush_pending_batch(
+    connection,
+    summary: ScanSummary,
+    state: _ScanIterationState,
+    max_workers: int,
+    *,
+    preview_dir: Path,
+    rescan_all: bool,
+    generate_previews: bool,
+    raw_preview_mode: str,
+    executor: concurrent.futures.ProcessPoolExecutor | None,
+    cancel_check: Callable[[], None] | None,
+) -> None:
+    """Prepare, process, and clear one pending scan batch."""
+    _run_cancel_check(cancel_check)
+    existing_rows = _load_existing_rows(connection, state.pending_paths)
+    if generate_previews and not state.preview_root_claimed and _batch_requires_preview_generation(
+        state.pending_paths,
+        existing_rows=existing_rows,
+        rescan_all=rescan_all,
+    ):
+        try:
+            set_preview_cache_root(connection, preview_dir)
+            state.preview_root_claimed = True
+        except ValueError:
+            state.preview_root_claimed = False
+
+    queued_count = len(state.pending_paths)
+    try:
+        _process_scan_batch(
+            state.pending_paths,
+            connection,
+            summary,
+            max_workers,
+            preview_dir=preview_dir,
+            rescan_all=rescan_all,
+            generate_previews=generate_previews,
+            raw_preview_mode=raw_preview_mode,
+            executor=executor,
+            existing_rows=existing_rows,
+            cancel_check=cancel_check,
+        )
+    except ScanBatchInterrupted as exc:
+        skipped_count = max(0, queued_count - exc.attempted_count)
+        state.processed_count = max(0, state.processed_count - skipped_count)
+        summary.files_seen = max(0, summary.files_seen - skipped_count)
+        state.pending_paths.clear()
+        raise InterruptedError(str(exc)) from exc
+
+    state.last_error = state.last_error or summary.last_batch_error
+    state.pending_paths.clear()
+
+
+def _finalize_completed_scan(
+    connection,
+    scan_run_id: int,
+    summary: ScanSummary,
+    *,
+    last_error: str | None,
+) -> None:
+    connection.execute(
+        """
+        UPDATE scan_runs
+        SET completed_time = ?,
+            files_seen = ?,
+            files_added = ?,
+            files_updated = ?,
+            files_unchanged = ?,
+            files_removed = ?,
+            status = ?,
+            error_text = ?
+        WHERE id = ?
+        """,
+        (
+            utc_now(),
+            summary.files_seen,
+            summary.files_added,
+            summary.files_updated,
+            summary.files_unchanged,
+            summary.files_removed,
+            "completed_with_errors" if summary.files_failed else "completed",
+            last_error,
+            scan_run_id,
+        ),
+    )
+
+
+def _finalize_failed_scan(
+    connection,
+    scan_run_id: int,
+    *,
+    root: Path,
+    started_time: str,
+    summary: ScanSummary,
+    exc: Exception,
+    progress_callback: Callable[[int, int, str], None] | None,
+    processed_count: int,
+    total_hint: int,
+) -> None:
+    """Persist failed-scan diagnostics before the caller's transaction rolls back."""
+    if progress_callback is not None:
+        final_total = max(total_hint, processed_count)
+        try:
+            progress_callback(processed_count, final_total, "failed")
+        except InterruptedError:
+            pass
+
+    completed_time = utc_now()
+    error_text = str(exc) or exc.__class__.__name__
+    diagnostic = ScanRunDiagnostic(
+        root_path=str(root.resolve()),
+        started_time=started_time,
+        completed_time=completed_time,
+        status="failed",
+        files_seen=summary.files_seen,
+        files_added=summary.files_added,
+        files_updated=summary.files_updated,
+        files_unchanged=summary.files_unchanged,
+        files_removed=summary.files_removed,
+        error_text=error_text,
+    )
+    try:
+        connection.execute(
+            """
+            UPDATE scan_runs
+            SET completed_time = ?,
+                files_seen = ?,
+                files_added = ?,
+                files_updated = ?,
+                files_unchanged = ?,
+                files_removed = ?,
+                status = 'failed',
+                error_text = ?
+            WHERE id = ?
+            """,
+            (
+                completed_time,
+                summary.files_seen,
+                summary.files_added,
+                summary.files_updated,
+                summary.files_unchanged,
+                summary.files_removed,
+                error_text,
+                scan_run_id,
+            ),
+        )
+    except Exception as diagnostic_update_error:
+        attach_scan_run_diagnostic(diagnostic_update_error, diagnostic)
+        raise exc from diagnostic_update_error
+    finally:
+        attach_scan_run_diagnostic(exc, diagnostic)
+    if isinstance(exc, InterruptedError):
+        interrupted = ScanInterrupted(error_text, processed_count=processed_count)
+        attach_scan_run_diagnostic(interrupted, diagnostic)
+        raise interrupted from exc
+    raise exc
+
+
 def _process_scan_batch(
     paths: list[Path],
     connection,
-    summary,
+    summary: ScanSummary,
     max_workers: int,
     *,
     preview_dir: Path,
@@ -507,133 +614,186 @@ def _process_scan_batch(
     existing_rows: dict[str, dict] | None = None,
     cancel_check: Callable[[], None] | None = None,
 ) -> None:
-    """Process a batch of scan paths, choosing inline or parallel execution.
-
-    For small batches (< _POOL_THRESHOLD files), processes inline to avoid
-    the ~200-500ms Windows cost of creating a ProcessPoolExecutor (each
-    worker re-imports PIL, rawpy, pillow_heif into its own address space).
-
-    When *executor* is provided, it is reused across batches to amortize
-    pool startup cost over the entire scan.  When omitted, a temporary pool
-    is created for this batch only (backward-compatible fallback).
-    """
-    # Prefetch existing DB metadata for the batch so we can pass it to
-    # gather_file_metadata() for the rescan short-circuit and to
-    # commit_batch() for accurate updated-vs-unchanged accounting.
+    """Process a batch through an inline or bounded parallel strategy."""
     if existing_rows is None:
         existing_rows = _load_existing_rows(connection, paths)
 
-    batch_results: list[dict] = []
-    attempted_count = 0
-
     if not generate_previews or len(paths) < _POOL_THRESHOLD:
-        # Inline path — skip pool overhead for trivially small batches.
-        try:
-            for path in paths:
-                _run_cancel_check(cancel_check)
-                try:
-                    attempted_count += 1
-                    pk = canonical_path_key(path)
-                    batch_results.append(
-                        gather_file_metadata(
-                            path,
-                            preview_dir=preview_dir,
-                            rescan_all=rescan_all,
-                            generate_previews=generate_previews,
-                            raw_preview_mode=raw_preview_mode,
-                            existing_metadata=existing_rows.get(pk),
-                        )
-                    )
-                except Exception as exc:
-                    summary.files_failed += 1
-                    summary.last_batch_error = str(exc)
-        except InterruptedError:
-            if batch_results:
-                commit_batch(connection, batch_results, summary, existing_rows=existing_rows)
-            raise ScanBatchInterrupted("Scan job was cancelled by user.", attempted_count=attempted_count)
+        outcome = _process_inline_batch(
+            paths,
+            preview_dir=preview_dir,
+            rescan_all=rescan_all,
+            generate_previews=generate_previews,
+            raw_preview_mode=raw_preview_mode,
+            existing_rows=existing_rows,
+            cancel_check=cancel_check,
+        )
     else:
-        # Parallel path — use provided executor or create a temporary one.
-        pool = executor
-        owns_pool = pool is None
-        if owns_pool:
-            pool = concurrent.futures.ProcessPoolExecutor(max_workers=max_workers)
-        assert pool is not None
-        cancel_error: str | None = None
-        try:
-            futures: set[concurrent.futures.Future] = set()
-            path_iter = iter(paths)
+        outcome = _process_parallel_batch(
+            paths,
+            max_workers,
+            preview_dir=preview_dir,
+            rescan_all=rescan_all,
+            generate_previews=generate_previews,
+            raw_preview_mode=raw_preview_mode,
+            existing_rows=existing_rows,
+            executor=executor,
+            cancel_check=cancel_check,
+        )
 
-            def submit_until_full() -> None:
-                nonlocal cancel_error
-                while cancel_error is None and len(futures) < max_workers:
-                    _run_cancel_check(cancel_check)
-                    try:
-                        path = next(path_iter)
-                    except StopIteration:
-                        return
-                    futures.add(
-                        pool.submit(
-                            gather_file_metadata,
-                            path,
-                            preview_dir=preview_dir,
-                            rescan_all=rescan_all,
-                            generate_previews=generate_previews,
-                            raw_preview_mode=raw_preview_mode,
-                            existing_metadata=existing_rows.get(canonical_path_key(path)),
-                        )
-                    )
+    _account_batch_outcome(connection, summary, outcome, existing_rows=existing_rows)
 
+
+@dataclass(slots=True)
+class _BatchProcessingOutcome:
+    """Results and accounting signals produced by one execution strategy."""
+
+    results: list[dict] = field(default_factory=list)
+    failures: list[str] = field(default_factory=list)
+    attempted_count: int = 0
+    cancel_error: str | None = None
+
+
+def _process_inline_batch(
+    paths: Sequence[Path],
+    *,
+    preview_dir: Path,
+    rescan_all: bool,
+    generate_previews: bool,
+    raw_preview_mode: str,
+    existing_rows: dict[str, dict],
+    cancel_check: Callable[[], None] | None,
+) -> _BatchProcessingOutcome:
+    """Gather a batch in the caller thread, preserving per-file failures."""
+    outcome = _BatchProcessingOutcome()
+    try:
+        for path in paths:
+            _run_cancel_check(cancel_check)
             try:
-                submit_until_full()
-            except InterruptedError as exc:
-                cancel_error = str(exc)
-
-            while futures:
-                done, still_pending = concurrent.futures.wait(
-                    futures,
-                    return_when=concurrent.futures.FIRST_COMPLETED,
+                outcome.attempted_count += 1
+                outcome.results.append(
+                    gather_file_metadata(
+                        path,
+                        preview_dir=preview_dir,
+                        rescan_all=rescan_all,
+                        generate_previews=generate_previews,
+                        raw_preview_mode=raw_preview_mode,
+                        existing_metadata=existing_rows.get(canonical_path_key(path)),
+                    )
                 )
-                futures = set(still_pending)
+            except Exception as exc:
+                outcome.failures.append(str(exc))
+    except InterruptedError:
+        outcome.cancel_error = "Scan job was cancelled by user."
+    return outcome
 
-                if cancel_error is None:
-                    try:
-                        _run_cancel_check(cancel_check)
-                    except InterruptedError as exc:
-                        cancel_error = str(exc)
-                        for pending_future in futures:
-                            pending_future.cancel()
 
-                for future in done:
-                    if future.cancelled():
-                        continue
+def _process_parallel_batch(
+    paths: Sequence[Path],
+    max_workers: int,
+    *,
+    preview_dir: Path,
+    rescan_all: bool,
+    generate_previews: bool,
+    raw_preview_mode: str,
+    existing_rows: dict[str, dict],
+    executor: concurrent.futures.ProcessPoolExecutor | None,
+    cancel_check: Callable[[], None] | None,
+) -> _BatchProcessingOutcome:
+    """Gather a batch with bounded in-flight work and cancellation support."""
+    pool = executor
+    owns_pool = pool is None
+    if owns_pool:
+        pool = concurrent.futures.ProcessPoolExecutor(max_workers=max_workers)
+    assert pool is not None
 
-                    attempted_count += 1
-                    try:
-                        batch_results.append(future.result())
-                    except concurrent.futures.CancelledError:
-                        continue
-                    except Exception as exc:
-                        summary.files_failed += 1
-                        summary.last_batch_error = str(exc)
+    outcome = _BatchProcessingOutcome()
+    futures: set[concurrent.futures.Future] = set()
+    path_iter = iter(paths)
 
-                if cancel_error is None:
-                    try:
-                        submit_until_full()
-                    except InterruptedError as exc:
-                        cancel_error = str(exc)
-                        for pending_future in futures:
-                            pending_future.cancel()
+    def submit_until_full() -> None:
+        while outcome.cancel_error is None and len(futures) < max_workers:
+            _run_cancel_check(cancel_check)
+            try:
+                path = next(path_iter)
+            except StopIteration:
+                return
+            futures.add(
+                pool.submit(
+                    gather_file_metadata,
+                    path,
+                    preview_dir=preview_dir,
+                    rescan_all=rescan_all,
+                    generate_previews=generate_previews,
+                    raw_preview_mode=raw_preview_mode,
+                    existing_metadata=existing_rows.get(canonical_path_key(path)),
+                )
+            )
 
-            if cancel_error is not None:
-                if batch_results:
-                    commit_batch(connection, batch_results, summary, existing_rows=existing_rows)
-                raise ScanBatchInterrupted(cancel_error, attempted_count=attempted_count)
-        finally:
-            if owns_pool:
-                pool.shutdown(wait=True)
+    try:
+        try:
+            submit_until_full()
+        except InterruptedError as exc:
+            outcome.cancel_error = str(exc)
 
-    if batch_results:
-        commit_batch(connection, batch_results, summary, existing_rows=existing_rows)
+        while futures:
+            done, still_pending = concurrent.futures.wait(
+                futures,
+                return_when=concurrent.futures.FIRST_COMPLETED,
+            )
+            futures = set(still_pending)
+
+            if outcome.cancel_error is None:
+                try:
+                    _run_cancel_check(cancel_check)
+                except InterruptedError as exc:
+                    outcome.cancel_error = str(exc)
+                    for pending_future in futures:
+                        pending_future.cancel()
+
+            for future in done:
+                if future.cancelled():
+                    continue
+
+                outcome.attempted_count += 1
+                try:
+                    outcome.results.append(future.result())
+                except concurrent.futures.CancelledError:
+                    continue
+                except Exception as exc:
+                    outcome.failures.append(str(exc))
+
+            if outcome.cancel_error is None:
+                try:
+                    submit_until_full()
+                except InterruptedError as exc:
+                    outcome.cancel_error = str(exc)
+                    for pending_future in futures:
+                        pending_future.cancel()
+    finally:
+        if owns_pool:
+            pool.shutdown(wait=True)
+
+    return outcome
+
+
+def _account_batch_outcome(
+    connection,
+    summary: ScanSummary,
+    outcome: _BatchProcessingOutcome,
+    *,
+    existing_rows: dict[str, dict],
+) -> None:
+    """Apply shared failure, persistence, and cancellation accounting."""
+    for error_text in outcome.failures:
+        summary.files_failed += 1
+        summary.last_batch_error = error_text
+
+    if outcome.results:
+        commit_batch(connection, outcome.results, summary, existing_rows=existing_rows)
+
+    if outcome.cancel_error is not None:
+        raise ScanBatchInterrupted(outcome.cancel_error, attempted_count=outcome.attempted_count)
 
 
 def _load_existing_rows(connection, paths: Sequence[Path]) -> dict[str, dict]:
