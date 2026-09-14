@@ -18,6 +18,11 @@ All notable changes to this project will be documented in this file.
 
 ### Changed
 
+- Staged export, delete, and root-scoped missing-entry cleanup into explicit
+  per-operation filesystem, catalog, compensation, and cleanup phases. Private
+  row-state objects retain observed-missing, deleted, not-processed, and
+  catalog-uncertain progress while preserving the existing result and retry
+  contracts.
 - Shared bulk delete/export selection parsing, revision validation, consistent
   snapshotting, and frozen-ID materialization while keeping their filesystem and
   result contracts separate. Centralized operation-job lock, progress,

@@ -6,6 +6,8 @@ import os
 import stat
 import sys
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
+from enum import Enum
 from pathlib import Path
 from typing import Any, Callable, Iterable, Sequence
 
@@ -16,6 +18,7 @@ from shotsieve.db import (
     preview_cache_root_is_claimed,
     root_path_filter,
 )
+from shotsieve.file_operation_state import OperationState
 from shotsieve.models import (
     FilesystemObservation,
     FileOperationResult,
@@ -27,6 +30,39 @@ from shotsieve.preview import clear_preview_cache_dir, delete_managed_preview_fi
 
 _PRUNE_MISSING_CACHE_BATCH_SIZE = 5000
 _MISSING_CACHE_TOKEN_VERSION = "missing-cache-v1"
+
+
+@dataclass(slots=True)
+class _DeleteRowOutcome:
+    """Result of one delete row, kept separate from the aggregate summary."""
+
+    result: FileOperationResult
+    state: OperationState
+    deleted_id: int | None = None
+    warning: BaseException | None = None
+    error: BaseException | None = None
+    needs_rollback: bool = False
+
+
+class _MissingEntryState(str, Enum):
+    """Lifecycle states for a root-scoped missing-cache candidate."""
+
+    OBSERVED_MISSING = OperationState.OBSERVED_MISSING.value
+    DELETED = OperationState.DELETED.value
+    NOT_PROCESSED = OperationState.NOT_PROCESSED.value
+    CATALOG_UNCERTAIN = OperationState.CATALOG_UNCERTAIN.value
+
+
+@dataclass(slots=True)
+class _MissingCacheEntry:
+    row: Any
+    state: _MissingEntryState = _MissingEntryState.OBSERVED_MISSING
+
+
+@dataclass(slots=True)
+class _MissingCacheInspection:
+    payload: dict[str, object]
+    entries: list[_MissingCacheEntry]
 
 
 def _rattr(name: str, fallback: Any) -> Any:
@@ -291,30 +327,36 @@ def _missing_candidate_token(root: Path, candidates: Sequence[dict[str, object]]
     return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
 
 
-def _inspect_missing_cache_entries(connection, *, root: Path) -> tuple[dict[str, object], list[Any]]:
+def _inspect_missing_cache_entries(connection, *, root: Path) -> _MissingCacheInspection:
     resolved_root, error = _check_missing_cleanup_root(root)
     if resolved_root is None:
-        return {
-            "status": "unknown",
-            "root": str(root),
-            "candidate_count": 0,
-            "affected_review_count": 0,
-            "candidates": [],
-            "error": error or "Unable to verify cleanup root.",
-        }, []
+        return _MissingCacheInspection(
+            payload={
+                "status": "unknown",
+                "root": str(root),
+                "candidate_count": 0,
+                "affected_review_count": 0,
+                "candidates": [],
+                "error": error or "Unable to verify cleanup root.",
+            },
+            entries=[],
+        )
 
     missing_rows = []
     for row in _missing_cleanup_rows(connection, resolved_root):
         is_missing, source_error = _missing_source_state(row["path"])
         if source_error is not None:
-            return {
-                "status": "unknown",
-                "root": str(resolved_root),
-                "candidate_count": 0,
-                "affected_review_count": 0,
-                "candidates": [],
-                "error": f"Unable to verify cached source '{row['path']}': {source_error}",
-            }, []
+            return _MissingCacheInspection(
+                payload={
+                    "status": "unknown",
+                    "root": str(resolved_root),
+                    "candidate_count": 0,
+                    "affected_review_count": 0,
+                    "candidates": [],
+                    "error": f"Unable to verify cached source '{row['path']}': {source_error}",
+                },
+                entries=[],
+            )
         if is_missing:
             missing_rows.append(row)
 
@@ -339,13 +381,15 @@ def _inspect_missing_cache_entries(connection, *, root: Path) -> tuple[dict[str,
         "revision": token,
         "token": token,
     }
-    return payload, missing_rows
+    return _MissingCacheInspection(
+        payload=payload,
+        entries=[_MissingCacheEntry(row=row) for row in missing_rows],
+    )
 
 
 def preview_missing_cache_entries(connection, *, root: Path) -> dict[str, object]:
     """Preview missing catalog entries below one explicitly selected root."""
-    payload, _rows = _inspect_missing_cache_entries(connection, root=root)
-    return payload
+    return _inspect_missing_cache_entries(connection, root=root).payload
 
 
 def apply_missing_cache_entries(
@@ -388,8 +432,11 @@ def apply_missing_cache_entries(
         else:
             connection.commit()
 
+    missing_entries: list[_MissingCacheEntry] = []
     try:
-        payload, missing_rows = _inspect_missing_cache_entries(connection, root=root)
+        inspection = _inspect_missing_cache_entries(connection, root=root)
+        payload = inspection.payload
+        missing_entries = inspection.entries
         expected_ids = [int(candidate["id"]) for candidate in payload.get("candidates", [])]
         if (
             payload.get("status") == "unknown"
@@ -417,9 +464,12 @@ def apply_missing_cache_entries(
                 "review_removed_count": 0,
             }
 
-        for row in missing_rows:
+        for index, entry in enumerate(missing_entries):
+            row = entry.row
             is_missing, source_error = _missing_source_state(row["path"])
             if source_error is not None or not is_missing:
+                for pending_entry in missing_entries[index:]:
+                    pending_entry.state = _MissingEntryState.NOT_PROCESSED
                 rollback_cleanup()
                 return {
                     "status": "unknown" if source_error is not None else "refresh_required",
@@ -436,7 +486,8 @@ def apply_missing_cache_entries(
 
         allow_preview_path_fallback = _allow_legacy_preview_path_fallback(connection, preview_cache_root)
         affected_review_count = int(payload["affected_review_count"])
-        for row in missing_rows:
+        for entry in missing_entries:
+            row = entry.row
             delete_managed_preview_file(
                 row["preview_path"],
                 source_path=row["path"],
@@ -449,6 +500,8 @@ def apply_missing_cache_entries(
             "DELETE FROM files WHERE id = ?",
             [(file_id,) for file_id in normalized_ids],
         )
+        for entry in missing_entries:
+            entry.state = _MissingEntryState.DELETED
         finish_cleanup()
         return {
             "status": "applied",
@@ -459,6 +512,12 @@ def apply_missing_cache_entries(
             "review_removed_count": affected_review_count,
         }
     except Exception:
+        for entry in missing_entries:
+            if entry.state in {
+                _MissingEntryState.OBSERVED_MISSING,
+                _MissingEntryState.DELETED,
+            }:
+                entry.state = _MissingEntryState.CATALOG_UNCERTAIN
         rollback_cleanup()
         raise
 
@@ -589,117 +648,154 @@ def delete_files(
                     cancelled=isinstance(exc, InterruptedError),
                 )
 
-        source = Path(row["path"])
-        source_observation: FilesystemObservation | None = None
-        if delete_from_disk:
-            try:
-                resolved_source_path = _resolve_source_path_within_roots(
-                    row["path"],
-                    row["path_key"],
-                    trusted_roots,
-                )
-            except (OSError, ValueError) as exc:
-                summary.add(
-                    _delete_result_from_error(
-                        row,
-                        stage="source_check",
-                        error=exc,
-                        retry_safe=True,
-                    )
-                )
-                _emit_delete_progress(progress_callback, index, total_files, summary, rows, index)
-                continue
-
-            source_observation = observe_filesystem_path(resolved_source_path)
-            if source_observation.state != "present":
-                source_error = source_observation.error_text or "Source file not found"
-                summary.add(
-                    _delete_result_from_error(
-                        row,
-                        stage="source_check",
-                        error=source_error,
-                        retry_safe=source_observation.state == "missing",
-                        source_observation=source_observation,
-                    )
-                )
-                _emit_delete_progress(progress_callback, index, total_files, summary, rows, index)
-                continue
-
-            try:
-                resolved_source_path.unlink()
-            except BaseException as exc:
-                source_after = observe_filesystem_path(resolved_source_path)
-                outcome = "failed" if source_after.state == "present" else "uncertain"
-                summary.add(
-                    _delete_result_from_error(
-                        row,
-                        stage="source_removal",
-                        error=exc,
-                        retry_safe=outcome == "failed",
-                        outcome=outcome,
-                        source_observation=source_after,
-                    )
-                )
-                _emit_delete_progress(progress_callback, index, total_files, summary, rows, index)
-                continue
-
-        try:
-            connection.execute("DELETE FROM files WHERE id = ?", (row["id"],))
-            # A completed deletion is an independent unit of work.  Commit it
-            # before cleanup so cancellation or a later row cannot resurrect it.
-            connection.commit()
-        except BaseException as exc:
-            result, catalog_deleted, needs_rollback = _reconcile_delete_catalog_failure(
-                connection,
-                row=row,
-                source=source,
-                delete_from_disk=delete_from_disk,
-                catalog_error=exc,
-                source_observation=source_observation,
-            )
-            if catalog_deleted:
-                summary.deleted_ids.append(int(row["id"]))
-            summary.add(result)
-            _append_delete_unprocessed_rows(summary, rows[index:], error=exc)
-            attach_file_operation_summary(exc, summary, needs_rollback=needs_rollback)
-            raise
-
-        summary.deleted_ids.append(int(row["id"]))
-        summary.add(
-            FileOperationResult(
-                file_id=int(row["id"]),
-                source=str(source),
-                destination=None,
-                action="delete",
-                outcome="success",
-                stage="catalog_update" if not delete_from_disk else "source_removal",
-                source_state=(
-                    source_observation.state
-                    if source_observation is not None
-                    else "unknown"
-                ),
-            )
+        outcome = _delete_row(
+            connection,
+            row=row,
+            delete_from_disk=delete_from_disk,
+            trusted_roots=trusted_roots,
+            preview_cache_root=preview_cache_root,
+            allow_preview_path_fallback=allow_preview_path_fallback,
         )
-
-        if delete_from_disk:
-            try:
-                delete_managed_preview_file(
-                    row["preview_path"],
-                    source_path=source,
-                    preview_cache_root=preview_cache_root,
-                    allow_path_parent_fallback=allow_preview_path_fallback,
-                )
-            except (OSError, ValueError) as exc:
-                summary.add_warning(
-                    file_id=int(row["id"]),
-                    source=str(source),
-                    stage="preview_cleanup",
-                    error=exc,
-                )
-
+        summary.add(outcome.result)
+        if outcome.deleted_id is not None:
+            summary.deleted_ids.append(outcome.deleted_id)
+        if outcome.warning is not None:
+            summary.add_warning(
+                file_id=int(row["id"]),
+                source=str(row["path"]),
+                stage="preview_cleanup",
+                error=outcome.warning,
+            )
+        if outcome.error is not None:
+            _append_delete_unprocessed_rows(summary, rows[index:], error=outcome.error)
+            attach_file_operation_summary(
+                outcome.error,
+                summary,
+                needs_rollback=outcome.needs_rollback,
+            )
+            raise outcome.error
         _emit_delete_progress(progress_callback, index, total_files, summary, rows, index)
 
     return summary.to_dict()
+
+
+def _delete_row(
+    connection,
+    *,
+    row,
+    delete_from_disk: bool,
+    trusted_roots: Sequence[Path],
+    preview_cache_root: Path | None,
+    allow_preview_path_fallback: bool,
+) -> _DeleteRowOutcome:
+    """Perform policy checks, one delete, catalog commit, and preview cleanup."""
+    source = Path(row["path"])
+    source_observation: FilesystemObservation | None = None
+    if delete_from_disk:
+        try:
+            resolved_source_path = _resolve_source_path_within_roots(
+                row["path"],
+                row["path_key"],
+                trusted_roots,
+            )
+        except (OSError, ValueError) as exc:
+            return _DeleteRowOutcome(
+                result=_delete_result_from_error(
+                    row,
+                    stage="source_check",
+                    error=exc,
+                    retry_safe=True,
+                ),
+                state=OperationState.FAILED,
+            )
+
+        source_observation = observe_filesystem_path(resolved_source_path)
+        if source_observation.state != "present":
+            source_error = source_observation.error_text or "Source file not found"
+            return _DeleteRowOutcome(
+                result=_delete_result_from_error(
+                    row,
+                    stage="source_check",
+                    error=source_error,
+                    retry_safe=source_observation.state == "missing",
+                    source_observation=source_observation,
+                ),
+                state=OperationState.OBSERVED_MISSING,
+            )
+
+        try:
+            resolved_source_path.unlink()
+        except BaseException as exc:
+            source_after = observe_filesystem_path(resolved_source_path)
+            outcome = "failed" if source_after.state == "present" else "uncertain"
+            return _DeleteRowOutcome(
+                result=_delete_result_from_error(
+                    row,
+                    stage="source_removal",
+                    error=exc,
+                    retry_safe=outcome == "failed",
+                    outcome=outcome,
+                    source_observation=source_after,
+                ),
+                state=(
+                    OperationState.FAILED
+                    if outcome == "failed"
+                    else OperationState.UNCERTAIN
+                ),
+            )
+
+    try:
+        connection.execute("DELETE FROM files WHERE id = ?", (row["id"],))
+        # A completed deletion is an independent unit of work. Commit it before
+        # cleanup so cancellation or a later row cannot resurrect it.
+        connection.commit()
+    except BaseException as exc:
+        result, catalog_deleted, needs_rollback = _reconcile_delete_catalog_failure(
+            connection,
+            row=row,
+            source=source,
+            delete_from_disk=delete_from_disk,
+            catalog_error=exc,
+            source_observation=source_observation,
+        )
+        return _DeleteRowOutcome(
+            result=result,
+            state=(
+                OperationState.CATALOG_UNCERTAIN
+                if result.outcome == "uncertain"
+                else OperationState.FAILED
+            ),
+            deleted_id=int(row["id"]) if catalog_deleted else None,
+            error=exc,
+            needs_rollback=needs_rollback,
+        )
+
+    warning: BaseException | None = None
+    if delete_from_disk:
+        try:
+            delete_managed_preview_file(
+                row["preview_path"],
+                source_path=source,
+                preview_cache_root=preview_cache_root,
+                allow_path_parent_fallback=allow_preview_path_fallback,
+            )
+        except (OSError, ValueError) as exc:
+            warning = exc
+
+    return _DeleteRowOutcome(
+        result=FileOperationResult(
+            file_id=int(row["id"]),
+            source=str(source),
+            destination=None,
+            action="delete",
+            outcome="success",
+            stage="catalog_update" if not delete_from_disk else "source_removal",
+            source_state=(source_observation.state if source_observation is not None else "unknown"),
+        ),
+        state=OperationState.DELETED,
+        deleted_id=int(row["id"]),
+        warning=warning,
+    )
 
 
 def _delete_result_from_error(

@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Callable
 
 from shotsieve.db import infer_preview_cache_roots, normalize_path_case
+from shotsieve.file_operation_state import OperationState
 from shotsieve.models import (
     FilesystemObservation,
     FileOperationResult,
@@ -42,6 +43,20 @@ class _TransferCleanupError(OSError):
         super().__init__(f"{transfer_error}; destination cleanup failed: {cleanup_error}")
         self.transfer_error = transfer_error
         self.cleanup_error = cleanup_error
+
+
+@dataclass(slots=True)
+class _ExportRowOutcome:
+    """Result of one export row, including whether the batch must stop."""
+
+    result: FileOperationResult
+    state: OperationState
+    copied: int = 0
+    moved: int = 0
+    warning: BaseException | None = None
+    error: BaseException | None = None
+    error_cause: BaseException | None = None
+    needs_rollback: bool = False
 
 
 def export_files(
@@ -129,187 +144,257 @@ def export_files(
                     cancelled=isinstance(exc, InterruptedError),
                 )
 
-        source = Path(row["path"])
-        source_observation = observe_filesystem_path(source)
-        if source_observation.state != "present":
-            source_error = source_observation.error_text or "Source file not found"
-            summary.add(
-                _result_from_error(
-                    row,
-                    action=mode,
-                    destination=None,
-                    stage="source_check",
-                    error=source_error,
-                    retry_safe=source_observation.state == "missing",
-                    fallback="Source file not found",
-                    source_observation=source_observation,
-                )
+        outcome = _process_export_row(
+            connection,
+            row=row,
+            destination=dest_path,
+            mode=mode,
+            preview_cache_root=preview_cache_root,
+            allow_preview_path_fallback=allow_preview_path_fallback,
+        )
+        summary.add(outcome.result)
+        summary.copied += outcome.copied
+        summary.moved += outcome.moved
+        if outcome.warning is not None:
+            summary.add_warning(
+                file_id=int(row["id"]),
+                source=str(row["path"]),
+                stage="preview_cleanup",
+                error=outcome.warning,
             )
-            _emit_progress(progress_callback, index, total_files, summary, rows, index, mode)
-            continue
+        if outcome.error is not None:
+            _append_unprocessed_rows(summary, rows[index:], action=mode, error=outcome.error)
+            attach_file_operation_summary(
+                outcome.error,
+                summary,
+                needs_rollback=outcome.needs_rollback,
+            )
+            if outcome.error_cause is not None:
+                try:
+                    setattr(outcome.error, "catalog_error", outcome.error_cause)
+                except Exception:
+                    pass
+                raise outcome.error from outcome.error_cause
+            raise outcome.error
+        _emit_progress(progress_callback, index, total_files, summary, rows, index, mode)
 
+    return summary
+
+
+def _process_export_row(
+    connection,
+    *,
+    row,
+    destination: Path,
+    mode: str,
+    preview_cache_root: Path | None,
+    allow_preview_path_fallback: bool,
+) -> _ExportRowOutcome:
+    """Run validation and one copy/move without mutating the aggregate summary."""
+    source = Path(row["path"])
+    source_observation = observe_filesystem_path(source)
+    if source_observation.state != "present":
+        source_error = source_observation.error_text or "Source file not found"
+        return _ExportRowOutcome(
+            result=_result_from_error(
+                row,
+                action=mode,
+                destination=None,
+                stage="source_check",
+                error=source_error,
+                retry_safe=source_observation.state == "missing",
+                fallback="Source file not found",
+                source_observation=source_observation,
+            ),
+            state=OperationState.OBSERVED_MISSING,
+        )
+
+    try:
+        target = _resolve_target(destination, source.name)
+    except _PathObservationError as exc:
+        return _ExportRowOutcome(
+            result=_result_from_error(
+                row,
+                action=mode,
+                destination=str(exc.path),
+                stage="destination_selection",
+                error=exc,
+                retry_safe=True,
+                source_observation=source_observation,
+                destination_observation=exc.observation,
+            ),
+            state=OperationState.FAILED,
+        )
+    except (OSError, ValueError) as exc:
+        return _ExportRowOutcome(
+            result=_result_from_error(
+                row,
+                action=mode,
+                destination=None,
+                stage="destination_selection",
+                error=exc,
+                retry_safe=True,
+                source_observation=source_observation,
+            ),
+            state=OperationState.FAILED,
+        )
+
+    if mode == "copy":
+        return _copy_export_row(row, source=source, target=target, mode=mode)
+    return _move_export_row(
+        connection,
+        row,
+        source=source,
+        target=target,
+        mode=mode,
+        preview_cache_root=preview_cache_root,
+        allow_preview_path_fallback=allow_preview_path_fallback,
+    )
+
+
+def _copy_export_row(row, *, source: Path, target: Path, mode: str) -> _ExportRowOutcome:
+    """Perform copy-only filesystem work and classify post-failure state."""
+    try:
+        _copy_without_overwrite(source, target)
+    except OSError as exc:
+        collision = isinstance(exc, FileExistsError)
+        destination_observation = observe_filesystem_path(target)
+        if collision:
+            outcome = "failed"
+            state = OperationState.FAILED
+            retry_safe = True
+        else:
+            outcome = "failed" if destination_observation.state == "missing" else "uncertain"
+            state = OperationState.FAILED if outcome == "failed" else OperationState.UNCERTAIN
+            retry_safe = outcome == "failed"
+        return _ExportRowOutcome(
+            result=_result_from_error(
+                row,
+                action=mode,
+                destination=str(target),
+                stage="destination_selection" if collision else "transfer",
+                error=exc,
+                retry_safe=retry_safe,
+                outcome=outcome,
+                source_observation=observe_filesystem_path(source),
+                destination_observation=destination_observation,
+            ),
+            state=state,
+        )
+    except Exception as exc:
+        destination_observation = observe_filesystem_path(target)
+        return _ExportRowOutcome(
+            result=_result_from_error(
+                row,
+                action=mode,
+                destination=str(target),
+                stage="transfer",
+                error=exc,
+                retry_safe=False,
+                outcome="uncertain",
+                source_observation=observe_filesystem_path(source),
+                destination_observation=destination_observation,
+            ),
+            state=OperationState.UNCERTAIN,
+            error=exc,
+        )
+
+    return _ExportRowOutcome(
+        result=FileOperationResult(
+            file_id=int(row["id"]),
+            source=str(source),
+            destination=str(target),
+            action=mode,
+            outcome="success",
+            stage="transfer",
+        ),
+        state=OperationState.COMPLETED,
+        copied=1,
+    )
+
+
+def _move_export_row(
+    connection,
+    row,
+    *,
+    source: Path,
+    target: Path,
+    mode: str,
+    preview_cache_root: Path | None,
+    allow_preview_path_fallback: bool,
+) -> _ExportRowOutcome:
+    """Transfer one source, then reconcile the catalog before cleanup."""
+    try:
+        _move_without_overwrite(source, target)
+    except OSError as exc:
+        collision = isinstance(exc, FileExistsError)
+        source_after = observe_filesystem_path(source)
+        destination_after = observe_filesystem_path(target)
+        if collision:
+            outcome = "failed"
+            state = OperationState.FAILED
+            retry_safe = True
+        else:
+            outcome = (
+                "failed"
+                if source_after.state == "present" and destination_after.state == "missing"
+                else "uncertain"
+            )
+            state = OperationState.FAILED if outcome == "failed" else OperationState.UNCERTAIN
+            retry_safe = outcome == "failed"
+        return _ExportRowOutcome(
+            result=_result_from_error(
+                row,
+                action=mode,
+                destination=str(target),
+                stage="destination_selection" if collision else "transfer",
+                error=exc,
+                retry_safe=retry_safe,
+                outcome=outcome,
+                source_observation=source_after,
+                destination_observation=destination_after,
+            ),
+            state=state,
+        )
+    except Exception as exc:
+        source_after = observe_filesystem_path(source)
+        destination_after = observe_filesystem_path(target)
+        return _ExportRowOutcome(
+            result=_result_from_error(
+                row,
+                action=mode,
+                destination=str(target),
+                stage="transfer",
+                error=exc,
+                retry_safe=False,
+                outcome="uncertain",
+                source_observation=source_after,
+                destination_observation=destination_after,
+            ),
+            state=OperationState.UNCERTAIN,
+            error=exc,
+        )
+
+    try:
+        connection.execute(
+            "UPDATE files SET path = ?, path_key = ?, preview_path = NULL, preview_status = 'missing' WHERE id = ?",
+            (str(target), canonical_path_key(target), row["id"]),
+        )
+        # Persist each moved row so a later filesystem or database failure does
+        # not roll back paths for files already moved on disk.
+        connection.commit()
+    except BaseException as exc:
         try:
-            target = _resolve_target(dest_path, source.name)
-        except _PathObservationError as exc:
-            summary.add(
-                _result_from_error(
-                    row,
-                    action=mode,
-                    destination=str(exc.path),
-                    stage="destination_selection",
-                    error=exc,
-                    retry_safe=True,
-                    source_observation=source_observation,
-                    destination_observation=exc.observation,
-                )
+            result, needs_rollback = _reconcile_move_catalog_failure(
+                connection,
+                row=row,
+                source=source,
+                target=target,
+                catalog_error=exc,
             )
-            _emit_progress(progress_callback, index, total_files, summary, rows, index, mode)
-            continue
-        except (OSError, ValueError) as exc:
-            summary.add(
-                _result_from_error(
-                    row,
-                    action=mode,
-                    destination=None,
-                    stage="destination_selection",
-                    error=exc,
-                    retry_safe=True,
-                    source_observation=source_observation,
-                )
-            )
-            _emit_progress(progress_callback, index, total_files, summary, rows, index, mode)
-            continue
-
-        if mode == "copy":
-            try:
-                _copy_without_overwrite(source, target)
-                summary.copied += 1
-                summary.add(
-                    FileOperationResult(
-                        file_id=int(row["id"]),
-                        source=str(source),
-                        destination=str(target),
-                        action=mode,
-                        outcome="success",
-                        stage="transfer",
-                    )
-                )
-            except OSError as exc:
-                collision = isinstance(exc, FileExistsError)
-                destination_observation = observe_filesystem_path(target)
-                if collision:
-                    outcome = "failed"
-                    retry_safe = True
-                else:
-                    outcome = (
-                        "failed"
-                        if destination_observation.state == "missing"
-                        else "uncertain"
-                    )
-                    retry_safe = outcome == "failed"
-                summary.add(
-                    _result_from_error(
-                        row,
-                        action=mode,
-                        destination=str(target),
-                        stage="destination_selection" if collision else "transfer",
-                        error=exc,
-                        retry_safe=retry_safe,
-                        outcome=outcome,
-                        source_observation=observe_filesystem_path(source),
-                        destination_observation=destination_observation,
-                    )
-                )
-            except Exception as exc:
-                destination_observation = observe_filesystem_path(target)
-                summary.add(
-                    _result_from_error(
-                        row,
-                        action=mode,
-                        destination=str(target),
-                        stage="transfer",
-                        error=exc,
-                        retry_safe=False,
-                        outcome="uncertain",
-                        source_observation=observe_filesystem_path(source),
-                        destination_observation=destination_observation,
-                    )
-                )
-                _stop_with_unprocessed(summary, rows, index, exc, mode=mode, cancelled=False)
-            _emit_progress(progress_callback, index, total_files, summary, rows, index, mode)
-            continue
-
-        try:
-            _move_without_overwrite(source, target)
-        except OSError as exc:
-            collision = isinstance(exc, FileExistsError)
-            source_after = observe_filesystem_path(source)
-            destination_after = observe_filesystem_path(target)
-            if collision:
-                outcome = "failed"
-                retry_safe = True
-            else:
-                outcome = (
-                    "failed"
-                    if source_after.state == "present" and destination_after.state == "missing"
-                    else "uncertain"
-                )
-                retry_safe = outcome == "failed"
-            summary.add(
-                _result_from_error(
-                    row,
-                    action=mode,
-                    destination=str(target),
-                    stage="destination_selection" if collision else "transfer",
-                    error=exc,
-                    retry_safe=retry_safe,
-                    outcome=outcome,
-                    source_observation=source_after,
-                    destination_observation=destination_after,
-                )
-            )
-            _emit_progress(progress_callback, index, total_files, summary, rows, index, mode)
-            continue
-        except Exception as exc:
-            source_after = observe_filesystem_path(source)
-            destination_after = observe_filesystem_path(target)
-            summary.add(
-                _result_from_error(
-                    row,
-                    action=mode,
-                    destination=str(target),
-                    stage="transfer",
-                    error=exc,
-                    retry_safe=False,
-                    outcome="uncertain",
-                    source_observation=source_after,
-                    destination_observation=destination_after,
-                )
-            )
-            _stop_with_unprocessed(summary, rows, index, exc, mode=mode, cancelled=False)
-
-        try:
-            # Update the cached path and clear preview so it gets regenerated.
-            connection.execute(
-                "UPDATE files SET path = ?, path_key = ?, preview_path = NULL, preview_status = 'missing' WHERE id = ?",
-                (str(target), canonical_path_key(target), row["id"]),
-            )
-
-            # Persist successful move rows immediately so a later row's
-            # database failure cannot roll back paths for files that have
-            # already been moved on disk.
-            connection.commit()
-        except BaseException as exc:
-            try:
-                result, needs_rollback = _reconcile_move_catalog_failure(
-                    connection,
-                    row=row,
-                    source=source,
-                    target=target,
-                    catalog_error=exc,
-                )
-            except BaseException as restore_error:
-                summary.add(_result_from_error(
+        except BaseException as restore_error:
+            return _ExportRowOutcome(
+                result=_result_from_error(
                     row,
                     action=mode,
                     destination=str(target),
@@ -319,61 +404,44 @@ def export_files(
                     outcome="catalog_failed",
                     source_observation=observe_filesystem_path(source),
                     destination_observation=observe_filesystem_path(target),
-                ))
-                _append_unprocessed_rows(
-                    summary,
-                    rows[index:],
-                    action=mode,
-                    error=exc,
-                )
-                attach_file_operation_summary(restore_error, summary, needs_rollback=True)
-                try:
-                    setattr(restore_error, "catalog_error", exc)
-                except Exception:
-                    pass
-                raise restore_error from exc
-
-            summary.add(result)
-            _append_unprocessed_rows(
-                summary,
-                rows[index:],
-                action=mode,
-                error=exc,
+                ),
+                state=OperationState.CATALOG_UNCERTAIN,
+                error=restore_error,
+                error_cause=exc,
+                needs_rollback=True,
             )
-            attach_file_operation_summary(exc, summary, needs_rollback=needs_rollback)
-            raise
-
-        summary.moved += 1
-        summary.add(
-            FileOperationResult(
-                file_id=int(row["id"]),
-                source=str(source),
-                destination=str(target),
-                action=mode,
-                outcome="success",
-                stage="catalog_update",
-            )
+        return _ExportRowOutcome(
+            result=result,
+            state=OperationState.CATALOG_UNCERTAIN,
+            error=exc,
+            needs_rollback=needs_rollback,
         )
 
-        try:
-            # Clean up old preview file only after the database update succeeds.
-            delete_managed_preview_file(
-                row["preview_path"],
-                source_path=row["path"],
-                preview_cache_root=preview_cache_root,
-                allow_path_parent_fallback=allow_preview_path_fallback,
-            )
-        except Exception as exc:
-            summary.add_warning(
-                file_id=int(row["id"]),
-                source=str(source),
-                stage="preview_cleanup",
-                error=exc,
-            )
+    warning: BaseException | None = None
+    try:
+        # Preview cleanup is best effort and happens only after catalog update.
+        delete_managed_preview_file(
+            row["preview_path"],
+            source_path=row["path"],
+            preview_cache_root=preview_cache_root,
+            allow_path_parent_fallback=allow_preview_path_fallback,
+        )
+    except Exception as exc:
+        warning = exc
 
-        _emit_progress(progress_callback, index, total_files, summary, rows, index, mode)
-
-    return summary
+    return _ExportRowOutcome(
+        result=FileOperationResult(
+            file_id=int(row["id"]),
+            source=str(source),
+            destination=str(target),
+            action=mode,
+            outcome="success",
+            stage="catalog_update",
+        ),
+        state=OperationState.COMPLETED,
+        moved=1,
+        warning=warning,
+    )
 
 
 def _append_unprocessed_rows(
