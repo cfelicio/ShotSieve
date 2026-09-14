@@ -38,7 +38,7 @@ Practical rule of thumb:
 - If you are on Windows without a validated CUDA or XPU runtime, choose **CPU**.
 - If you just want the most reliable option or are unsure, choose **CPU**.
 
-Intel XPU remains a source-install/runtime option today, but it is not one of the packaged runtime downloads listed above.
+Intel XPU remains a source-install/runtime option today, but it is not one of the packaged runtime downloads listed above. See [docs/intel-xpu.md](docs/intel-xpu.md) for the pinned Windows/Linux install and one-image evidence workflow.
 
 ## Quick start with `shotsieve-desktop`
 

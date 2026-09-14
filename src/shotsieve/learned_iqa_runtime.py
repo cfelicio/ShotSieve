@@ -32,6 +32,10 @@ TRANSFORMERS_RETURN_DICT_DEPRECATION_PATTERN = r"`use_return_dict` is deprecated
 HF_UNAUTHENTICATED_REQUEST_WARNING_PATTERN = r"Warning: You are sending unauthenticated requests to the HF Hub"
 DEFAULT_RUNTIME_STATUS_TEXT = "cuda:unavailable,xpu:unavailable,mps:unsupported,cpu:available"
 RUNTIME_STATUS_ORDER = ("cuda", "xpu", "mps", "cpu")
+XPU_UNAVAILABLE_MESSAGE = (
+    "XPU is unavailable in the installed Torch runtime; install the pinned "
+    "source-only Intel XPU wheels and matching Intel GPU driver"
+)
 RESOURCE_PROFILES = {
     "aggressive": {"vram_factor": 0.80, "cpu_factor": 2.0, "ram_factor": 0.75},
     "normal": {"vram_factor": 0.50, "cpu_factor": 1.0, "ram_factor": 0.50},
@@ -187,7 +191,7 @@ def resolve_device(device: str | None, *, torch_module, import_module=importlib.
                 except Exception as exc:
                     failures.append(f"XPU device initialization failed: {_sanitize_runtime_cause(exc)}")
             else:
-                failures.append("XPU is unavailable in the installed Torch runtime")
+                failures.append(XPU_UNAVAILABLE_MESSAGE)
             continue
 
         if runtime == "mps":
@@ -675,6 +679,7 @@ __all__ = [
     "TORCHSCRIPT_ARCHIVE_WARNING_PATTERN",
     "TRANSFORMERS_GENERATION_FLAGS_WARNING_PATTERN",
     "TRANSFORMERS_RETURN_DICT_DEPRECATION_PATTERN",
+    "XPU_UNAVAILABLE_MESSAGE",
     "_cached_hw_capabilities",
     "_detect_vram_linux_amd",
     "_detect_vram_linux_amd_sysfs",

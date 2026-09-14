@@ -21,6 +21,7 @@ PREPARE_RELEASE_SCRIPT_PATH = PROJECT_ROOT / "scripts" / "prepare_release.ps1"
 MATRIX_SCRIPT_PATH = PROJECT_ROOT / "scripts" / "release_target_matrix.py"
 BUNDLE_SCRIPT_PATH = PROJECT_ROOT / "scripts" / "build_portable_bundle.py"
 RELEASE_CONSTRAINTS_PATH = PROJECT_ROOT / "scripts" / "release-constraints.txt"
+XPU_CONSTRAINTS_PATH = PROJECT_ROOT / "scripts" / "source-constraints-xpu.txt"
 LOCAL_ONLY_REPO_RELATIVE_PATHS = (
     "blog.md",
     ".github/agents/anvil.agent.md",
@@ -360,6 +361,28 @@ def test_build_guide_clarifies_xpu_is_source_only_not_packaged() -> None:
 
     assert "Intel XPU remains a source-only runtime path today" in build_doc_text
     assert "there is no prebuilt XPU runtime-pack target" in build_doc_text
+    assert "intel-xpu.md" in build_doc_text
+
+
+def test_xpu_source_track_is_pinned_and_not_in_release_matrix() -> None:
+    constraints = XPU_CONSTRAINTS_PATH.read_text(encoding="utf-8")
+    assert "torch==2.14.0+xpu" in constraints
+    assert "torchvision==0.29.0+xpu" in constraints
+
+    from shotsieve.dependency_constraints import model_requirements_for_runtime
+
+    assert model_requirements_for_runtime("XPU")[-2:] == (
+        "torch==2.14.0+xpu",
+        "torchvision==0.29.0+xpu",
+    )
+
+    matrix = run_release_matrix("runtime")
+    assert not any("xpu" in str(entry["id"]).casefold() for entry in matrix)
+
+    xpu_doc = (PROJECT_ROOT / "docs" / "intel-xpu.md").read_text(encoding="utf-8")
+    assert "https://download.pytorch.org/whl/xpu" in xpu_doc
+    assert "--driver-version" in xpu_doc
+    assert "qrealign-mini" in xpu_doc
 
 
 def test_pyproject_does_not_expose_removed_cli_entry_point() -> None:

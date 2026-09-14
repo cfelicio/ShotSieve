@@ -25,6 +25,12 @@ Optional extras:
 - Learned IQA support: `python -m pip install -e .[learned-iqa]` (`pyiqa==0.1.16`)
 - Windows build tooling: `python -m pip install -e .[windows-build]`
 
+Intel XPU is a source-install-only track. The pinned Windows/Linux install,
+driver prerequisites, runtime probe, and model-evidence commands are in
+[intel-xpu.md](./intel-xpu.md). Do not use the CPU/CUDA release constraints
+for an XPU environment; use `scripts/source-constraints-xpu.txt` and the
+official PyTorch XPU wheel index.
+
 ## Desktop entry point
 
 ShotSieve is desktop-first. For source installs and editable installs, the main entry point is:
@@ -42,7 +48,7 @@ Downloaded runtime packs use target-specific launcher names instead:
 - macOS CPU: `ShotSieve-CPU`
 - macOS Apple Silicon / MPS: `ShotSieve-MPS`
 
-Intel XPU remains a source-only runtime path today; there is no prebuilt XPU runtime-pack target yet.
+Intel XPU remains a source-only runtime path today; there is no prebuilt XPU runtime-pack target yet. See [intel-xpu.md](./intel-xpu.md) for the exact source-install track.
 
 Useful flags:
 

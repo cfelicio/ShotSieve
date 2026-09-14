@@ -4,9 +4,11 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import platform
 import re
 import socket
 import sys
+import time
 from pathlib import Path
 
 from shotsieve.dependency_constraints import installed_model_dependency_versions
@@ -38,6 +40,10 @@ def build_parser() -> argparse.ArgumentParser:
         type=Path,
         help="Write the sanitized pass/failure report here; defaults inside --data-dir.",
     )
+    parser.add_argument(
+        "--driver-version",
+        help="Record the exact accelerator driver version captured from the host OS.",
+    )
     return parser
 
 
@@ -66,9 +72,91 @@ def _sanitize_private_artifacts(value: object) -> object:
     return value
 
 
+def _start_runtime_measurement() -> dict[str, object]:
+    """Import Torch lazily and reset supported accelerator peak counters."""
+    try:
+        import torch
+    except Exception:
+        return {"torch_module": None}
+
+    for runtime in ("cuda", "xpu", "mps"):
+        runtime_module = getattr(torch, runtime, None)
+        reset_peak_memory_stats = getattr(runtime_module, "reset_peak_memory_stats", None)
+        if callable(reset_peak_memory_stats):
+            try:
+                reset_peak_memory_stats()
+            except Exception:
+                continue
+    return {"torch_module": torch}
+
+
+def _runtime_evidence(
+    *,
+    measurement: dict[str, object],
+    requested_runtime: str,
+    actual_runtime: object,
+    driver_version: str | None,
+    elapsed_seconds: float,
+) -> dict[str, object]:
+    """Return shareable host/runtime facts for a model smoke report."""
+    torch_module = measurement.get("torch_module")
+    actual = str(actual_runtime or "unknown").strip().casefold()
+    evidence: dict[str, object] = {
+        "python_version": platform.python_version(),
+        "platform": platform.platform(),
+        "requested_runtime": requested_runtime,
+        "actual_runtime": actual,
+        "driver_version": driver_version or "not-recorded",
+        "elapsed_seconds": round(elapsed_seconds, 3),
+        "peak_memory_mb": None,
+    }
+    if torch_module is None:
+        evidence["torch_runtime"] = "not-imported"
+        return evidence
+
+    evidence["torch_runtime"] = str(getattr(torch_module, "__version__", "unknown"))
+    runtime_module = getattr(torch_module, actual, None)
+    if runtime_module is None:
+        return evidence
+
+    synchronize = getattr(runtime_module, "synchronize", None)
+    if callable(synchronize):
+        try:
+            synchronize()
+        except Exception:
+            pass
+
+    peak_memory = getattr(runtime_module, "max_memory_allocated", None)
+    if callable(peak_memory):
+        try:
+            evidence["peak_memory_mb"] = round(float(peak_memory()) / (1024 * 1024), 2)
+        except Exception:
+            pass
+
+    if actual == "xpu":
+        device_count = getattr(runtime_module, "device_count", None)
+        if callable(device_count):
+            try:
+                evidence["xpu_device_count"] = int(device_count())
+            except Exception:
+                pass
+        get_device_name = getattr(runtime_module, "get_device_name", None)
+        if callable(get_device_name):
+            try:
+                evidence["xpu_device_name"] = str(get_device_name(0))
+            except Exception:
+                pass
+
+    return evidence
+
+
 def main() -> None:
     args = build_parser().parse_args()
     report_path = args.report_path or (args.data_dir / "model-smoke-report.json")
+    requested_runtime = str(args.device or "auto").strip().casefold()
+    measurement: dict[str, object] = {"torch_module": None}
+    started = time.perf_counter()
+    record: dict[str, object] = {}
     try:
         if args.offline:
             os.environ["HF_HUB_OFFLINE"] = "1"
@@ -78,33 +166,53 @@ def main() -> None:
         from shotsieve.model_assets import apply_model_cache_dir, prepare_model
 
         apply_model_cache_dir(args.cache_dir)
+        measurement = _start_runtime_measurement()
         record = prepare_model(args.model, data_dir=args.data_dir, device=args.device)
         if record.get("state") != "prepared":
             raise RuntimeError("Model smoke did not produce a prepared record.")
 
+        dependency_versions = installed_model_dependency_versions()
         report = {
             "status": "passed",
             "model": record.get("model"),
             "state": record.get("state"),
             "tested_runtime": record.get("tested_runtime"),
             "processed_counts": record.get("processed_counts"),
+            "model_version": record.get("model_version"),
+            "validation_scores": record.get("validation_scores", []),
             "cache_paths": record.get("cache_paths"),
-            "dependency_versions": installed_model_dependency_versions(),
+            "dependency_versions": dependency_versions,
+            "runtime_evidence": _runtime_evidence(
+                measurement=measurement,
+                requested_runtime=requested_runtime,
+                actual_runtime=record.get("tested_runtime"),
+                driver_version=args.driver_version,
+                elapsed_seconds=time.perf_counter() - started,
+            ),
         }
         _write_report(report_path, report)
         print(json.dumps(report, sort_keys=True))
     except Exception as exc:
+        actual_runtime = record.get("tested_runtime") or record.get("actual_runtime")
         diagnostic = build_model_diagnostic(
             exc,
             phase="validating_initialization",
             model_name=args.model,
-            requested_runtime=args.device or "auto",
+            requested_runtime=requested_runtime,
+            actual_runtime=actual_runtime,
             cache_dir=args.cache_dir,
         )
         report = {
             "status": "failed",
             "model": args.model,
             "dependency_versions": installed_model_dependency_versions(),
+            "runtime_evidence": _runtime_evidence(
+                measurement=measurement,
+                requested_runtime=requested_runtime,
+                actual_runtime=actual_runtime,
+                driver_version=args.driver_version,
+                elapsed_seconds=time.perf_counter() - started,
+            ),
             "diagnostic": _sanitize_private_artifacts(diagnostic),
         }
         try:

@@ -12,6 +12,9 @@ from shotsieve import model_assets
 class _Result:
     failed = False
     error = None
+    raw_score = 0.25
+    normalized_score = 25.0
+    confidence = 80.0
 
 
 def test_gpu_memory_error_with_documentation_url_is_not_network_failure() -> None:
@@ -61,6 +64,7 @@ def test_prepare_model_writes_atomic_success_record_and_releases_backend(tmp_pat
     assert result["requested_runtime"] == "cpu"
     assert result["tested_runtime"] == "cpu"
     assert result["processed_counts"] == {"validation_images": 1}
+    assert result["validation_scores"] == [{"raw_score": 0.25, "normalized_score": 25.0, "confidence": 80.0}]
     assert calls[0] == ("build", ("topiq_nr", "cpu"))
     assert calls[-1] == ("close", None)
 

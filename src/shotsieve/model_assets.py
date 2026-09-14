@@ -241,6 +241,8 @@ def _base_record(
         "expected_resources": expected_resources(model_name),
         "disk_estimate": storage_estimate(model_name),
         "processed_counts": {"validation_images": 0},
+        "model_version": None,
+        "validation_scores": [],
         "asset_check": {"status": "pending", "method": "backend_initialization_and_inference"},
         "error": None,
         "error_report": None,
@@ -715,6 +717,18 @@ def prepare_model(
             if failed:
                 detail = getattr(failed[0], "error", None) or "the model returned a failed result"
                 raise RuntimeError(f"Validation inference failed: {detail}")
+            validation_scores = [
+                {
+                    "raw_score": getattr(item, "raw_score", None),
+                    "normalized_score": getattr(item, "normalized_score", None),
+                    "confidence": getattr(item, "confidence", None),
+                }
+                for item in results
+            ]
+            save(
+                model_version=getattr(backend, "model_version", None),
+                validation_scores=validation_scores,
+            )
         save(
             state="prepared",
             phase="complete",

@@ -199,12 +199,33 @@ These are optional target tracks after DirectML removal. They do not change the
 planned CPU/CUDA/MPS release matrix until the exact hardware and package paths
 have passed.
 
+The Intel source-install implementation is documented in
+[docs/intel-xpu.md](docs/intel-xpu.md). It pins the Torch 2.14.0 / Torchvision
+0.29.0 XPU wheels from the official PyTorch XPU index, keeps the environment
+outside the packaged release matrix, and uses `scripts/model_smoke.py` to
+write sanitized one-image evidence. The code/docs portion is complete; the
+hardware checks below remain open until they run on supported Intel hardware.
+
+- [x] Keep Intel XPU source-only and out of the packaged release target matrix.
+- [x] Document isolated Windows/Linux installation, exact Python/wheel
+  recording, driver recording, native tensor verification, cache isolation,
+  online/offline smoke commands, and CPU fallback handling.
+- [x] Preserve explicit `xpu` runtime selection and `intel -> xpu` resolution;
+  unavailable XPU requests fail with actionable guidance instead of silently
+  using CPU. Auto mode may still fall back to CPU when XPU is unavailable.
+- [ ] Do not mark the Intel track validated until a supported Windows host and
+  supported Linux host each complete the checks below. Q-ReAlign Mini waits for
+  W04 model integration.
+
 - [ ] **Intel XPU:** on a supported Intel Arc/Core Ultra Windows host and a
   supported Linux host, install the official PyTorch XPU wheel and matching
-  driver in an isolated environment. Run TOPIQ, CLIPIQA, and Q-ReAlign Mini on
-  one disposable JPEG, then repeat from a complete network-disabled cache.
-  Record the Torch/XPU wheel, Python, driver, runtime, score, elapsed time, and
-  peak memory. A source-install pass does not authorize a packaged XPU target.
+  driver in an isolated environment using [docs/intel-xpu.md](docs/intel-xpu.md)
+  and `scripts/source-constraints-xpu.txt`. Run TOPIQ and CLIPIQA on one
+  disposable JPEG, then run Q-ReAlign Mini only after W04 adds it. Repeat each
+  model from a complete network-disabled cache. Record the Torch/XPU wheel,
+  Python, driver, runtime, cache paths, raw/normalized score, elapsed time,
+  and peak memory from the smoke report. A source-install pass does not
+  authorize a packaged XPU target.
 - [ ] **AMD ROCm/Linux:** on a GPU listed in AMD's current matrix, install the
   supported ROCm/PyTorch pair and run the same online/offline one-image checks.
   Record the ROCm version, GPU architecture, driver, Python, Torch build,

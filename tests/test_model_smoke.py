@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import sys
+import types
 from pathlib import Path
 
 import pytest
@@ -63,3 +64,38 @@ def test_model_smoke_retains_sanitized_failure_report(tmp_path: Path, monkeypatc
     assert "private-secret" not in serialized
     assert "photos/image.jpg" not in serialized
     assert "?token=" not in serialized
+
+
+def test_runtime_evidence_captures_xpu_identity_and_peak_memory() -> None:
+    module = load_smoke_module()
+
+    class FakeXpu:
+        def synchronize(self):
+            return None
+
+        def max_memory_allocated(self):
+            return 2 * 1024 * 1024
+
+        def device_count(self):
+            return 1
+
+        def get_device_name(self, index):
+            assert index == 0
+            return "Intel Arc test device"
+
+    fake_torch = types.SimpleNamespace(__version__="2.14.0+xpu", xpu=FakeXpu())
+
+    evidence = module._runtime_evidence(
+        measurement={"torch_module": fake_torch},
+        requested_runtime="xpu",
+        actual_runtime="xpu",
+        driver_version="test-driver",
+        elapsed_seconds=1.23456,
+    )
+
+    assert evidence["torch_runtime"] == "2.14.0+xpu"
+    assert evidence["xpu_device_count"] == 1
+    assert evidence["xpu_device_name"] == "Intel Arc test device"
+    assert evidence["peak_memory_mb"] == 2.0
+    assert evidence["driver_version"] == "test-driver"
+    assert evidence["elapsed_seconds"] == 1.235
