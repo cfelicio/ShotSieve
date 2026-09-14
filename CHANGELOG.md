@@ -18,6 +18,11 @@ All notable changes to this project will be documented in this file.
 
 ### Changed
 
+- Shared bulk delete/export selection parsing, revision validation, consistent
+  snapshotting, and frozen-ID materialization while keeping their filesystem and
+  result contracts separate. Centralized operation-job lock, progress,
+  cancellation, result-retention, failure, and lock-release handling across
+  delete, export, cache clear, AI-support installation, and model preparation.
 - Shared the frontend scan/score tracked-job lifecycle for start, tracking,
   polling, cleanup, abort, and recovery handling while preserving their
   workflow-specific estimates, payloads, progress phases, and result messages.

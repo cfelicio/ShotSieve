@@ -1,15 +1,14 @@
 from __future__ import annotations
 
 import sys
+from collections.abc import Callable
+from dataclasses import dataclass
 from http import HTTPStatus
 from pathlib import Path
 from typing import Any, cast
 from urllib.parse import parse_qs, urlparse
 
 from shotsieve.config import normalize_raw_preview_mode
-from shotsieve.learned_iqa import DEFAULT_MODEL_NAME
-from shotsieve.learned_iqa_catalog import validate_model_name
-from shotsieve.model_assets import build_model_diagnostic, classify_preparation_error, read_preparation_record
 from shotsieve.db import (
     attach_scan_run_diagnostic,
     mark_scan_run_diagnostic_persisted,
@@ -18,6 +17,13 @@ from shotsieve.db import (
     scan_run_diagnostic_was_persisted,
 )
 from shotsieve.job_registry import JobRegistry
+from shotsieve.learned_iqa import DEFAULT_MODEL_NAME
+from shotsieve.learned_iqa_catalog import validate_model_name
+from shotsieve.model_assets import (
+    build_model_diagnostic,
+    classify_preparation_error,
+    read_preparation_record,
+)
 from shotsieve.models import ScanRunDiagnostic
 from shotsieve.scoring import AnalysisProgress
 from shotsieve.web_route_common import (
@@ -40,6 +46,20 @@ def _operation_failure_summary(error: BaseException) -> dict[str, object] | None
         summary["cancelled"] = True
         summary["outcome"] = "cancelled"
     return summary
+
+
+@dataclass(frozen=True, slots=True)
+class _OperationJobFailure:
+    error: str
+    progress: dict[str, object] | None = None
+    summary: dict[str, object] | None = None
+
+
+def _default_operation_job_failure(error: BaseException) -> _OperationJobFailure:
+    return _OperationJobFailure(
+        error=str(error),
+        summary=_operation_failure_summary(error),
+    )
 
 
 def _model_failure_summary(
@@ -167,65 +187,124 @@ def _handle_cache_post_routes(handler: Any, context: WebRouteContext, parsed: An
     return True
 
 
-def start_delete_job(handler: Any, context: WebRouteContext, payload: dict[str, object]) -> None:
+def _start_operation_job(
+    handler: Any,
+    context: WebRouteContext,
+    *,
+    registry: JobRegistry,
+    initial_progress: dict[str, object],
+    progress_payload: Callable[..., dict[str, object]],
+    worker: Callable[[Callable[..., None], Callable[[], None]], object],
+    result_payload: Callable[[object], dict[str, object]],
+    cancel_error: Callable[[], Exception],
+    exception_payload: Callable[[BaseException], _OperationJobFailure] = _default_operation_job_failure,
+    result_handler: Callable[[JobRegistry, str, dict[str, object]], None] | None = None,
+) -> None:
+    """Start an operation job with one shared lock/registry lifecycle."""
     routes = _get_web_routes()
-    registry = routes._require_registry(context.operation_registry, label="Operation")
     deps = cast(WebRouteDependencies, context.dependencies)
     if not routes.try_acquire_operation_lock(handler, context):
         return
 
-    total_hint = routes._progress_total_hint(deps, payload) or 0
-    job_id = registry.create(initial_progress=routes._progress_payload("deleting_files", files_processed=0, files_total=total_hint))
+    try:
+        job_id = registry.create(initial_progress=initial_progress)
+    except Exception:
+        context.operation_lock.release()
+        raise
 
     def run_job() -> None:
         try:
-            def publish(processed: int, total: int, phase: str) -> None:
-                registry.update_progress(job_id, routes._progress_payload(phase, files_processed=processed, files_total=total))
+            def publish(*args: object) -> None:
+                registry.update_progress(job_id, progress_payload(*args))
 
             def cancel_check() -> None:
                 if registry.is_cancelled(job_id):
-                    raise InterruptedError("Delete job was cancelled by user.")
+                    raise cancel_error()
 
-            result = routes._execute_delete_request(context, payload, progress_callback=publish, cancel_check=cancel_check)
-            registry.complete(job_id, summary=result)
+            result = worker(publish, cancel_check)
+            summary = result_payload(result)
+            if result_handler is None:
+                registry.complete(job_id, summary=summary)
+            else:
+                result_handler(registry, job_id, summary)
         except Exception as exc:
-            registry.fail(job_id, error=str(exc), summary=_operation_failure_summary(exc))
+            failure = exception_payload(exc)
+            registry.fail(
+                job_id,
+                error=failure.error,
+                progress=failure.progress,
+                summary=failure.summary,
+            )
         finally:
             context.operation_lock.release()
 
-    deps.thread_factory(target=run_job, daemon=True).start()
+    try:
+        deps.thread_factory(target=run_job, daemon=True).start()
+    except Exception:
+        context.operation_lock.release()
+        raise
     routes.send_json(handler, {"job_id": job_id, "status": "running"})
+
+
+def start_delete_job(handler: Any, context: WebRouteContext, payload: dict[str, object]) -> None:
+    routes = _get_web_routes()
+    registry = routes._require_registry(context.operation_registry, label="Operation")
+    deps = cast(WebRouteDependencies, context.dependencies)
+    total_hint = routes._progress_total_hint(deps, payload) or 0
+    _start_operation_job(
+        handler,
+        context,
+        registry=registry,
+        initial_progress=routes._progress_payload(
+            "deleting_files",
+            files_processed=0,
+            files_total=total_hint,
+        ),
+        progress_payload=lambda processed, total, phase: routes._progress_payload(
+            phase,
+            files_processed=processed,
+            files_total=total,
+        ),
+        worker=lambda publish, cancel_check: routes._execute_delete_request(
+            context,
+            payload,
+            progress_callback=publish,
+            cancel_check=cancel_check,
+        ),
+        result_payload=lambda result: cast(dict[str, object], result),
+        cancel_error=lambda: InterruptedError("Delete job was cancelled by user."),
+    )
 
 
 def start_export_job(handler: Any, context: WebRouteContext, payload: dict[str, object]) -> None:
     routes = _get_web_routes()
     registry = routes._require_registry(context.operation_registry, label="Operation")
     deps = cast(WebRouteDependencies, context.dependencies)
-    if not routes.try_acquire_operation_lock(handler, context):
-        return
-
     phase = "moving_files" if str(payload.get("mode") or "copy") == "move" else "exporting_files"
     total_hint = routes._progress_total_hint(deps, payload) or 0
-    job_id = registry.create(initial_progress=routes._progress_payload(phase, files_processed=0, files_total=total_hint))
-
-    def run_job() -> None:
-        try:
-            def publish(processed: int, total: int, phase_name: str) -> None:
-                registry.update_progress(job_id, routes._progress_payload(phase_name, files_processed=processed, files_total=total))
-
-            def cancel_check() -> None:
-                if registry.is_cancelled(job_id):
-                    raise InterruptedError("Export job was cancelled by user.")
-
-            result = routes._execute_export_request(context, payload, progress_callback=publish, cancel_check=cancel_check)
-            registry.complete(job_id, summary=routes._export_result_payload(result))
-        except Exception as exc:
-            registry.fail(job_id, error=str(exc), summary=_operation_failure_summary(exc))
-        finally:
-            context.operation_lock.release()
-
-    deps.thread_factory(target=run_job, daemon=True).start()
-    routes.send_json(handler, {"job_id": job_id, "status": "running"})
+    _start_operation_job(
+        handler,
+        context,
+        registry=registry,
+        initial_progress=routes._progress_payload(
+            phase,
+            files_processed=0,
+            files_total=total_hint,
+        ),
+        progress_payload=lambda processed, total, phase_name: routes._progress_payload(
+            phase_name,
+            files_processed=processed,
+            files_total=total,
+        ),
+        worker=lambda publish, cancel_check: routes._execute_export_request(
+            context,
+            payload,
+            progress_callback=publish,
+            cancel_check=cancel_check,
+        ),
+        result_payload=routes._export_result_payload,
+        cancel_error=lambda: InterruptedError("Export job was cancelled by user."),
+    )
 
 
 def start_cache_clear_job(handler: Any, context: WebRouteContext, payload: dict[str, object]) -> None:
@@ -233,29 +312,29 @@ def start_cache_clear_job(handler: Any, context: WebRouteContext, payload: dict[
     registry = routes._require_registry(context.operation_registry, label="Operation")
     deps = cast(WebRouteDependencies, context.dependencies)
     deps.required_choice(payload.get("scope"), name="scope", choices=("scores", "review", "all"))
-    if not routes.try_acquire_operation_lock(handler, context):
-        return
-
-    job_id = registry.create(initial_progress=routes._progress_payload("clearing_cache", files_processed=0, files_total=1))
-
-    def run_job() -> None:
-        try:
-            def publish(processed: int, total: int, phase_name: str) -> None:
-                registry.update_progress(job_id, routes._progress_payload(phase_name, files_processed=processed, files_total=total))
-
-            def cancel_check() -> None:
-                if registry.is_cancelled(job_id):
-                    raise InterruptedError("Cache clear job was cancelled by user.")
-
-            result = routes._execute_cache_clear_request(context, payload, progress_callback=publish, cancel_check=cancel_check)
-            registry.complete(job_id, summary=result)
-        except Exception as exc:
-            registry.fail(job_id, error=str(exc))
-        finally:
-            context.operation_lock.release()
-
-    deps.thread_factory(target=run_job, daemon=True).start()
-    routes.send_json(handler, {"job_id": job_id, "status": "running"})
+    _start_operation_job(
+        handler,
+        context,
+        registry=registry,
+        initial_progress=routes._progress_payload(
+            "clearing_cache",
+            files_processed=0,
+            files_total=1,
+        ),
+        progress_payload=lambda processed, total, phase_name: routes._progress_payload(
+            phase_name,
+            files_processed=processed,
+            files_total=total,
+        ),
+        worker=lambda publish, cancel_check: routes._execute_cache_clear_request(
+            context,
+            payload,
+            progress_callback=publish,
+            cancel_check=cancel_check,
+        ),
+        result_payload=lambda result: cast(dict[str, object], result),
+        cancel_error=lambda: InterruptedError("Cache clear job was cancelled by user."),
+    )
 
 
 def _send_rows_total_estimate(handler: Any, context: WebRouteContext) -> None:
@@ -657,104 +736,117 @@ def start_ai_support_install_job(handler: Any, context: WebRouteContext, payload
     install_fn = getattr(deps, "install_ai_support", None)
     if not callable(install_fn):
         raise RuntimeError("AI support installation is unavailable")
-    if not routes.try_acquire_operation_lock(handler, context):
-        return
 
-    job_id = registry.create(initial_progress=routes._progress_payload(
-        "installing_ai_support",
-        files_processed=0,
-        files_total=3,
-    ))
+    def install_worker(publish: Callable[..., None], cancel_check: Callable[[], None]) -> object:
+        result = install_fn(
+            context.db_path.parent,
+            progress_callback=publish,
+            cancel_check=cancel_check,
+        )
+        if not isinstance(result, dict):
+            raise TypeError("AI support installer returned an invalid result")
+        return result
 
-    def run_job() -> None:
-        try:
-            def publish(record: dict[str, object]) -> None:
-                phase = str(record.get("phase") or "installing_ai_support")
-                processed = int(record.get("files_processed", 0) or 0)
-                total = int(record.get("files_total", 3) or 3)
-                registry.update_progress(
-                    job_id,
-                    routes._progress_payload(phase, files_processed=processed, files_total=total),
-                )
+    def ai_progress_payload(record: object) -> dict[str, object]:
+        if not isinstance(record, dict):
+            raise TypeError("AI support installer emitted an invalid progress record")
+        phase = str(record.get("phase") or "installing_ai_support")
+        processed = int(record.get("files_processed", 0) or 0)
+        total = int(record.get("files_total", 3) or 3)
+        return routes._progress_payload(phase, files_processed=processed, files_total=total)
 
-            def cancel_check() -> None:
-                if registry.is_cancelled(job_id):
-                    raise InterruptedError("AI support installation was cancelled by user.")
+    def ai_result_payload(result: object) -> dict[str, object]:
+        if not isinstance(result, dict):
+            raise TypeError("AI support installer returned an invalid result")
+        return result
 
-            result = install_fn(
-                context.db_path.parent,
-                progress_callback=publish,
-                cancel_check=cancel_check,
-            )
-            if not isinstance(result, dict):
-                raise TypeError("AI support installer returned an invalid result")
-            outcome = str(result.get("outcome") or "").casefold()
-            if outcome in {"failed", "cancelled"}:
-                if not isinstance(result.get("diagnostic"), dict):
-                    failure = _model_failure_summary(
-                        RuntimeError(
-                            str(
-                                result.get("error")
-                                or (
-                                    "AI support installation was cancelled."
-                                    if outcome == "cancelled"
-                                    else "AI support installation failed."
-                                )
-                            )
-                        ),
-                        model_name="optional-ai-support",
-                        requested_runtime="auto",
-                        phase="installing_ai_support",
-                    )
-                    result = {
-                        **result,
-                        "diagnostic": failure["diagnostic"],
-                        "error_report": failure["error_report"],
-                    }
-                registry.fail(
-                    job_id,
-                    error=str(
+    def finish_ai_result(
+        result_registry: JobRegistry,
+        job_id: str,
+        result: dict[str, object],
+    ) -> None:
+        outcome = str(result.get("outcome") or "").casefold()
+        if outcome not in {"failed", "cancelled"}:
+            result_registry.complete(job_id, summary=result)
+            return
+        if not isinstance(result.get("diagnostic"), dict):
+            failure = _model_failure_summary(
+                RuntimeError(
+                    str(
                         result.get("error")
                         or (
                             "AI support installation was cancelled."
                             if outcome == "cancelled"
                             else "AI support installation failed."
                         )
-                    ),
-                    summary=result,
-                )
-            else:
-                registry.complete(job_id, summary=result)
-        except InterruptedError as exc:
-            result = {
-                "action": "install_ai_support",
-                "outcome": "cancelled",
-                "error": str(exc),
-                "recovery_action": "Retry Install/Repair AI support to finish the runtime installation.",
-            }
-            registry.fail(job_id, error=str(exc), summary=result)
-        except Exception as exc:
-            failure = _model_failure_summary(
-                exc,
+                    )
+                ),
                 model_name="optional-ai-support",
                 requested_runtime="auto",
                 phase="installing_ai_support",
             )
-            diagnostic = failure["diagnostic"]
             result = {
-                "action": "install_ai_support",
-                "outcome": "failed",
-                "error": str(diagnostic.get("cause") or "AI support installation failed."),
-                "diagnostic": diagnostic,
-                "error_report": diagnostic,
-                "recovery_action": "Retry Install/Repair AI support. Check the sidecar pip-install.log if it fails again.",
+                **result,
+                "diagnostic": failure["diagnostic"],
+                "error_report": failure["error_report"],
             }
-            registry.fail(job_id, error=str(result["error"]), summary=result)
-        finally:
-            context.operation_lock.release()
+        result_registry.fail(
+            job_id,
+            error=str(
+                result.get("error")
+                or (
+                    "AI support installation was cancelled."
+                    if outcome == "cancelled"
+                    else "AI support installation failed."
+                )
+            ),
+            summary=result,
+        )
 
-    deps.thread_factory(target=run_job, daemon=True).start()
-    routes.send_json(handler, {"job_id": job_id, "status": "running"})
+    def ai_exception_payload(error: BaseException) -> _OperationJobFailure:
+        if isinstance(error, InterruptedError):
+            return _OperationJobFailure(
+                error=str(error),
+                summary={
+                    "action": "install_ai_support",
+                    "outcome": "cancelled",
+                    "error": str(error),
+                    "recovery_action": "Retry Install/Repair AI support to finish the runtime installation.",
+                },
+            )
+        failure = _model_failure_summary(
+            error,
+            model_name="optional-ai-support",
+            requested_runtime="auto",
+            phase="installing_ai_support",
+        )
+        diagnostic = failure["diagnostic"]
+        result = {
+            "action": "install_ai_support",
+            "outcome": "failed",
+            "error": str(diagnostic.get("cause") or "AI support installation failed."),
+            "diagnostic": diagnostic,
+            "error_report": diagnostic,
+            "recovery_action": "Retry Install/Repair AI support. Check the sidecar pip-install.log if it fails again.",
+        }
+        return _OperationJobFailure(error=str(result["error"]), summary=result)
+
+    _start_operation_job(
+        handler,
+        context,
+        registry=registry,
+        initial_progress=routes._progress_payload(
+            "installing_ai_support",
+            files_processed=0,
+            files_total=3,
+        ),
+        progress_payload=ai_progress_payload,
+        worker=install_worker,
+        result_payload=ai_result_payload,
+        cancel_error=lambda: InterruptedError("AI support installation was cancelled by user."),
+        exception_payload=ai_exception_payload,
+        result_handler=finish_ai_result,
+    )
 
 
 def start_model_prepare_job(handler: Any, context: WebRouteContext, payload: dict[str, object]) -> None:
@@ -769,91 +861,85 @@ def start_model_prepare_job(handler: Any, context: WebRouteContext, payload: dic
     prepare_fn = getattr(deps, "prepare_model", None)
     if not callable(prepare_fn):
         raise RuntimeError("Model preparation is unavailable")
-    if not routes.try_acquire_operation_lock(handler, context):
-        return
 
-    job_id = registry.create(initial_progress=_model_prepare_progress({
-        "phase": "checking_storage",
-        "model": model_name,
-        "processed_counts": {"validation_images": 0},
-    }))
-
-    def run_job() -> None:
-        def failure_diagnostic(error: BaseException) -> dict[str, object]:
-            diagnostic = read_preparation_record(context.db_path.parent)
-            if diagnostic.get("state") in {"failed", "runtime_unavailable"}:
-                return diagnostic
-            attached = getattr(error, "model_diagnostic", None)
-            if isinstance(attached, dict):
-                return {
-                    **diagnostic,
-                    "state": "failed",
-                    "model": model_name,
-                    "error": attached.get("cause"),
-                    "error_report": attached,
-                    "recovery_action": attached.get("recovery_action"),
-                    "record_write_error": attached.get("record_write_error"),
-                    "cancelled": isinstance(error, InterruptedError),
-                }
-            if isinstance(error, InterruptedError):
-                report = {
-                    "category": "cancelled",
-                    "phase": str(diagnostic.get("phase") or "preparing_model"),
-                    "cause": "Model preparation was cancelled.",
-                    "cause_chain": ["Model preparation was cancelled."],
-                    "recovery_action": "Preparation was cancelled. Retry to complete model validation.",
-                }
-            else:
-                report = classify_preparation_error(error, phase=str(diagnostic.get("phase") or "preparing_model"))
+    def failure_diagnostic(error: BaseException) -> dict[str, object]:
+        diagnostic = read_preparation_record(context.db_path.parent)
+        if diagnostic.get("state") in {"failed", "runtime_unavailable"}:
+            return diagnostic
+        attached = getattr(error, "model_diagnostic", None)
+        if isinstance(attached, dict):
             return {
                 **diagnostic,
                 "state": "failed",
                 "model": model_name,
-                "error": report["cause"],
-                "error_report": report,
-                "recovery_action": report["recovery_action"],
+                "error": attached.get("cause"),
+                "error_report": attached,
+                "recovery_action": attached.get("recovery_action"),
+                "record_write_error": attached.get("record_write_error"),
                 "cancelled": isinstance(error, InterruptedError),
             }
+        if isinstance(error, InterruptedError):
+            report = {
+                "category": "cancelled",
+                "phase": str(diagnostic.get("phase") or "preparing_model"),
+                "cause": "Model preparation was cancelled.",
+                "cause_chain": ["Model preparation was cancelled."],
+                "recovery_action": "Preparation was cancelled. Retry to complete model validation.",
+            }
+        else:
+            report = classify_preparation_error(error, phase=str(diagnostic.get("phase") or "preparing_model"))
+        return {
+            **diagnostic,
+            "state": "failed",
+            "model": model_name,
+            "error": report["cause"],
+            "error_report": report,
+            "recovery_action": report["recovery_action"],
+            "cancelled": isinstance(error, InterruptedError),
+        }
 
-        try:
-            def publish(record: dict[str, object]) -> None:
-                registry.update_progress(job_id, _model_prepare_progress(record))
+    def prepare_worker(publish: Callable[..., None], cancel_check: Callable[[], None]) -> object:
+        return prepare_fn(
+            model_name,
+            data_dir=context.db_path.parent,
+            device=requested_device,
+            progress_callback=publish,
+            cancel_check=cancel_check,
+        )
 
-            def cancel_check() -> None:
-                if registry.is_cancelled(job_id):
-                    raise InterruptedError("Model preparation job was cancelled by user.")
+    def model_exception_payload(error: BaseException) -> _OperationJobFailure:
+        diagnostic = failure_diagnostic(error)
+        error_report = diagnostic.get("error_report")
+        report_cause = error_report.get("cause") if isinstance(error_report, dict) else None
+        return _OperationJobFailure(
+            error=str(
+                diagnostic.get("error")
+                or report_cause
+                or (
+                    "Model preparation was cancelled."
+                    if isinstance(error, InterruptedError)
+                    else "Model preparation failed."
+                )
+            ),
+            progress=_model_prepare_progress(diagnostic),
+            summary=diagnostic,
+        )
 
-            result = prepare_fn(
-                model_name,
-                data_dir=context.db_path.parent,
-                device=requested_device,
-                progress_callback=publish,
-                cancel_check=cancel_check,
-            )
-            registry.complete(job_id, summary=result)
-        except InterruptedError as exc:
-            diagnostic = failure_diagnostic(exc)
-            registry.fail(
-                job_id,
-                error=str(diagnostic.get("error") or "Model preparation was cancelled."),
-                progress=_model_prepare_progress(diagnostic),
-                summary=diagnostic,
-            )
-        except Exception as exc:
-            diagnostic = failure_diagnostic(exc)
-            error_report = diagnostic.get("error_report")
-            report_cause = error_report.get("cause") if isinstance(error_report, dict) else None
-            registry.fail(
-                job_id,
-                error=str(diagnostic.get("error") or report_cause or "Model preparation failed."),
-                progress=_model_prepare_progress(diagnostic),
-                summary=diagnostic,
-            )
-        finally:
-            context.operation_lock.release()
-
-    deps.thread_factory(target=run_job, daemon=True).start()
-    routes.send_json(handler, {"job_id": job_id, "status": "running"})
+    _start_operation_job(
+        handler,
+        context,
+        registry=registry,
+        initial_progress=_model_prepare_progress({
+            "phase": "checking_storage",
+            "model": model_name,
+            "processed_counts": {"validation_images": 0},
+        }),
+        progress_payload=lambda record: _model_prepare_progress(cast(dict[str, object], record)),
+        worker=prepare_worker,
+        result_payload=lambda result: cast(dict[str, object], result),
+        cancel_error=lambda: InterruptedError("Model preparation job was cancelled by user."),
+        exception_payload=model_exception_payload,
+    )
 
 
 def start_compare_job(handler: Any, context: WebRouteContext, payload: dict[str, object]) -> None:

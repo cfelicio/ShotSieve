@@ -1,11 +1,18 @@
 from __future__ import annotations
 
 import sys
+from collections.abc import Callable
 from http import HTTPStatus
 from pathlib import Path
-from typing import Any, Callable, cast
+from typing import Any, cast
 from urllib.parse import parse_qs
 
+from shotsieve.models import (
+    FileOperationResult,
+    FileOperationSummary,
+    attach_file_operation_summary,
+    operation_summary_from_exception,
+)
 from shotsieve.web_media import MediaDependencies, serve_media_response
 from shotsieve.web_route_common import (
     DeleteResultPayload,
@@ -14,12 +21,6 @@ from shotsieve.web_route_common import (
     WebRouteDependencies,
     _begin_consistent_snapshot,
     _finish_consistent_snapshot,
-)
-from shotsieve.models import (
-    FileOperationResult,
-    FileOperationSummary,
-    attach_file_operation_summary,
-    operation_summary_from_exception,
 )
 
 
@@ -192,6 +193,38 @@ def _operation_progress_callback(
     return update
 
 
+def _parse_bulk_operation_selection(
+    deps: WebRouteDependencies,
+    payload: dict[str, object],
+) -> dict[str, object] | None:
+    """Parse the shared selection contract before opening the catalog."""
+    routes = _get_web_routes()
+    selection = routes._parse_selection_payload(deps, payload)
+    if selection is not None:
+        routes._require_root_for_destructive_selection(selection)
+    return selection
+
+
+def _begin_bulk_selection_snapshot(
+    connection: Any,
+    deps: WebRouteDependencies,
+    selection: dict[str, object],
+) -> tuple[bool, list[list[int]]]:
+    """Validate and freeze one bulk selection while its snapshot is active."""
+    routes = _get_web_routes()
+    snapshot_active = _begin_consistent_snapshot(connection)
+    try:
+        routes._validate_selection_revision(connection, deps, selection)
+        # Materialize the filtered IDs before the first mutation. This keeps
+        # delete and export on the same frozen selection and lets a stopped
+        # job report later rows as not attempted.
+        batches = list(routes._frozen_selection_batches(connection, deps, selection))
+    except Exception:
+        _finish_consistent_snapshot(connection, active=snapshot_active, success=False)
+        raise
+    return snapshot_active, batches
+
+
 def _execute_delete_request(
     context: WebRouteContext,
     payload: dict[str, object],
@@ -201,9 +234,7 @@ def _execute_delete_request(
 ) -> DeleteResultPayload:
     deps = cast(WebRouteDependencies, context.dependencies)
     routes = _get_web_routes()
-    selection = routes._parse_selection_payload(deps, payload)
-    if selection is not None:
-        routes._require_root_for_destructive_selection(selection)
+    selection = _parse_bulk_operation_selection(deps, payload)
     delete_from_disk = deps.coerce_bool(payload.get("delete_from_disk"), default=False)
     total_hint = routes._progress_total_hint(deps, payload)
 
@@ -230,7 +261,7 @@ def _execute_delete_request(
                 cancel_check=cancel_check,
             ))
 
-        snapshot_active = _begin_consistent_snapshot(connection)
+        snapshot_active, batches = _begin_bulk_selection_snapshot(connection, deps, selection)
         operation_summary = FileOperationSummary(action="delete", delete_from_disk=delete_from_disk)
         delete_result: DeleteResultPayload = {
             "deleted_ids": [],
@@ -240,15 +271,9 @@ def _execute_delete_request(
             "delete_from_disk": delete_from_disk,
         }
         contract_enabled = False
-        batches = []
         current_batch_index = 0
         batch_completed = False
         try:
-            routes._validate_selection_revision(connection, deps, selection)
-            # Materializing the already-filtered IDs before the first mutation
-            # freezes the selection and lets a stopped job report later rows as
-            # not attempted.
-            batches = list(routes._frozen_selection_batches(connection, deps, selection))
             processed_so_far = 0
             if progress_callback is not None:
                 progress_callback(0, total_hint or 0, "deleting_files")
@@ -329,9 +354,7 @@ def _execute_export_request(
 ) -> object:
     deps = cast(WebRouteDependencies, context.dependencies)
     routes = _get_web_routes()
-    selection = routes._parse_selection_payload(deps, payload)
-    if selection is not None:
-        routes._require_root_for_destructive_selection(selection)
+    selection = _parse_bulk_operation_selection(deps, payload)
     destination = deps.optional_string(payload.get("destination"))
     mode_raw = payload.get("mode")
     mode = (
@@ -368,16 +391,13 @@ def _execute_export_request(
                 cancel_check=cancel_check,
             )
 
-        snapshot_active = _begin_consistent_snapshot(connection)
+        snapshot_active, batches = _begin_bulk_selection_snapshot(connection, deps, selection)
         operation_summary = FileOperationSummary(action="export")
         contract_enabled = False
-        batches = []
         processed_so_far = 0
         current_batch_index = 0
         batch_completed = False
         try:
-            routes._validate_selection_revision(connection, deps, selection)
-            batches = list(routes._frozen_selection_batches(connection, deps, selection))
             if progress_callback is not None:
                 progress_callback(0, total_hint or 0, phase)
             for batch_index, file_ids in enumerate(batches):

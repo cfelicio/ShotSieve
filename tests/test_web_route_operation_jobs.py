@@ -6,15 +6,87 @@ import threading
 import time
 from http import HTTPStatus
 from pathlib import Path
+from types import SimpleNamespace
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
 import pytest
 
 from shotsieve.db import database, initialize_database
+from shotsieve.job_registry import JobRegistry
 from shotsieve.web import build_handler
 
 from conftest import create_image, find_free_port
+
+
+def test_operation_job_launcher_owns_shared_lifecycle(monkeypatch, tmp_path: Path):
+    from shotsieve import web_routes as route_module
+    from shotsieve.web_route_jobs import _start_operation_job
+
+    registry = JobRegistry()
+    operation_lock = threading.Lock()
+    captured: dict[str, object] = {}
+    events: list[object] = []
+
+    class SynchronousThread:
+        def __init__(self, target):
+            self.target = target
+
+        def start(self):
+            self.target()
+
+    monkeypatch.setattr(
+        route_module,
+        "try_acquire_operation_lock",
+        lambda _handler, context: context.operation_lock.acquire(blocking=False),
+    )
+    monkeypatch.setattr(
+        route_module,
+        "send_json",
+        lambda _handler, payload: captured.setdefault("start", payload),
+    )
+
+    deps = SimpleNamespace(
+        thread_factory=lambda *, target, daemon: SynchronousThread(target),
+    )
+    context = route_module.WebRouteContext(
+        db_path=tmp_path / "shotsieve.db",
+        operation_lock=operation_lock,
+        scan_registry=None,
+        score_registry=None,
+        compare_registry=None,
+        max_request_body_size=1024,
+        static_dir=tmp_path,
+        media_mime_fallbacks={},
+        dependencies=deps,
+        operation_registry=registry,
+    )
+
+    _start_operation_job(
+        SimpleNamespace(),
+        context,
+        registry=registry,
+        initial_progress={"phase": "starting"},
+        progress_payload=lambda phase: {"phase": phase},
+        worker=lambda publish, cancel_check: (
+            events.append("worker"),
+            publish("running"),
+            cancel_check(),
+            {"done": True},
+        )[-1],
+        result_payload=lambda result: {"result": result},
+        cancel_error=lambda: InterruptedError("cancelled"),
+    )
+
+    job_id = captured["start"]["job_id"]
+    status = registry.status(job_id)
+    assert events == ["worker"]
+    assert captured["start"]["status"] == "running"
+    assert not operation_lock.locked()
+    assert status is not None
+    assert status["status"] == "completed"
+    assert status["progress"] == {"phase": "running"}
+    assert status["summary"] == {"result": {"done": True}}
 
 
 class TestRouteHandlingAsync:

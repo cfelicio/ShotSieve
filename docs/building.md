@@ -122,6 +122,16 @@ Copy, move, and delete workers expose one shared per-file result contract in the
 
 The Library UI retains the latest operation result, keeps unsuccessful/unprocessed IDs selected, bounds the on-screen result list, and provides Copy details, Download JSON, safe retry, and Check status actions. Rejected deletion goes through the same tracked async operation path as selected deletion. Settings includes a read-only root-scoped decision CSV export for approved, rejected, or both decisions; it includes all matching rows across Review pages and uses spreadsheet-safe UTF-8 CSV escaping.
 
+Delete and export use the same bulk-selection boundary: the request is normalized and
+root-checked before the database opens, the selection revision is validated inside a
+consistent snapshot, and the filtered IDs are materialized before either operation
+mutates the catalog or filesystem. Their operation-specific mutation, compensation,
+and result contracts remain separate. Delete, export, cache-clear, optional AI-support
+installation, and model-preparation jobs share the operation-job launcher for lock
+ownership, registry creation, progress publication, cancellation checks, result
+retention, failure conversion, and guaranteed lock release; their worker payloads and
+diagnostic schemas remain operation-specific.
+
 The folder browser accepts a full local path or UNC path such as `\\server\share\folder`; press Enter after editing the path to open it. The browser does not enumerate network servers or probe write/delete permissions against user photos.
 
 ### Media cache behavior
