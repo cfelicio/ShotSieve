@@ -15,6 +15,7 @@ import re
 import shutil
 import tempfile
 from collections.abc import Callable, Mapping
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit
@@ -640,6 +641,251 @@ def _emit_progress(
         callback(dict(record))
 
 
+@dataclass(frozen=True)
+class _PreparationContext:
+    """Resolved inputs shared by every phase of one preparation attempt."""
+
+    model_name: str
+    requested_runtime: str
+    environ: Mapping[str, str]
+    cache_paths: dict[str, str | None]
+    dependency_versions: dict[str, str]
+    dependency_fingerprint: str
+
+
+def _resolve_preparation_context(
+    model_name: str,
+    *,
+    device: str | None,
+    environ: Mapping[str, str] | None,
+) -> _PreparationContext:
+    """Resolve model identity, runtime, cache paths, and readiness identity."""
+    canonical_model = validate_model_name(model_name)
+    model_spec = _model_spec(canonical_model)
+    requested_runtime = str(device or ("cpu" if "cpu" in model_spec.supported_runtimes else "auto"))
+    requested_runtime = requested_runtime.strip().casefold() or "auto"
+    env = os.environ if environ is None else environ
+    cache_paths = effective_cache_paths(environ=env)
+    dependency_versions = _dependency_versions()
+    fingerprint = _dependency_fingerprint(
+        canonical_model,
+        cache_paths=cache_paths,
+        dependency_versions=dependency_versions,
+        environ=env,
+    )
+    return _PreparationContext(
+        model_name=canonical_model,
+        requested_runtime=requested_runtime,
+        environ=env,
+        cache_paths=cache_paths,
+        dependency_versions=dependency_versions,
+        dependency_fingerprint=fingerprint,
+    )
+
+
+class _PreparationRecordStore:
+    """Own the mutable preparation record and its durable progress writes."""
+
+    def __init__(
+        self,
+        data_dir: Path,
+        *,
+        context: _PreparationContext,
+        progress_callback: Callable[[dict[str, object]], None] | None,
+        record_writer: Callable[[Path, Mapping[str, object]], dict[str, object]],
+    ) -> None:
+        self.data_dir = data_dir
+        self.context = context
+        self.progress_callback = progress_callback
+        self.record_writer = record_writer
+        self.record = _base_record(
+            context.model_name,
+            requested_runtime=context.requested_runtime,
+            cache_paths=context.cache_paths,
+            dependency_versions=context.dependency_versions,
+            dependency_fingerprint=context.dependency_fingerprint,
+            environ=context.environ,
+        )
+
+    def save(self, **updates: object) -> None:
+        """Persist one phase without hiding a model or runtime failure."""
+        self.record.update(updates)
+        try:
+            self.record_writer(self.data_dir, self.record)
+            self.record.pop("record_write_error", None)
+        except Exception as record_error:
+            # Readiness persistence is diagnostic state. It must not hide the
+            # original model failure or turn a successful preparation into a
+            # failed capability.
+            self.record["record_write_error"] = _sanitize_text(
+                record_error,
+                environ=self.context.environ,
+            )
+        _emit_progress(self.progress_callback, self.record)
+
+
+def _check_preparation_storage(
+    data_dir: Path,
+    *,
+    context: _PreparationContext,
+    record_store: _PreparationRecordStore,
+    cancel_check: Callable[[], None] | None,
+) -> None:
+    """Check writable app storage and report effective cache volume state."""
+    if cancel_check is not None:
+        cancel_check()
+    data_dir.mkdir(parents=True, exist_ok=True)
+    usage = shutil.disk_usage(data_dir)
+    record_store.save(
+        storage_check={
+            "data_dir": {"free_bytes": usage.free, "total_bytes": usage.total},
+            "cache_volumes": effective_cache_volumes(cache_paths=context.cache_paths),
+            "estimate": "advisory",
+        }
+    )
+
+
+def _initialize_preparation_backend(
+    *,
+    context: _PreparationContext,
+    backend_factory: Callable[..., object] | None,
+) -> object:
+    """Construct the backend whose lifetime is owned by the caller."""
+    if backend_factory is None:
+        from shotsieve.learned_iqa import build_learned_backend
+
+        backend_factory = build_learned_backend
+    return backend_factory(context.model_name, device=context.requested_runtime)
+
+
+def _validate_preparation_runtime(
+    backend: object,
+    *,
+    context: _PreparationContext,
+    record_store: _PreparationRecordStore,
+) -> str:
+    """Record the resolved runtime and enforce the model compatibility policy."""
+    actual_runtime = str(getattr(backend, "runtime", "unknown")).casefold()
+    record_store.save(actual_runtime=actual_runtime)
+    if not is_model_runtime_compatible(
+        context.model_name,
+        torch_version=None,
+        runtime=actual_runtime,
+    ):
+        raise RuntimeError(
+            f"Preparation runtime '{actual_runtime}' is not compatible with model '{context.model_name}'."
+        )
+    return actual_runtime
+
+
+def _validate_preparation_backend(
+    backend: object,
+    *,
+    record_store: _PreparationRecordStore,
+    cancel_check: Callable[[], None] | None,
+) -> list[dict[str, object]]:
+    """Run the tiny generated-image inference used as the asset check."""
+    if cancel_check is not None:
+        cancel_check()
+    with tempfile.TemporaryDirectory(prefix="shotsieve-model-check-") as temporary_dir:
+        validation_path = Path(temporary_dir) / "validation.png"
+        from PIL import Image
+
+        Image.new("RGB", (32, 32), (127, 127, 127)).save(validation_path, format="PNG")
+        record_store.save(processed_counts={"validation_images": 1})
+        results = backend.score_paths([validation_path], batch_size=1, resource_profile="low")
+        if not results:
+            raise RuntimeError("The model returned no result during validation inference.")
+        failed = [item for item in results if bool(getattr(item, "failed", False))]
+        if failed:
+            detail = getattr(failed[0], "error", None) or "the model returned a failed result"
+            raise RuntimeError(f"Validation inference failed: {detail}")
+        validation_scores = [
+            {
+                "raw_score": getattr(item, "raw_score", None),
+                "normalized_score": getattr(item, "normalized_score", None),
+                "confidence": getattr(item, "confidence", None),
+            }
+            for item in results
+        ]
+        model_version = getattr(backend, "model_version", None)
+        record_store.save(model_version=model_version, validation_scores=validation_scores)
+    return validation_scores
+
+
+def _persist_cancelled_preparation(
+    exc: InterruptedError,
+    *,
+    context: _PreparationContext,
+    record_store: _PreparationRecordStore,
+    phase: str,
+) -> None:
+    """Retain cancellation as an incomplete failed preparation."""
+    report = build_model_diagnostic(
+        exc,
+        phase=phase,
+        model_name=context.model_name,
+        requested_runtime=context.requested_runtime,
+        actual_runtime=record_store.record.get("actual_runtime"),
+        cache_paths=context.cache_paths,
+        environ=context.environ,
+    )
+    report.update({
+        "category": "cancelled",
+        "recovery_action": "Preparation was cancelled. Open Settings and choose Prepare selected model to retry.",
+    })
+    record_store.save(
+        state="failed",
+        phase=phase,
+        finished_at=_utc_now(),
+        error=report["cause"],
+        error_report=report,
+        recovery_action=report["recovery_action"],
+        cancelled=True,
+    )
+    attached = attach_model_diagnostic(
+        exc,
+        phase=phase,
+        model_name=context.model_name,
+        requested_runtime=context.requested_runtime,
+        actual_runtime=record_store.record.get("actual_runtime"),
+        cache_paths=context.cache_paths,
+        environ=context.environ,
+    )
+    if record_store.record.get("record_write_error"):
+        attached["record_write_error"] = record_store.record["record_write_error"]
+
+
+def _persist_failed_preparation(
+    exc: BaseException,
+    *,
+    context: _PreparationContext,
+    record_store: _PreparationRecordStore,
+    phase: str,
+) -> None:
+    """Attach and persist a sanitized failure without changing its exception."""
+    report = attach_model_diagnostic(
+        exc,
+        phase=phase,
+        model_name=context.model_name,
+        requested_runtime=context.requested_runtime,
+        actual_runtime=record_store.record.get("actual_runtime"),
+        cache_paths=context.cache_paths,
+        environ=context.environ,
+    )
+    state = "runtime_unavailable" if report["category"] == "runtime_unavailable" else "failed"
+    record_store.save(
+        state=state,
+        phase=phase,
+        finished_at=_utc_now(),
+        error=report["cause"],
+        error_report=report,
+        recovery_action=report["recovery_action"],
+    )
+    if record_store.record.get("record_write_error"):
+        report["record_write_error"] = record_store.record["record_write_error"]
+
+
 def prepare_model(
     model_name: str,
     *,
@@ -653,107 +899,50 @@ def prepare_model(
     environ: Mapping[str, str] | None = None,
 ) -> dict[str, object]:
     """Prepare exactly one supported model and validate one tiny inference."""
-    canonical_model = validate_model_name(model_name)
-    model_spec = _model_spec(canonical_model)
-    requested_runtime = str(device or ("cpu" if "cpu" in model_spec.supported_runtimes else "auto")).strip().casefold()
-    if not requested_runtime:
-        requested_runtime = "auto"
-    env = os.environ if environ is None else environ
-    cache_paths = effective_cache_paths(environ=env)
-    dependency_versions = _dependency_versions()
-    fingerprint = _dependency_fingerprint(
-        canonical_model,
-        cache_paths=cache_paths,
-        dependency_versions=dependency_versions,
-        environ=env,
-    )
-    record = _base_record(
-        canonical_model,
-        requested_runtime=requested_runtime,
-        cache_paths=cache_paths,
-        dependency_versions=dependency_versions,
-        dependency_fingerprint=fingerprint,
-        environ=env,
+    context = _resolve_preparation_context(model_name, device=device, environ=environ)
+    record_store = _PreparationRecordStore(
+        data_dir,
+        context=context,
+        progress_callback=progress_callback,
+        record_writer=record_writer,
     )
     backend: object | None = None
     current_phase = "checking_storage"
 
-    def save(**updates: object) -> None:
-        record.update(updates)
-        try:
-            record_writer(data_dir, record)
-            record.pop("record_write_error", None)
-        except Exception as record_error:
-            # Readiness persistence is diagnostic state.  It must not hide the
-            # original model failure or turn a successful preparation into a
-            # failed capability.
-            record["record_write_error"] = _sanitize_text(record_error, environ=env)
-        _emit_progress(progress_callback, record)
+    # Phase writes are owned by _PreparationRecordStore so every transition
+    # uses the same atomic persistence and progress path.
 
     try:
-        save()
-        if cancel_check is not None:
-            cancel_check()
-        data_dir.mkdir(parents=True, exist_ok=True)
-        usage = shutil.disk_usage(data_dir)
-        save(
-            storage_check={
-                "data_dir": {"free_bytes": usage.free, "total_bytes": usage.total},
-                "cache_volumes": effective_cache_volumes(cache_paths=cache_paths),
-                "estimate": "advisory",
-            }
+        record_store.save()
+        _check_preparation_storage(
+            data_dir,
+            context=context,
+            record_store=record_store,
+            cancel_check=cancel_check,
         )
 
         current_phase = "preparing_model"
-        save(phase=current_phase)
+        record_store.save(phase=current_phase)
         if cancel_check is not None:
             cancel_check()
-        if backend_factory is None:
-            from shotsieve.learned_iqa import build_learned_backend
-
-            backend_factory = build_learned_backend
-        backend = backend_factory(canonical_model, device=requested_runtime)
-        actual_runtime = str(getattr(backend, "runtime", "unknown")).casefold()
-        save(actual_runtime=actual_runtime)
-        if not is_model_runtime_compatible(
-            canonical_model,
-            torch_version=None,
-            runtime=actual_runtime,
-        ):
-            raise RuntimeError(
-                f"Preparation runtime '{actual_runtime}' is not compatible with model '{canonical_model}'."
-            )
+        backend = _initialize_preparation_backend(
+            context=context,
+            backend_factory=backend_factory,
+        )
+        actual_runtime = _validate_preparation_runtime(
+            backend,
+            context=context,
+            record_store=record_store,
+        )
 
         current_phase = "validating_initialization"
-        save(phase=current_phase)
-        if cancel_check is not None:
-            cancel_check()
-        with tempfile.TemporaryDirectory(prefix="shotsieve-model-check-") as temporary_dir:
-            validation_path = Path(temporary_dir) / "validation.png"
-            from PIL import Image
-
-            Image.new("RGB", (32, 32), (127, 127, 127)).save(validation_path, format="PNG")
-            save(processed_counts={"validation_images": 1})
-            results = backend.score_paths([validation_path], batch_size=1, resource_profile="low")
-            if not results:
-                raise RuntimeError("The model returned no result during validation inference.")
-            failed = [item for item in results if bool(getattr(item, "failed", False))]
-            if failed:
-                detail = getattr(failed[0], "error", None) or "the model returned a failed result"
-                raise RuntimeError(f"Validation inference failed: {detail}")
-            validation_scores = [
-                {
-                    "raw_score": getattr(item, "raw_score", None),
-                    "normalized_score": getattr(item, "normalized_score", None),
-                    "confidence": getattr(item, "confidence", None),
-                }
-                for item in results
-            ]
-            save(
-                model_version=getattr(backend, "model_version", None),
-                validation_scores=validation_scores,
-            )
-        save(
+        record_store.save(phase=current_phase)
+        _validate_preparation_backend(
+            backend,
+            record_store=record_store,
+            cancel_check=cancel_check,
+        )
+        record_store.save(
             state="prepared",
             phase="complete",
             actual_runtime=actual_runtime,
@@ -765,63 +954,22 @@ def prepare_model(
             error_report=None,
             recovery_action=None,
         )
-        return dict(record)
+        return dict(record_store.record)
     except InterruptedError as exc:
-        report = build_model_diagnostic(
+        _persist_cancelled_preparation(
             exc,
+            context=context,
+            record_store=record_store,
             phase=current_phase,
-            model_name=canonical_model,
-            requested_runtime=requested_runtime,
-            actual_runtime=record.get("actual_runtime"),
-            cache_paths=cache_paths,
-            environ=env,
         )
-        report.update({
-            "category": "cancelled",
-            "recovery_action": "Preparation was cancelled. Open Settings and choose Prepare selected model to retry.",
-        })
-        save(
-            state="failed",
-            phase=current_phase,
-            finished_at=_utc_now(),
-            error=report["cause"],
-            error_report=report,
-            recovery_action=report["recovery_action"],
-            cancelled=True,
-        )
-        attached = attach_model_diagnostic(
-            exc,
-            phase=current_phase,
-            model_name=canonical_model,
-            requested_runtime=requested_runtime,
-            actual_runtime=record.get("actual_runtime"),
-            cache_paths=cache_paths,
-            environ=env,
-        )
-        if record.get("record_write_error"):
-            attached["record_write_error"] = record["record_write_error"]
         raise
     except Exception as exc:
-        report = attach_model_diagnostic(
+        _persist_failed_preparation(
             exc,
+            context=context,
+            record_store=record_store,
             phase=current_phase,
-            model_name=canonical_model,
-            requested_runtime=requested_runtime,
-            actual_runtime=record.get("actual_runtime"),
-            cache_paths=cache_paths,
-            environ=env,
         )
-        state = "runtime_unavailable" if report["category"] == "runtime_unavailable" else "failed"
-        save(
-            state=state,
-            phase=current_phase,
-            finished_at=_utc_now(),
-            error=report["cause"],
-            error_report=report,
-            recovery_action=report["recovery_action"],
-        )
-        if record.get("record_write_error"):
-            report["record_write_error"] = record["record_write_error"]
         raise
     finally:
         if backend is not None:

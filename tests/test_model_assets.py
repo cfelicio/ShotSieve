@@ -74,6 +74,51 @@ def test_prepare_model_writes_atomic_success_record_and_releases_backend(tmp_pat
     assert stored["disk_estimate"]["status"] == "advisory"
 
 
+def test_prepare_model_publishes_phases_in_state_machine_order(tmp_path: Path) -> None:
+    progress: list[dict[str, object]] = []
+
+    model_assets.prepare_model(
+        "topiq_nr",
+        data_dir=tmp_path,
+        progress_callback=lambda record: progress.append(record),
+        backend_factory=lambda *_args, **_kwargs: _Backend([]),
+    )
+
+    assert [record["phase"] for record in progress] == [
+        "checking_storage",
+        "checking_storage",
+        "preparing_model",
+        "preparing_model",
+        "validating_initialization",
+        "validating_initialization",
+        "validating_initialization",
+        "complete",
+    ]
+    assert progress[-1]["state"] == "prepared"
+
+
+def test_prepare_model_releases_backend_when_runtime_validation_fails(tmp_path: Path) -> None:
+    class IncompatibleBackend(_Backend):
+        runtime = "unsupported"
+
+    backend = IncompatibleBackend([])
+    released: list[object] = []
+
+    with pytest.raises(RuntimeError, match="not compatible"):
+        model_assets.prepare_model(
+            "topiq_nr",
+            data_dir=tmp_path,
+            device="unsupported-runtime",
+            backend_factory=lambda *_args, **_kwargs: backend,
+            backend_release=released.append,
+        )
+
+    assert released == [backend]
+    record = json.loads(model_assets.preparation_record_path(tmp_path).read_text(encoding="utf-8"))
+    assert record["state"] == "failed"
+    assert record["phase"] == "preparing_model"
+
+
 def test_prepare_model_failure_persists_diagnostic_after_validation_work(tmp_path: Path) -> None:
     calls: list[tuple[str, object]] = []
 

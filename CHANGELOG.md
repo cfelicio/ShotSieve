@@ -18,6 +18,10 @@ All notable changes to this project will be documented in this file.
 
 ### Changed
 
+- Split selected-model preparation into explicit context, storage, backend,
+  generated-image validation, and durable-record phases while preserving the
+  public preparation contract, state transitions, atomic writes, diagnostics,
+  cancellation behavior, and backend cleanup.
 - Staged export, delete, and root-scoped missing-entry cleanup into explicit
   per-operation filesystem, catalog, compensation, and cleanup phases. Private
   row-state objects retain observed-missing, deleted, not-processed, and
