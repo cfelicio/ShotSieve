@@ -18,6 +18,9 @@ All notable changes to this project will be documented in this file.
 
 ### Changed
 
+- Consolidated the repeated desktop and sidecar runtime-support delegates behind
+  one shared facade while retaining their private module aliases and dynamic
+  monkeypatch/test seams.
 - Narrowed Python HTTP route boundaries with explicit family dependency views and
   aggregator-supplied callbacks. Handler context/dependency assembly is separate
   from the request class, and route families no longer resolve the aggregator via

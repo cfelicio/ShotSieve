@@ -160,28 +160,13 @@ def runtime_bundle_has_usable_cuda_torch(*, force_reload: bool = False) -> bool:
         return False
 
 
-def _path_has_torch(path: Path) -> bool:
-    return runtime_support.path_has_torch(path)
-
-
-def _path_has_pyiqa(path: Path) -> bool:
-    return runtime_support.path_has_pyiqa(path)
-
-
-def _parse_env_bool(value: str | None) -> bool | None:
-    return runtime_support.parse_env_bool(value)
-
-
-def _is_interactive_console() -> bool:
-    return runtime_support.is_interactive_console()
-
-
-def _confirm(prompt: str, *, input_func=input) -> bool:
-    return runtime_support.confirm(prompt, input_func=input_func)
-
-
-def _compose_pythonpath(*, existing: str | None, prepend_path: Path) -> str:
-    return runtime_support.compose_pythonpath(existing=existing, prepend_path=prepend_path)
+_runtime_support = runtime_support.shared_runtime_support
+_path_has_torch = _runtime_support.path_has_torch
+_path_has_pyiqa = _runtime_support.path_has_pyiqa
+_parse_env_bool = _runtime_support.parse_env_bool
+_is_interactive_console = _runtime_support.is_interactive_console
+_confirm = _runtime_support.confirm
+_compose_pythonpath = _runtime_support.compose_pythonpath
 
 
 def _call_prepare_learned_iqa_runtime(data_dir: Path, *, assume_install_consent: bool) -> None:

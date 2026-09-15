@@ -57,12 +57,9 @@ def sidecar_site_packages_dir(runtime_root: Path, target_id: str) -> Path:
     return runtime_root / DEFAULT_TORCH_SITE_PACKAGES_DIRNAME / target_id
 
 
-def _path_has_torch(path: Path) -> bool:
-    return runtime_support.path_has_torch(path)
-
-
-def _path_has_pyiqa(path: Path) -> bool:
-    return runtime_support.path_has_pyiqa(path)
+_runtime_support = runtime_support.shared_runtime_support
+_path_has_torch = _runtime_support.path_has_torch
+_path_has_pyiqa = _runtime_support.path_has_pyiqa
 
 
 def runtime_bundle_contains_torch(install_dir: Path) -> bool:
@@ -79,16 +76,9 @@ def runtime_bundle_contains_torch(install_dir: Path) -> bool:
     return False
 
 
-def _parse_env_bool(value: str | None) -> bool | None:
-    return runtime_support.parse_env_bool(value)
-
-
-def _is_interactive_console() -> bool:
-    return runtime_support.is_interactive_console()
-
-
-def _confirm(prompt: str, *, input_func=input) -> bool:
-    return runtime_support.confirm(prompt, input_func=input_func)
+_parse_env_bool = _runtime_support.parse_env_bool
+_is_interactive_console = _runtime_support.is_interactive_console
+_confirm = _runtime_support.confirm
 
 
 def _torch_install_index_args(runtime: str) -> list[str]:
@@ -562,8 +552,7 @@ def install_learned_iqa_sidecar(
     return embedded_install_result
 
 
-def _compose_pythonpath(*, existing: str | None, prepend_path: Path) -> str:
-    return runtime_support.compose_pythonpath(existing=existing, prepend_path=prepend_path)
+_compose_pythonpath = _runtime_support.compose_pythonpath
 
 
 def maybe_prepare_torch_runtime(

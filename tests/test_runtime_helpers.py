@@ -30,6 +30,21 @@ def _new_module(name: str) -> Any:
     return types.ModuleType(name)
 
 
+def test_runtime_support_aliases_share_one_facade() -> None:
+    from shotsieve import bootstrap_sidecar, desktop, runtime_support
+
+    shared = runtime_support.shared_runtime_support
+    assert desktop._runtime_support is shared
+    assert bootstrap_sidecar._runtime_support is shared
+    for module in (desktop, bootstrap_sidecar):
+        assert module._path_has_torch.__self__ is shared
+        assert module._path_has_pyiqa.__self__ is shared
+        assert module._parse_env_bool.__self__ is shared
+        assert module._is_interactive_console.__self__ is shared
+        assert module._confirm.__self__ is shared
+        assert module._compose_pythonpath.__self__ is shared
+
+
 def test_learned_iqa_split_runtime_and_catalog_modules_preserve_facade_exports() -> None:
     from shotsieve import learned_iqa_catalog as catalog_module
     from shotsieve import learned_iqa_runtime as runtime_module

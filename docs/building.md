@@ -147,6 +147,13 @@ family modules, so common, scan, file, job, review, and media routes do not reso
 monkeypatch seams remain available, while import order no longer determines whether a
 route family can find a helper.
 
+Desktop startup and sidecar installation share one stateless `RuntimeSupport` facade
+for package-path checks, environment parsing, console detection, confirmation, and
+`PYTHONPATH` composition. The historical private names in `desktop.py`,
+`bootstrap_sidecar.py`, and the `bootstrap.py` facade remain available as aliases;
+the facade resolves its module-level helpers when called so existing tests and
+integrations can continue to monkeypatch those helpers.
+
 The folder browser accepts a full local path or UNC path such as `\\server\share\folder`; press Enter after editing the path to open it. The browser does not enumerate network servers or probe write/delete permissions against user photos.
 
 ### Media cache behavior
