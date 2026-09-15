@@ -260,14 +260,14 @@ def build_review_server(
     )
 
 
-def build_handler(db_path: Path):
-    operation_lock = threading.Lock()
-    scan_registry = JobRegistry(max_jobs=10)
-    score_registry = JobRegistry(max_jobs=10)
-    compare_registry = JobRegistry(max_jobs=10)
-    operation_registry = JobRegistry(max_jobs=10)
-    model_registry = JobRegistry(max_jobs=10)
+def _build_route_dependencies() -> WebRouteDependencies:
+    """Build the legacy dependency container at the route boundary.
 
+    The container remains the compatibility object for existing integrations,
+    while route families project it into narrower views in
+    ``web_route_common``.  These adapters intentionally resolve module globals
+    when called so existing monkeypatch seams remain late-bound.
+    """
     def route_scan_root(*args, **kwargs):
         return scan_root(*args, **kwargs)
 
@@ -318,7 +318,87 @@ def build_handler(db_path: Path):
             default_batch_size=default_batch_size,
         )
 
-    route_context = WebRouteContext(
+    return WebRouteDependencies(
+        coerce_bool=lambda value, *, default: _coerce_bool(value, default=default),
+        first_value=lambda params, key, default=None: _first(params, key, default),
+        float_or_none=lambda value: _float_or_none(value),
+        int_or_default=lambda value, *, default, minimum=0, maximum=None: _int_or_default(
+            value,
+            default=default,
+            minimum=minimum,
+            maximum=maximum,
+        ),
+        optional_bool=lambda value, *, name: _optional_bool(value, name=name),
+        optional_int=lambda value, minimum=0: _optional_int(value, minimum=minimum),
+        optional_string=lambda value: _optional_string(value),
+        required_choice=lambda value, *, name, choices: _required_choice(value, name=name, choices=choices),
+        required_int=lambda value, *, name, minimum=0: _required_int(value, name=name, minimum=minimum),
+        required_int_list=lambda value, *, name: _required_int_list(value, name=name),
+        required_string_list=lambda value, *, name: _request_helpers.required_string_list(value, name=name),
+        required_path=lambda value, *, name: _required_path(value, name=name),
+        required_path_list=lambda value, *, name: _request_helpers.required_path_list(value, name=name),
+        read_json_body=lambda handler, *, max_body_size: route_read_json_body(handler, max_body_size=max_body_size),
+        parse_scan_request=lambda payload: route_parse_scan_request(payload),
+        parse_compare_request=lambda payload, *, default_batch_size: route_parse_compare_request(
+            payload,
+            default_batch_size=default_batch_size,
+        ),
+        database=lambda path: database(path),
+        build_options_payload=lambda path, *, resource_profile=None: build_options_payload(
+            path,
+            resource_profile=resource_profile,
+            ai_support_status=route_ai_support_status,
+        ),
+        filesystem_roots=lambda: filesystem_roots(),
+        list_directory=lambda path: list_directory(path),
+        review_overview=lambda *args, **kwargs: review_overview(*args, **kwargs),
+        list_review_files=lambda *args, **kwargs: list_review_files(*args, **kwargs),
+        count_review_files=lambda *args, **kwargs: count_review_files(*args, **kwargs),
+        review_selection_revision=lambda *args, **kwargs: review_selection_revision(*args, **kwargs),
+        list_review_browser_file_ids=lambda *args, **kwargs: list_review_browser_file_ids(*args, **kwargs),
+        list_review_state_file_ids=lambda *args, **kwargs: list_review_state_file_ids(*args, **kwargs),
+        list_analysis_diagnostics=lambda *args, **kwargs: list_analysis_diagnostics(*args, **kwargs),
+        decision_csv=lambda *args, **kwargs: decision_csv(*args, **kwargs),
+        get_review_file_detail=lambda *args, **kwargs: get_review_file_detail(*args, **kwargs),
+        update_review_state=lambda *args, **kwargs: update_review_state(*args, **kwargs),
+        update_review_state_batch=lambda *args, **kwargs: update_review_state_batch(*args, **kwargs),
+        media_path_for_file=lambda *args, **kwargs: media_path_for_file(*args, **kwargs),
+        build_config=lambda *args, **kwargs: build_config(*args, **kwargs),
+        is_within_any_root=route_is_within_any_root,
+        stable_preview_name=lambda path: stable_preview_name(path),
+        preview_name_candidates=lambda path: list(preview_name_candidates(path)),
+        guess_media_type=route_guess_media_type,
+        utc_now=lambda: utc_now(),
+        scan_root=route_scan_root,
+        score_files=route_score_files,
+        compare_learned_models=route_compare_learned_models,
+        require_learned_runtime=route_require_learned_runtime,
+        get_preview_cache_root=lambda *args, **kwargs: get_preview_cache_root(*args, **kwargs),
+        count_score_rows=lambda *args, **kwargs: count_score_rows(*args, **kwargs),
+        clear_cache_scope=lambda *args, **kwargs: clear_cache_scope(*args, **kwargs),
+        preview_missing_cache_entries=lambda *args, **kwargs: preview_missing_cache_entries(*args, **kwargs),
+        apply_missing_cache_entries=lambda *args, **kwargs: apply_missing_cache_entries(*args, **kwargs),
+        reveal_in_file_manager=lambda path: reveal_in_file_manager(path),
+        delete_files=lambda *args, **kwargs: delete_files(*args, **kwargs),
+        export_files=lambda *args, **kwargs: export_files(*args, **kwargs),
+        default_batch_size=lambda: DEFAULT_BATCH_SIZE,
+        thread_factory=lambda *args, **kwargs: threading.Thread(*args, **kwargs),
+        prepare_model=lambda *args, **kwargs: prepare_model(*args, **kwargs),
+        install_ai_support=route_install_ai_support,
+    )
+
+
+def _build_route_context(
+    db_path: Path,
+    *,
+    operation_lock: threading.Lock,
+    scan_registry: JobRegistry,
+    score_registry: JobRegistry,
+    compare_registry: JobRegistry,
+    operation_registry: JobRegistry,
+    model_registry: JobRegistry,
+) -> WebRouteContext:
+    return WebRouteContext(
         db_path=db_path,
         operation_lock=operation_lock,
         scan_registry=scan_registry,
@@ -329,75 +409,32 @@ def build_handler(db_path: Path):
         media_mime_fallbacks=_MEDIA_MIME_FALLBACKS,
         operation_registry=operation_registry,
         model_registry=model_registry,
-        dependencies=WebRouteDependencies(
-            coerce_bool=lambda value, *, default: _coerce_bool(value, default=default),
-            first_value=lambda params, key, default=None: _first(params, key, default),
-            float_or_none=lambda value: _float_or_none(value),
-            int_or_default=lambda value, *, default, minimum=0, maximum=None: _int_or_default(
-                value,
-                default=default,
-                minimum=minimum,
-                maximum=maximum,
-            ),
-            optional_bool=lambda value, *, name: _optional_bool(value, name=name),
-            optional_int=lambda value, minimum=0: _optional_int(value, minimum=minimum),
-            optional_string=lambda value: _optional_string(value),
-            required_choice=lambda value, *, name, choices: _required_choice(value, name=name, choices=choices),
-            required_int=lambda value, *, name, minimum=0: _required_int(value, name=name, minimum=minimum),
-            required_int_list=lambda value, *, name: _required_int_list(value, name=name),
-            required_string_list=lambda value, *, name: _request_helpers.required_string_list(value, name=name),
-            required_path=lambda value, *, name: _required_path(value, name=name),
-            required_path_list=lambda value, *, name: _request_helpers.required_path_list(value, name=name),
-            read_json_body=lambda handler, *, max_body_size: route_read_json_body(handler, max_body_size=max_body_size),
-            parse_scan_request=lambda payload: route_parse_scan_request(payload),
-            parse_compare_request=lambda payload, *, default_batch_size: route_parse_compare_request(
-                payload,
-                default_batch_size=default_batch_size,
-            ),
-            database=lambda path: database(path),
-            build_options_payload=lambda path, *, resource_profile=None: build_options_payload(
-                path,
-                resource_profile=resource_profile,
-                ai_support_status=route_ai_support_status,
-            ),
-            filesystem_roots=lambda: filesystem_roots(),
-            list_directory=lambda path: list_directory(path),
-            review_overview=lambda *args, **kwargs: review_overview(*args, **kwargs),
-            list_review_files=lambda *args, **kwargs: list_review_files(*args, **kwargs),
-            count_review_files=lambda *args, **kwargs: count_review_files(*args, **kwargs),
-            review_selection_revision=lambda *args, **kwargs: review_selection_revision(*args, **kwargs),
-            list_review_browser_file_ids=lambda *args, **kwargs: list_review_browser_file_ids(*args, **kwargs),
-            list_review_state_file_ids=lambda *args, **kwargs: list_review_state_file_ids(*args, **kwargs),
-            list_analysis_diagnostics=lambda *args, **kwargs: list_analysis_diagnostics(*args, **kwargs),
-            decision_csv=lambda *args, **kwargs: decision_csv(*args, **kwargs),
-            get_review_file_detail=lambda *args, **kwargs: get_review_file_detail(*args, **kwargs),
-            update_review_state=lambda *args, **kwargs: update_review_state(*args, **kwargs),
-            update_review_state_batch=lambda *args, **kwargs: update_review_state_batch(*args, **kwargs),
-            media_path_for_file=lambda *args, **kwargs: media_path_for_file(*args, **kwargs),
-            build_config=lambda *args, **kwargs: build_config(*args, **kwargs),
-            is_within_any_root=route_is_within_any_root,
-            stable_preview_name=lambda path: stable_preview_name(path),
-            preview_name_candidates=lambda path: list(preview_name_candidates(path)),
-            guess_media_type=route_guess_media_type,
-            utc_now=lambda: utc_now(),
-            scan_root=route_scan_root,
-            score_files=route_score_files,
-            compare_learned_models=route_compare_learned_models,
-            require_learned_runtime=route_require_learned_runtime,
-            get_preview_cache_root=lambda *args, **kwargs: get_preview_cache_root(*args, **kwargs),
-            count_score_rows=lambda *args, **kwargs: count_score_rows(*args, **kwargs),
-            clear_cache_scope=lambda *args, **kwargs: clear_cache_scope(*args, **kwargs),
-            preview_missing_cache_entries=lambda *args, **kwargs: preview_missing_cache_entries(*args, **kwargs),
-            apply_missing_cache_entries=lambda *args, **kwargs: apply_missing_cache_entries(*args, **kwargs),
-            reveal_in_file_manager=lambda path: reveal_in_file_manager(path),
-            delete_files=lambda *args, **kwargs: delete_files(*args, **kwargs),
-            export_files=lambda *args, **kwargs: export_files(*args, **kwargs),
-            default_batch_size=lambda: DEFAULT_BATCH_SIZE,
-            thread_factory=lambda *args, **kwargs: threading.Thread(*args, **kwargs),
-            prepare_model=lambda *args, **kwargs: prepare_model(*args, **kwargs),
-            install_ai_support=route_install_ai_support,
-        ),
+        dependencies=_build_route_dependencies(),
     )
+
+
+def build_handler(db_path: Path):
+    operation_lock = threading.Lock()
+    scan_registry = JobRegistry(max_jobs=10)
+    score_registry = JobRegistry(max_jobs=10)
+    compare_registry = JobRegistry(max_jobs=10)
+    operation_registry = JobRegistry(max_jobs=10)
+    model_registry = JobRegistry(max_jobs=10)
+    route_context = _build_route_context(
+        db_path,
+        operation_lock=operation_lock,
+        scan_registry=scan_registry,
+        score_registry=score_registry,
+        compare_registry=compare_registry,
+        operation_registry=operation_registry,
+        model_registry=model_registry,
+    )
+
+    def route_is_loopback_host(host: str | None) -> bool:
+        return _is_loopback_host(host)
+
+    def route_is_allowed_post_origin(origin: str | None, host_header: str | None) -> bool:
+        return _is_allowed_post_origin(origin, host_header)
 
     class ReviewHandler(BaseHTTPRequestHandler):
         _shotsieve_route_dependencies = route_context.dependencies

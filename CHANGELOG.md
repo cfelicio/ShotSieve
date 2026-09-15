@@ -18,6 +18,11 @@ All notable changes to this project will be documented in this file.
 
 ### Changed
 
+- Narrowed Python HTTP route boundaries with explicit family dependency views and
+  aggregator-supplied callbacks. Handler context/dependency assembly is separate
+  from the request class, and route families no longer resolve the aggregator via
+  `sys.modules`; existing route payloads, factories, and monkeypatch seams remain
+  compatible.
 - Extracted multi-root scan job execution into a dedicated runner with an
   immutable request snapshot, explicit per-root attempts, and centralized
   result/diagnostic finalization while preserving pagination, progress,

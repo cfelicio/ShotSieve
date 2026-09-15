@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import sys
 from collections.abc import Callable
 from dataclasses import dataclass
 from functools import partial
@@ -21,6 +20,13 @@ from shotsieve.scoring import AnalysisProgress
 from shotsieve.web_route_common import (
     WebRouteContext,
     WebRouteDependencies,
+    _compare_request_models,
+    _export_result_payload,
+    get_default_route_adapters,
+    _require_registry,
+    route_callback,
+    send_json,
+    send_json_error,
 )
 from shotsieve import web_route_scan as _scan_runner
 
@@ -38,8 +44,49 @@ _scan_root_report = _scan_runner._scan_root_report
 _scan_root_report_from_exception = _scan_runner._scan_root_report_from_exception
 
 
-def _get_web_routes() -> Any:
-    return sys.modules["shotsieve.web_routes"]
+def _route(context: WebRouteContext, name: str, fallback: Callable[..., Any]) -> Callable[..., Any]:
+    return route_callback(context, name, fallback)
+
+
+def _handler_route(handler: Any, name: str, fallback: Callable[..., Any]) -> Callable[..., Any]:
+    adapters = getattr(handler, "_shotsieve_route_adapters", None) or get_default_route_adapters()
+    return adapters.get(name, fallback) if adapters is not None else fallback
+
+
+def _progress_payload_for_operation(phase: str, *, files_processed: int = 0, files_total: int = 0) -> dict[str, object]:
+    from shotsieve.web_route_files import _progress_payload
+
+    return _progress_payload(phase, files_processed=files_processed, files_total=files_total)
+
+
+def _progress_total_hint_for_operation(deps: WebRouteDependencies, payload: dict[str, object]) -> int | None:
+    from shotsieve.web_route_files import _progress_total_hint
+
+    return _progress_total_hint(deps, payload)
+
+
+def _execute_delete_request(*args: Any, **kwargs: Any) -> Any:
+    from shotsieve.web_route_files import _execute_delete_request as execute_delete_request
+
+    return execute_delete_request(*args, **kwargs)
+
+
+def _execute_export_request(*args: Any, **kwargs: Any) -> Any:
+    from shotsieve.web_route_files import _execute_export_request as execute_export_request
+
+    return execute_export_request(*args, **kwargs)
+
+
+def _execute_cache_clear_request(*args: Any, **kwargs: Any) -> Any:
+    from shotsieve.web_route_files import _execute_cache_clear_request as execute_cache_clear_request
+
+    return execute_cache_clear_request(*args, **kwargs)
+
+
+def _execute_missing_cache_apply_request(*args: Any, **kwargs: Any) -> Any:
+    from shotsieve.web_route_files import _execute_missing_cache_apply_request as execute_missing_cache_apply_request
+
+    return execute_missing_cache_apply_request(*args, **kwargs)
 
 
 def _operation_failure_summary(error: BaseException) -> dict[str, object] | None:
@@ -88,7 +135,6 @@ def _model_failure_summary(
 
 
 def _handle_job_get_routes(handler: Any, context: WebRouteContext, parsed: Any) -> bool:
-    routes = _get_web_routes()
     status_routes = {
         "/api/compare-models/status": (context.compare_registry, "Compare"),
         "/api/operations/status": (context.operation_registry, "Operation"),
@@ -99,7 +145,11 @@ def _handle_job_get_routes(handler: Any, context: WebRouteContext, parsed: Any) 
     status_route = status_routes.get(parsed.path)
     if status_route is not None:
         registry, label = status_route
-        routes.handle_job_status(handler, routes._require_registry(registry, label=label), label=label)
+        _route(context, "handle_job_status", handle_job_status)(
+            handler,
+            _route(context, "_require_registry", _require_registry)(registry, label=label),
+            label=label,
+        )
         return True
 
     result_routes = {
@@ -114,47 +164,49 @@ def _handle_job_get_routes(handler: Any, context: WebRouteContext, parsed: Any) 
         return False
 
     registry, label = result_route
-    routes.handle_job_result(handler, routes._require_registry(registry, label=label), label=label)
+    _route(context, "handle_job_result", handle_job_result)(
+        handler,
+        _route(context, "_require_registry", _require_registry)(registry, label=label),
+        label=label,
+    )
     return True
 
 
 def _handle_analysis_post_routes(handler: Any, context: WebRouteContext, parsed: Any) -> bool:
-    deps = cast(WebRouteDependencies, context.dependencies)
-    routes = _get_web_routes()
+    deps = cast(WebRouteDependencies, context.dependency_views.jobs)
     if parsed.path == "/api/scan/start":
         payload = deps.read_json_body(handler, max_body_size=context.max_request_body_size)
-        routes.start_scan_job(handler, context, payload)
+        _route(context, "start_scan_job", start_scan_job)(handler, context, payload)
         return True
 
     if parsed.path == "/api/score/start":
         payload = deps.read_json_body(handler, max_body_size=context.max_request_body_size)
-        routes.start_score_job(handler, context, payload)
+        _route(context, "start_score_job", start_score_job)(handler, context, payload)
         return True
 
     if parsed.path == "/api/compare-models/start":
         payload = deps.read_json_body(handler, max_body_size=context.max_request_body_size)
-        routes.start_compare_job(handler, context, payload)
+        _route(context, "start_compare_job", start_compare_job)(handler, context, payload)
         return True
 
     if parsed.path == "/api/models/prepare/start":
         payload = deps.read_json_body(handler, max_body_size=context.max_request_body_size)
-        routes.start_model_prepare_job(handler, context, payload)
+        _route(context, "start_model_prepare_job", start_model_prepare_job)(handler, context, payload)
         return True
 
     if parsed.path == "/api/ai-support/install/start":
         payload = deps.read_json_body(handler, max_body_size=context.max_request_body_size)
-        routes.start_ai_support_install_job(handler, context, payload)
+        _route(context, "start_ai_support_install_job", start_ai_support_install_job)(handler, context, payload)
         return True
 
     if parsed.path in {"/api/score-estimate", "/api/compare-estimate"}:
-        routes._send_rows_total_estimate(handler, context)
+        _route(context, "_send_rows_total_estimate", _send_rows_total_estimate)(handler, context)
         return True
 
     return False
 
 
 def _handle_job_cancel_post_routes(handler: Any, context: WebRouteContext, parsed: Any) -> bool:
-    routes = _get_web_routes()
     cancel_routes = {
         "/api/compare-models/cancel": context.compare_registry,
         "/api/operations/cancel": context.operation_registry,
@@ -166,30 +218,36 @@ def _handle_job_cancel_post_routes(handler: Any, context: WebRouteContext, parse
     if registry is None:
         return False
 
-    routes.handle_job_cancel(handler, routes._require_registry(registry, label="Job"), max_request_body_size=context.max_request_body_size)
+    _route(context, "handle_job_cancel", handle_job_cancel)(
+        handler,
+        _route(context, "_require_registry", _require_registry)(registry, label="Job"),
+        max_request_body_size=context.max_request_body_size,
+    )
     return True
 
 
 def _handle_cache_post_routes(handler: Any, context: WebRouteContext, parsed: Any) -> bool:
-    deps = cast(WebRouteDependencies, context.dependencies)
-    routes = _get_web_routes()
+    deps = cast(WebRouteDependencies, context.dependency_views.jobs)
+    emit_json = _route(context, "send_json", send_json)
     if parsed.path == "/api/cache/missing/apply":
         payload = deps.read_json_body(handler, max_body_size=context.max_request_body_size)
-        result = routes._execute_missing_cache_apply_request(context, payload)
-        routes.send_json(handler, result)
+        result = _route(context, "_execute_missing_cache_apply_request", _execute_missing_cache_apply_request)(context, payload)
+        emit_json(handler, result)
         return True
 
     if parsed.path == "/api/cache/clear/start":
         payload = deps.read_json_body(handler, max_body_size=context.max_request_body_size)
-        routes.start_cache_clear_job(handler, context, payload)
+        _route(context, "start_cache_clear_job", start_cache_clear_job)(handler, context, payload)
         return True
 
     if parsed.path != "/api/cache/clear":
         return False
 
     payload = deps.read_json_body(handler, max_body_size=context.max_request_body_size)
-    result = routes._execute_cache_clear_request(context, payload, progress_callback=None, cancel_check=None)
-    routes.send_json(handler, result)
+    result = _route(context, "_execute_cache_clear_request", _execute_cache_clear_request)(
+        context, payload, progress_callback=None, cancel_check=None
+    )
+    emit_json(handler, result)
     return True
 
 
@@ -207,9 +265,8 @@ def _start_operation_job(
     result_handler: Callable[[JobRegistry, str, dict[str, object]], None] | None = None,
 ) -> None:
     """Start an operation job with one shared lock/registry lifecycle."""
-    routes = _get_web_routes()
-    deps = cast(WebRouteDependencies, context.dependencies)
-    if not routes.try_acquire_operation_lock(handler, context):
+    deps = cast(WebRouteDependencies, context.dependency_views.jobs)
+    if not _route(context, "try_acquire_operation_lock", try_acquire_operation_lock)(handler, context):
         return
 
     try:
@@ -249,29 +306,28 @@ def _start_operation_job(
     except Exception:
         context.operation_lock.release()
         raise
-    routes.send_json(handler, {"job_id": job_id, "status": "running"})
+    _route(context, "send_json", send_json)(handler, {"job_id": job_id, "status": "running"})
 
 
 def start_delete_job(handler: Any, context: WebRouteContext, payload: dict[str, object]) -> None:
-    routes = _get_web_routes()
-    registry = routes._require_registry(context.operation_registry, label="Operation")
-    deps = cast(WebRouteDependencies, context.dependencies)
-    total_hint = routes._progress_total_hint(deps, payload) or 0
+    registry = _route(context, "_require_registry", _require_registry)(context.operation_registry, label="Operation")
+    deps = cast(WebRouteDependencies, context.dependency_views.jobs)
+    total_hint = _route(context, "_progress_total_hint", _progress_total_hint_for_operation)(deps, payload) or 0
     _start_operation_job(
         handler,
         context,
         registry=registry,
-        initial_progress=routes._progress_payload(
+        initial_progress=_route(context, "_progress_payload", _progress_payload_for_operation)(
             "deleting_files",
             files_processed=0,
             files_total=total_hint,
         ),
-        progress_payload=lambda processed, total, phase: routes._progress_payload(
+        progress_payload=lambda processed, total, phase: _route(context, "_progress_payload", _progress_payload_for_operation)(
             phase,
             files_processed=processed,
             files_total=total,
         ),
-        worker=lambda publish, cancel_check: routes._execute_delete_request(
+        worker=lambda publish, cancel_check: _route(context, "_execute_delete_request", _execute_delete_request)(
             context,
             payload,
             progress_callback=publish,
@@ -283,56 +339,54 @@ def start_delete_job(handler: Any, context: WebRouteContext, payload: dict[str, 
 
 
 def start_export_job(handler: Any, context: WebRouteContext, payload: dict[str, object]) -> None:
-    routes = _get_web_routes()
-    registry = routes._require_registry(context.operation_registry, label="Operation")
-    deps = cast(WebRouteDependencies, context.dependencies)
+    registry = _route(context, "_require_registry", _require_registry)(context.operation_registry, label="Operation")
+    deps = cast(WebRouteDependencies, context.dependency_views.jobs)
     phase = "moving_files" if str(payload.get("mode") or "copy") == "move" else "exporting_files"
-    total_hint = routes._progress_total_hint(deps, payload) or 0
+    total_hint = _route(context, "_progress_total_hint", _progress_total_hint_for_operation)(deps, payload) or 0
     _start_operation_job(
         handler,
         context,
         registry=registry,
-        initial_progress=routes._progress_payload(
+        initial_progress=_route(context, "_progress_payload", _progress_payload_for_operation)(
             phase,
             files_processed=0,
             files_total=total_hint,
         ),
-        progress_payload=lambda processed, total, phase_name: routes._progress_payload(
+        progress_payload=lambda processed, total, phase_name: _route(context, "_progress_payload", _progress_payload_for_operation)(
             phase_name,
             files_processed=processed,
             files_total=total,
         ),
-        worker=lambda publish, cancel_check: routes._execute_export_request(
+        worker=lambda publish, cancel_check: _route(context, "_execute_export_request", _execute_export_request)(
             context,
             payload,
             progress_callback=publish,
             cancel_check=cancel_check,
         ),
-        result_payload=routes._export_result_payload,
+        result_payload=_route(context, "_export_result_payload", _export_result_payload),
         cancel_error=lambda: InterruptedError("Export job was cancelled by user."),
     )
 
 
 def start_cache_clear_job(handler: Any, context: WebRouteContext, payload: dict[str, object]) -> None:
-    routes = _get_web_routes()
-    registry = routes._require_registry(context.operation_registry, label="Operation")
-    deps = cast(WebRouteDependencies, context.dependencies)
+    registry = _route(context, "_require_registry", _require_registry)(context.operation_registry, label="Operation")
+    deps = cast(WebRouteDependencies, context.dependency_views.jobs)
     deps.required_choice(payload.get("scope"), name="scope", choices=("scores", "review", "all"))
     _start_operation_job(
         handler,
         context,
         registry=registry,
-        initial_progress=routes._progress_payload(
+        initial_progress=_route(context, "_progress_payload", _progress_payload_for_operation)(
             "clearing_cache",
             files_processed=0,
             files_total=1,
         ),
-        progress_payload=lambda processed, total, phase_name: routes._progress_payload(
+        progress_payload=lambda processed, total, phase_name: _route(context, "_progress_payload", _progress_payload_for_operation)(
             phase_name,
             files_processed=processed,
             files_total=total,
         ),
-        worker=lambda publish, cancel_check: routes._execute_cache_clear_request(
+        worker=lambda publish, cancel_check: _route(context, "_execute_cache_clear_request", _execute_cache_clear_request)(
             context,
             payload,
             progress_callback=publish,
@@ -344,21 +398,19 @@ def start_cache_clear_job(handler: Any, context: WebRouteContext, payload: dict[
 
 
 def _send_rows_total_estimate(handler: Any, context: WebRouteContext) -> None:
-    deps = cast(WebRouteDependencies, context.dependencies)
-    routes = _get_web_routes()
+    deps = cast(WebRouteDependencies, context.dependency_views.jobs)
     payload = deps.read_json_body(handler, max_body_size=context.max_request_body_size)
     with deps.database(context.db_path) as connection:
         rows_total = deps.count_score_rows(
             connection,
             raw_root=deps.optional_string(payload.get("root")),
         )
-    routes.send_json(handler, {"rows_total": rows_total})
+    _route(context, "send_json", send_json)(handler, {"rows_total": rows_total})
 
 
 def start_scan_job(handler: Any, context: WebRouteContext, payload: dict[str, object]) -> None:
-    deps = cast(WebRouteDependencies, context.dependencies)
-    routes = _get_web_routes()
-    scan_registry = routes._require_registry(context.scan_registry, label="Scan")
+    deps = cast(WebRouteDependencies, context.dependency_views.jobs)
+    scan_registry = _route(context, "_require_registry", _require_registry)(context.scan_registry, label="Scan")
     request = _ScanJobRequest.from_scan_request(deps.parse_scan_request(payload))
 
     from shotsieve.scanner import check_overlapping_roots
@@ -368,7 +420,7 @@ def start_scan_job(handler: Any, context: WebRouteContext, payload: dict[str, ob
         handler.send_error(HTTPStatus.BAD_REQUEST, f"Overlapping folders detected: '{child}' is a subfolder of '{parent}'. Please remove the subfolder.")
         return
 
-    if not routes.try_acquire_operation_lock(handler, context):
+    if not _route(context, "try_acquire_operation_lock", try_acquire_operation_lock)(handler, context):
         return
 
     total_hint = request.files_total_hint
@@ -380,13 +432,12 @@ def start_scan_job(handler: Any, context: WebRouteContext, payload: dict[str, ob
 
     worker = partial(_run_scan_job, context, request, scan_registry, job_id)
     deps.thread_factory(target=worker, daemon=True).start()
-    routes.send_json(handler, {"job_id": job_id, "status": "running"})
+    _route(context, "send_json", send_json)(handler, {"job_id": job_id, "status": "running"})
 
 
 def start_score_job(handler: Any, context: WebRouteContext, payload: dict[str, object]) -> None:
-    deps = cast(WebRouteDependencies, context.dependencies)
-    routes = _get_web_routes()
-    score_registry = routes._require_registry(context.score_registry, label="Score")
+    deps = cast(WebRouteDependencies, context.dependency_views.jobs)
+    score_registry = _route(context, "_require_registry", _require_registry)(context.score_registry, label="Score")
     learned_device = deps.optional_string(payload.get("device"))
     resource_profile = deps.optional_string(payload.get("resource_profile"))
     raw_preview_mode = normalize_raw_preview_mode(deps.optional_string(payload.get("preview_mode")))
@@ -395,7 +446,7 @@ def start_score_job(handler: Any, context: WebRouteContext, payload: dict[str, o
         validate_model_name(requested_model)
     deps.require_learned_runtime(resource_profile=resource_profile, preferred_device=learned_device)
 
-    if not routes.try_acquire_operation_lock(handler, context):
+    if not _route(context, "try_acquire_operation_lock", try_acquire_operation_lock)(handler, context):
         return
 
     job_id = score_registry.create(initial_progress={
@@ -409,7 +460,7 @@ def start_score_job(handler: Any, context: WebRouteContext, payload: dict[str, o
     def run_score_job() -> None:
         try:
             def publish_progress(progress: AnalysisProgress) -> None:
-                score_registry.update_progress(job_id, routes.progress_payload(progress))
+                score_registry.update_progress(job_id, _route(context, "progress_payload", progress_payload)(progress))
 
             with deps.database(context.db_path) as connection:
                 preview_dir = deps.get_preview_cache_root(connection, db_path=context.db_path, persist=False)
@@ -453,7 +504,7 @@ def start_score_job(handler: Any, context: WebRouteContext, payload: dict[str, o
             context.operation_lock.release()
 
     deps.thread_factory(target=run_score_job, daemon=True).start()
-    routes.send_json(handler, {"job_id": job_id, "status": "running"})
+    _route(context, "send_json", send_json)(handler, {"job_id": job_id, "status": "running"})
 
 
 def _model_prepare_progress(record: dict[str, object]) -> dict[str, object]:
@@ -474,9 +525,8 @@ def _model_prepare_progress(record: dict[str, object]) -> dict[str, object]:
 
 def start_ai_support_install_job(handler: Any, context: WebRouteContext, payload: dict[str, object]) -> None:
     _ = payload
-    deps = cast(WebRouteDependencies, context.dependencies)
-    routes = _get_web_routes()
-    registry = routes._require_registry(context.operation_registry, label="AI support installation")
+    deps = cast(WebRouteDependencies, context.dependency_views.jobs)
+    registry = _route(context, "_require_registry", _require_registry)(context.operation_registry, label="AI support installation")
     install_fn = getattr(deps, "install_ai_support", None)
     if not callable(install_fn):
         raise RuntimeError("AI support installation is unavailable")
@@ -497,7 +547,7 @@ def start_ai_support_install_job(handler: Any, context: WebRouteContext, payload
         phase = str(record.get("phase") or "installing_ai_support")
         processed = int(record.get("files_processed", 0) or 0)
         total = int(record.get("files_total", 3) or 3)
-        return routes._progress_payload(phase, files_processed=processed, files_total=total)
+        return _route(context, "_progress_payload", _progress_payload_for_operation)(phase, files_processed=processed, files_total=total)
 
     def ai_result_payload(result: object) -> dict[str, object]:
         if not isinstance(result, dict):
@@ -579,7 +629,7 @@ def start_ai_support_install_job(handler: Any, context: WebRouteContext, payload
         handler,
         context,
         registry=registry,
-        initial_progress=routes._progress_payload(
+        initial_progress=_route(context, "_progress_payload", _progress_payload_for_operation)(
             "installing_ai_support",
             files_processed=0,
             files_total=3,
@@ -594,9 +644,8 @@ def start_ai_support_install_job(handler: Any, context: WebRouteContext, payload
 
 
 def start_model_prepare_job(handler: Any, context: WebRouteContext, payload: dict[str, object]) -> None:
-    deps = cast(WebRouteDependencies, context.dependencies)
-    routes = _get_web_routes()
-    registry = routes._require_registry(context.model_registry, label="Model preparation")
+    deps = cast(WebRouteDependencies, context.dependency_views.jobs)
+    registry = _route(context, "_require_registry", _require_registry)(context.model_registry, label="Model preparation")
     raw_model = deps.optional_string(payload.get("model"))
     if not raw_model:
         raise ValueError("model is required")
@@ -687,9 +736,8 @@ def start_model_prepare_job(handler: Any, context: WebRouteContext, payload: dic
 
 
 def start_compare_job(handler: Any, context: WebRouteContext, payload: dict[str, object]) -> None:
-    deps = cast(WebRouteDependencies, context.dependencies)
-    routes = _get_web_routes()
-    compare_registry = routes._require_registry(context.compare_registry, label="Compare")
+    deps = cast(WebRouteDependencies, context.dependency_views.jobs)
+    compare_registry = _route(context, "_require_registry", _require_registry)(context.compare_registry, label="Compare")
     compare_request = deps.parse_compare_request(payload, default_batch_size=deps.default_batch_size())
     raw_preview_mode = normalize_raw_preview_mode(deps.optional_string(payload.get("preview_mode")))
     deps.require_learned_runtime(
@@ -697,13 +745,13 @@ def start_compare_job(handler: Any, context: WebRouteContext, payload: dict[str,
         preferred_device=compare_request.get("device"),
     )
 
-    if not routes.try_acquire_operation_lock(handler, context):
+    if not _route(context, "try_acquire_operation_lock", try_acquire_operation_lock)(handler, context):
         return
 
     job_id = compare_registry.create(initial_progress={
         "model_name": None,
         "model_index": 0,
-        "model_count": len(routes._compare_request_models(compare_request)),
+        "model_count": len(_route(context, "_compare_request_models", _compare_request_models)(compare_request)),
         "files_processed": 0,
         "files_total": 0,
     })
@@ -711,13 +759,13 @@ def start_compare_job(handler: Any, context: WebRouteContext, payload: dict[str,
     def run_compare_job() -> None:
         try:
             def publish_progress(progress: AnalysisProgress) -> None:
-                compare_registry.update_progress(job_id, routes.progress_payload(progress))
+                compare_registry.update_progress(job_id, _route(context, "progress_payload", progress_payload)(progress))
 
             with deps.database(context.db_path) as connection:
                 preview_dir = deps.get_preview_cache_root(connection, db_path=context.db_path, persist=False)
                 summary = deps.compare_learned_models(
                     connection,
-                    model_names=routes._compare_request_models(compare_request),
+                    model_names=_route(context, "_compare_request_models", _compare_request_models)(compare_request),
                     limit=compare_request["limit"],
                     offset=compare_request["offset"],
                     raw_root=compare_request["root"],
@@ -730,9 +778,9 @@ def start_compare_job(handler: Any, context: WebRouteContext, payload: dict[str,
                     resource_profile=compare_request.get("resource_profile"),
                 )
 
-            compare_registry.complete(job_id, summary=routes.comparison_summary_payload(summary))
+            compare_registry.complete(job_id, summary=_route(context, "comparison_summary_payload", comparison_summary_payload)(summary))
         except Exception as exc:
-            model_names = routes._compare_request_models(compare_request)
+            model_names = _route(context, "_compare_request_models", _compare_request_models)(compare_request)
             failure = _model_failure_summary(
                 exc,
                 model_name=",".join(model_names) if model_names else None,
@@ -749,7 +797,7 @@ def start_compare_job(handler: Any, context: WebRouteContext, payload: dict[str,
             context.operation_lock.release()
 
     deps.thread_factory(target=run_compare_job, daemon=True).start()
-    routes.send_json(handler, {"job_id": job_id, "status": "running"})
+    _route(context, "send_json", send_json)(handler, {"job_id": job_id, "status": "running"})
 
 
 def comparison_summary_payload(summary: Any) -> dict[str, object]:
@@ -782,10 +830,9 @@ def progress_payload(progress: AnalysisProgress) -> dict[str, object]:
 
 
 def try_acquire_operation_lock(handler: Any, context: WebRouteContext) -> bool:
-    routes = _get_web_routes()
     if context.operation_lock.acquire(blocking=False):
         return True
-    routes.send_json_error(
+    _route(context, "send_json_error", send_json_error)(
         handler,
         HTTPStatus.CONFLICT,
         "Another analysis operation is already running. Please wait for it to finish.",
@@ -794,7 +841,6 @@ def try_acquire_operation_lock(handler: Any, context: WebRouteContext) -> bool:
 
 
 def handle_job_status(handler: Any, registry: JobRegistry, *, label: str) -> None:
-    routes = _get_web_routes()
     deps = getattr(handler, "_shotsieve_route_dependencies", None)
     parsed = urlparse(handler.path)
     params = parse_qs(parsed.query)
@@ -805,11 +851,10 @@ def handle_job_status(handler: Any, registry: JobRegistry, *, label: str) -> Non
     if status_payload is None:
         handler.send_error(HTTPStatus.NOT_FOUND, f"{label} job not found")
         return
-    routes.send_json(handler, status_payload)
+    _handler_route(handler, "send_json", send_json)(handler, status_payload)
 
 
 def handle_job_result(handler: Any, registry: JobRegistry, *, label: str) -> None:
-    routes = _get_web_routes()
     deps = getattr(handler, "_shotsieve_route_dependencies", None)
     parsed = urlparse(handler.path)
     params = parse_qs(parsed.query)
@@ -825,23 +870,22 @@ def handle_job_result(handler: Any, registry: JobRegistry, *, label: str) -> Non
     if status_value == "completed":
         summary_payload = status_payload.get("summary")
         if isinstance(summary_payload, dict):
-            routes.send_json(handler, summary_payload)
+            _handler_route(handler, "send_json", send_json)(handler, summary_payload)
             return
-        routes.send_json_error(handler, HTTPStatus.INTERNAL_SERVER_ERROR, f"{label} job completed without a summary payload")
+        _handler_route(handler, "send_json_error", send_json_error)(handler, HTTPStatus.INTERNAL_SERVER_ERROR, f"{label} job completed without a summary payload")
         return
 
     if status_value == "failed":
         if label in {"Operation", "Model preparation", "Score", "Compare"} and isinstance(status_payload.get("summary"), dict):
-            routes.send_json(handler, status_payload["summary"])
+            _handler_route(handler, "send_json", send_json)(handler, status_payload["summary"])
             return
-        routes.send_json_error(handler, HTTPStatus.BAD_REQUEST, str(status_payload.get("error") or f"{label} job failed"))
+        _handler_route(handler, "send_json_error", send_json_error)(handler, HTTPStatus.BAD_REQUEST, str(status_payload.get("error") or f"{label} job failed"))
         return
 
-    routes.send_json_error(handler, HTTPStatus.CONFLICT, f"{label} job is still running")
+    _handler_route(handler, "send_json_error", send_json_error)(handler, HTTPStatus.CONFLICT, f"{label} job is still running")
 
 
 def handle_job_cancel(handler: Any, registry: JobRegistry, *, max_request_body_size: int) -> None:
-    routes = _get_web_routes()
     deps = getattr(handler, "_shotsieve_route_dependencies", None)
     parsed = urlparse(handler.path)
     params = parse_qs(parsed.query)
@@ -853,4 +897,4 @@ def handle_job_cancel(handler: Any, registry: JobRegistry, *, max_request_body_s
     if not job_id:
         raise ValueError("job_id is required")
     cancelled = registry.cancel(job_id)
-    routes.send_json(handler, {"job_id": job_id, "cancelled": cancelled})
+    _handler_route(handler, "send_json", send_json)(handler, {"job_id": job_id, "cancelled": cancelled})

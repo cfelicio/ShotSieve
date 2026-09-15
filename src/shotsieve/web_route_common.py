@@ -3,21 +3,16 @@ from __future__ import annotations
 import json
 import socket
 import sqlite3
-import sys
 from dataclasses import dataclass
 from http import HTTPStatus
 from pathlib import Path
-from typing import Any, Callable, NotRequired, TypedDict
+from typing import Any, Callable, Mapping, NotRequired, TypedDict
 
 from shotsieve.job_registry import JobRegistry
 from shotsieve.models import FileOperationSummary
 from shotsieve.web_request import CompareRequest, ScanRequest, try_parse_http_status
 
 _SELECTION_BATCH_SIZE = 500
-
-
-def _get_web_routes() -> Any:
-    return sys.modules["shotsieve.web_routes"]
 
 
 class DeleteResultPayload(TypedDict):
@@ -127,6 +122,144 @@ class WebRouteDependencies:
     install_ai_support: Callable[..., dict[str, object]] | None = None
 
 
+@dataclass(frozen=True, slots=True)
+class WebRouteAdapters:
+    """Explicit callbacks supplied by the route aggregator.
+
+    Route-family modules use their local implementation as the fallback.  The
+    aggregator supplies this small callback map when it needs to preserve the
+    historical monkeypatch seams on ``shotsieve.web_routes`` without creating
+    a module-import back-reference from a route family to the aggregator.
+    """
+
+    callbacks: Mapping[str, Callable[..., Any]]
+
+    def get(self, name: str, fallback: Callable[..., Any]) -> Callable[..., Any]:
+        callback = self.callbacks.get(name)
+        return callback if callback is not None else fallback
+
+
+_DEFAULT_ROUTE_ADAPTERS: WebRouteAdapters | None = None
+
+
+def set_default_route_adapters(adapters: WebRouteAdapters) -> None:
+    global _DEFAULT_ROUTE_ADAPTERS
+    _DEFAULT_ROUTE_ADAPTERS = adapters
+
+
+def get_default_route_adapters() -> WebRouteAdapters | None:
+    return _DEFAULT_ROUTE_ADAPTERS
+
+
+@dataclass(frozen=True, slots=True)
+class WebRouteDependencyView:
+    """Read-only view of the dependencies used by one route family."""
+
+    source: object
+    allowed_names: frozenset[str]
+
+    def __getattr__(self, name: str) -> Any:
+        if name not in self.allowed_names:
+            raise AttributeError(f"{name} is not a dependency of this route family")
+        return getattr(self.source, name)
+
+
+_FILE_DEPENDENCIES = frozenset({
+    "apply_missing_cache_entries",
+    "build_config",
+    "clear_cache_scope",
+    "coerce_bool",
+    "database",
+    "delete_files",
+    "export_files",
+    "filesystem_roots",
+    "first_value",
+    "get_preview_cache_root",
+    "guess_media_type",
+    "is_within_any_root",
+    "list_directory",
+    "list_review_browser_file_ids",
+    "list_review_state_file_ids",
+    "media_path_for_file",
+    "optional_string",
+    "preview_missing_cache_entries",
+    "preview_name_candidates",
+    "read_json_body",
+    "required_choice",
+    "required_int",
+    "required_int_list",
+    "required_path",
+    "required_string_list",
+    "review_selection_revision",
+    "reveal_in_file_manager",
+    "stable_preview_name",
+})
+_JOB_DEPENDENCIES = frozenset({
+    "build_config",
+    "coerce_bool",
+    "compare_learned_models",
+    "count_score_rows",
+    "database",
+    "default_batch_size",
+    "first_value",
+    "get_preview_cache_root",
+    "install_ai_support",
+    "optional_int",
+    "optional_string",
+    "parse_compare_request",
+    "parse_scan_request",
+    "read_json_body",
+    "require_learned_runtime",
+    "required_choice",
+    "score_files",
+    "thread_factory",
+    "prepare_model",
+})
+_REVIEW_DEPENDENCIES = frozenset({
+    "build_options_payload",
+    "count_review_files",
+    "database",
+    "decision_csv",
+    "first_value",
+    "float_or_none",
+    "get_review_file_detail",
+    "int_or_default",
+    "list_analysis_diagnostics",
+    "list_review_files",
+    "list_review_state_file_ids",
+    "list_review_browser_file_ids",
+    "optional_bool",
+    "optional_int",
+    "optional_string",
+    "read_json_body",
+    "required_choice",
+    "required_int",
+    "required_int_list",
+    "review_overview",
+    "review_selection_revision",
+    "update_review_state",
+    "update_review_state_batch",
+    "utc_now",
+})
+
+
+@dataclass(frozen=True, slots=True)
+class WebRouteDependencyViews:
+    """Family-specific projections of the legacy dependency container."""
+
+    files: WebRouteDependencyView
+    jobs: WebRouteDependencyView
+    review: WebRouteDependencyView
+
+
+def build_route_dependency_views(dependencies: object) -> WebRouteDependencyViews:
+    return WebRouteDependencyViews(
+        files=WebRouteDependencyView(dependencies, _FILE_DEPENDENCIES),
+        jobs=WebRouteDependencyView(dependencies, _JOB_DEPENDENCIES),
+        review=WebRouteDependencyView(dependencies, _REVIEW_DEPENDENCIES),
+    )
+
+
 @dataclass(frozen=True)
 class WebRouteContext:
     db_path: Path
@@ -140,6 +273,20 @@ class WebRouteContext:
     dependencies: object
     operation_registry: JobRegistry | None = None
     model_registry: JobRegistry | None = None
+    route_adapters: WebRouteAdapters | None = None
+
+    @property
+    def dependency_views(self) -> WebRouteDependencyViews:
+        return build_route_dependency_views(self.dependencies)
+
+
+def route_callback(
+    context: WebRouteContext,
+    name: str,
+    fallback: Callable[..., Any],
+) -> Callable[..., Any]:
+    adapters = context.route_adapters or _DEFAULT_ROUTE_ADAPTERS
+    return adapters.get(name, fallback) if adapters is not None else fallback
 
 
 def _require_registry(registry: JobRegistry | None, *, label: str) -> JobRegistry:
@@ -406,7 +553,7 @@ def _require_root_for_destructive_selection(selection: dict[str, object]) -> Non
 
 def _materialize_selection_batches(connection: Any, deps: WebRouteDependencies, selection: dict[str, object]) -> list[list[int]]:
     batches: list[list[int]] = []
-    for batch in _get_web_routes()._iter_selection_file_id_batches(connection, deps, selection):
+    for batch in _iter_selection_file_id_batches(connection, deps, selection):
         batches.append(list(batch))
     return batches
 
@@ -423,7 +570,7 @@ def _iter_sqlite_materialized_selection_batches(connection: sqlite3.Connection, 
         """
     )
     try:
-        for batch in _get_web_routes()._iter_selection_file_id_batches(connection, deps, selection):
+        for batch in _iter_selection_file_id_batches(connection, deps, selection):
             connection.executemany(
                 f"INSERT INTO {table_name} (file_id) VALUES (?)",
                 [(int(file_id),) for file_id in batch],
@@ -451,14 +598,14 @@ def _iter_sqlite_materialized_selection_batches(connection: sqlite3.Connection, 
 
 def _frozen_selection_batches(connection: Any, deps: WebRouteDependencies, selection: dict[str, object]):
     if isinstance(connection, sqlite3.Connection):
-        yield from _get_web_routes()._iter_sqlite_materialized_selection_batches(connection, deps, selection)
+        yield from _iter_sqlite_materialized_selection_batches(connection, deps, selection)
         return
-    yield from _get_web_routes()._materialize_selection_batches(connection, deps, selection)
+    yield from _materialize_selection_batches(connection, deps, selection)
 
 
 def _iter_selection_file_id_batches(connection: Any, deps: WebRouteDependencies, selection: dict[str, object]):
     after_id = 0
-    excluded_ids = _get_web_routes()._selection_excluded_ids(selection)
+    excluded_ids = _selection_excluded_ids(selection)
     while True:
         if selection["scope"] == "review-browser":
             raw_file_ids = deps.list_review_browser_file_ids(

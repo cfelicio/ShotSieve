@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import sys
 from collections.abc import Callable
 from http import HTTPStatus
 from pathlib import Path
@@ -13,42 +12,63 @@ from shotsieve.models import (
     attach_file_operation_summary,
     operation_summary_from_exception,
 )
-from shotsieve.web_media import MediaDependencies, serve_media_response
+from shotsieve.web_media import MediaDependencies, resolve_media_request, serve_media_response
 from shotsieve.web_route_common import (
     DeleteResultPayload,
     ExportAggregate,
     WebRouteContext,
     WebRouteDependencies,
     _begin_consistent_snapshot,
+    _delete_result_payload,
+    _export_result_payload,
     _finish_consistent_snapshot,
+    _frozen_selection_batches,
+    _parse_selection_payload,
+    _require_root_for_destructive_selection,
+    _validate_page_revision,
+    _validate_selection_revision,
+    route_callback,
+    send_json,
 )
 
 
-def _get_web_routes() -> Any:
-    return sys.modules["shotsieve.web_routes"]
+def _route(context: WebRouteContext, name: str, fallback: Callable[..., Any]) -> Callable[..., Any]:
+    return route_callback(context, name, fallback)
+
+
+def _start_delete_job(handler: Any, context: WebRouteContext, payload: dict[str, object]) -> None:
+    from shotsieve.web_route_jobs import start_delete_job
+
+    start_delete_job(handler, context, payload)
+
+
+def _start_export_job(handler: Any, context: WebRouteContext, payload: dict[str, object]) -> None:
+    from shotsieve.web_route_jobs import start_export_job
+
+    start_export_job(handler, context, payload)
 
 
 def _handle_filesystem_get_routes(handler: Any, context: WebRouteContext, parsed: Any) -> bool:
-    deps = cast(WebRouteDependencies, context.dependencies)
-    routes = _get_web_routes()
+    deps = cast(WebRouteDependencies, context.dependency_views.files)
+    emit_json = _route(context, "send_json", send_json)
     if parsed.path == "/api/cache/missing/preview":
         params = parse_qs(parsed.query)
         root = _required_missing_cleanup_root(deps, deps.first_value(params, "root", None))
         with deps.database(context.db_path) as connection:
-            routes.send_json(
+            emit_json(
                 handler,
                 deps.preview_missing_cache_entries(connection, root=root),
             )
         return True
 
     if parsed.path == "/api/fs/roots":
-        routes.send_json(handler, {"items": deps.filesystem_roots()})
+        emit_json(handler, {"items": deps.filesystem_roots()})
         return True
 
     if parsed.path == "/api/fs/list":
         params = parse_qs(parsed.query)
         directory = deps.required_path(deps.first_value(params, "path", None), name="path")
-        routes.send_json(handler, deps.list_directory(directory))
+        emit_json(handler, deps.list_directory(directory))
         return True
 
     return False
@@ -58,12 +78,13 @@ def _handle_media_get_routes(handler: Any, context: WebRouteContext, parsed: Any
     if parsed.path not in {"/api/media/preview", "/api/media/source"}:
         return False
 
-    deps = cast(WebRouteDependencies, context.dependencies)
-    routes = _get_web_routes()
+    deps = cast(WebRouteDependencies, context.dependency_views.files)
+    resolve_media = _route(context, "resolve_media_request", resolve_media_request)
+    serve_media = _route(context, "serve_media_response", serve_media_response)
     params = parse_qs(parsed.query)
     file_id = deps.required_int(deps.first_value(params, "id", None), name="id", minimum=1)
     variant = "preview" if parsed.path.endswith("preview") else "source"
-    media_result = routes.resolve_media_request(
+    media_result = resolve_media(
         db_path=context.db_path,
         file_id=file_id,
         variant=variant,
@@ -83,7 +104,7 @@ def _handle_media_get_routes(handler: Any, context: WebRouteContext, parsed: Any
     if media_result.path is None:
         handler.send_error(HTTPStatus.NOT_FOUND, "Image not found")
         return True
-    serve_media_response(
+    serve_media(
         handler,
         media_result.path,
         guess_media_type=deps.guess_media_type,
@@ -93,12 +114,13 @@ def _handle_media_get_routes(handler: Any, context: WebRouteContext, parsed: Any
 
 
 def _handle_file_action_post_routes(handler: Any, context: WebRouteContext, parsed: Any) -> bool:
-    deps = cast(WebRouteDependencies, context.dependencies)
-    routes = _get_web_routes()
+    deps = cast(WebRouteDependencies, context.dependency_views.files)
+    emit_json = _route(context, "send_json", send_json)
+    resolve_media = _route(context, "resolve_media_request", resolve_media_request)
     if parsed.path == "/api/files/open":
         payload = deps.read_json_body(handler, max_body_size=context.max_request_body_size)
         file_id = deps.required_int(payload.get("file_id"), name="file_id", minimum=1)
-        media_result = routes.resolve_media_request(
+        media_result = resolve_media(
             db_path=context.db_path,
             file_id=file_id,
             variant="source",
@@ -117,32 +139,36 @@ def _handle_file_action_post_routes(handler: Any, context: WebRouteContext, pars
         if media_result.path is None:
             raise ValueError("File not found")
         method = deps.reveal_in_file_manager(media_result.path)
-        routes.send_json(handler, {"opened": True, "path": str(media_result.path), "method": method})
+        emit_json(handler, {"opened": True, "path": str(media_result.path), "method": method})
         return True
 
     if parsed.path == "/api/files/delete":
         payload = deps.read_json_body(handler, max_body_size=context.max_request_body_size)
-        delete_result = routes._execute_delete_request(context, payload, progress_callback=None, cancel_check=None)
-        routes.send_json(handler, delete_result)
+        delete_result = _route(context, "_execute_delete_request", _execute_delete_request)(
+            context, payload, progress_callback=None, cancel_check=None
+        )
+        emit_json(handler, delete_result)
         return True
 
     if parsed.path == "/api/files/delete/start":
         payload = deps.read_json_body(handler, max_body_size=context.max_request_body_size)
-        routes.start_delete_job(handler, context, payload)
+        _route(context, "start_delete_job", _start_delete_job)(handler, context, payload)
         return True
 
     if parsed.path == "/api/files/export":
         payload = deps.read_json_body(handler, max_body_size=context.max_request_body_size)
-        export_result = routes._execute_export_request(context, payload, progress_callback=None, cancel_check=None)
-        routes.send_json(
+        export_result = _route(context, "_execute_export_request", _execute_export_request)(
+            context, payload, progress_callback=None, cancel_check=None
+        )
+        emit_json(
             handler,
-            routes._export_result_payload(export_result),
+            _route(context, "_export_result_payload", _export_result_payload)(export_result),
         )
         return True
 
     if parsed.path == "/api/files/export/start":
         payload = deps.read_json_body(handler, max_body_size=context.max_request_body_size)
-        routes.start_export_job(handler, context, payload)
+        _route(context, "start_export_job", _start_export_job)(handler, context, payload)
         return True
 
     return False
@@ -194,31 +220,35 @@ def _operation_progress_callback(
 
 
 def _parse_bulk_operation_selection(
+    context: WebRouteContext,
     deps: WebRouteDependencies,
     payload: dict[str, object],
 ) -> dict[str, object] | None:
     """Parse the shared selection contract before opening the catalog."""
-    routes = _get_web_routes()
-    selection = routes._parse_selection_payload(deps, payload)
+    selection = _route(context, "_parse_selection_payload", _parse_selection_payload)(deps, payload)
     if selection is not None:
-        routes._require_root_for_destructive_selection(selection)
+        _route(
+            context,
+            "_require_root_for_destructive_selection",
+            _require_root_for_destructive_selection,
+        )(selection)
     return selection
 
 
 def _begin_bulk_selection_snapshot(
+    context: WebRouteContext,
     connection: Any,
     deps: WebRouteDependencies,
     selection: dict[str, object],
 ) -> tuple[bool, list[list[int]]]:
     """Validate and freeze one bulk selection while its snapshot is active."""
-    routes = _get_web_routes()
     snapshot_active = _begin_consistent_snapshot(connection)
     try:
-        routes._validate_selection_revision(connection, deps, selection)
+        _route(context, "_validate_selection_revision", _validate_selection_revision)(connection, deps, selection)
         # Materialize the filtered IDs before the first mutation. This keeps
         # delete and export on the same frozen selection and lets a stopped
         # job report later rows as not attempted.
-        batches = list(routes._frozen_selection_batches(connection, deps, selection))
+        batches = list(_route(context, "_frozen_selection_batches", _frozen_selection_batches)(connection, deps, selection))
     except Exception:
         _finish_consistent_snapshot(connection, active=snapshot_active, success=False)
         raise
@@ -232,17 +262,16 @@ def _execute_delete_request(
     progress_callback: Callable[[int, int, str], None] | None,
     cancel_check: Callable[[], None] | None,
 ) -> DeleteResultPayload:
-    deps = cast(WebRouteDependencies, context.dependencies)
-    routes = _get_web_routes()
-    selection = _parse_bulk_operation_selection(deps, payload)
+    deps = cast(WebRouteDependencies, context.dependency_views.files)
+    selection = _parse_bulk_operation_selection(context, deps, payload)
     delete_from_disk = deps.coerce_bool(payload.get("delete_from_disk"), default=False)
-    total_hint = routes._progress_total_hint(deps, payload)
+    total_hint = _route(context, "_progress_total_hint", _progress_total_hint)(deps, payload)
 
     with deps.database(context.db_path) as connection:
         preview_cache_root = deps.get_preview_cache_root(connection, db_path=context.db_path, persist=False)
         if selection is None:
             file_ids = deps.required_int_list(payload.get("file_ids"), name="file_ids")
-            routes._validate_page_revision(connection, deps, payload)
+            _route(context, "_validate_page_revision", _validate_page_revision)(connection, deps, payload)
             total = total_hint if total_hint is not None else len(file_ids)
             if progress_callback is not None:
                 try:
@@ -252,16 +281,16 @@ def _execute_delete_request(
                     _append_unprocessed_operation_rows(connection, stopped, file_ids, action="delete", error=exc)
                     attach_file_operation_summary(exc, stopped, cancelled=True)
                     raise
-            return routes._delete_result_payload(deps.delete_files(
+            return _route(context, "_delete_result_payload", _delete_result_payload)(deps.delete_files(
                 connection,
                 file_ids=file_ids,
                 delete_from_disk=delete_from_disk,
                 preview_cache_root=preview_cache_root,
-                progress_callback=routes._operation_progress_callback(progress_callback, phase="deleting_files", offset=0, total_hint=total),
+                progress_callback=_route(context, "_operation_progress_callback", _operation_progress_callback)(progress_callback, phase="deleting_files", offset=0, total_hint=total),
                 cancel_check=cancel_check,
             ))
 
-        snapshot_active, batches = _begin_bulk_selection_snapshot(connection, deps, selection)
+        snapshot_active, batches = _begin_bulk_selection_snapshot(context, connection, deps, selection)
         operation_summary = FileOperationSummary(action="delete", delete_from_disk=delete_from_disk)
         delete_result: DeleteResultPayload = {
             "deleted_ids": [],
@@ -283,12 +312,12 @@ def _execute_delete_request(
                 if cancel_check is not None:
                     cancel_check()
                 batch_total = total_hint if total_hint is not None else processed_so_far + len(file_ids)
-                batch_result = routes._delete_result_payload(deps.delete_files(
+                batch_result = _route(context, "_delete_result_payload", _delete_result_payload)(deps.delete_files(
                     connection,
                     file_ids=file_ids,
                     delete_from_disk=delete_from_disk,
                     preview_cache_root=preview_cache_root,
-                    progress_callback=routes._operation_progress_callback(progress_callback, phase="deleting_files", offset=processed_so_far, total_hint=batch_total),
+                    progress_callback=_route(context, "_operation_progress_callback", _operation_progress_callback)(progress_callback, phase="deleting_files", offset=processed_so_far, total_hint=batch_total),
                     cancel_check=cancel_check,
                 ))
                 contract_enabled = contract_enabled or "items" in batch_result
@@ -352,9 +381,8 @@ def _execute_export_request(
     progress_callback: Callable[[int, int, str], None] | None,
     cancel_check: Callable[[], None] | None,
 ) -> object:
-    deps = cast(WebRouteDependencies, context.dependencies)
-    routes = _get_web_routes()
-    selection = _parse_bulk_operation_selection(deps, payload)
+    deps = cast(WebRouteDependencies, context.dependency_views.files)
+    selection = _parse_bulk_operation_selection(context, deps, payload)
     destination = deps.optional_string(payload.get("destination"))
     mode_raw = payload.get("mode")
     mode = (
@@ -363,7 +391,7 @@ def _execute_export_request(
         else deps.required_choice(mode_raw, name="mode", choices=("copy", "move"))
     )
     phase = "moving_files" if mode == "move" else "exporting_files"
-    total_hint = routes._progress_total_hint(deps, payload)
+    total_hint = _route(context, "_progress_total_hint", _progress_total_hint)(deps, payload)
     if not destination:
         raise ValueError("destination is required")
 
@@ -371,7 +399,7 @@ def _execute_export_request(
         preview_cache_root = deps.get_preview_cache_root(connection, db_path=context.db_path, persist=False)
         if selection is None:
             file_ids = deps.required_int_list(payload.get("file_ids"), name="file_ids")
-            routes._validate_page_revision(connection, deps, payload)
+            _route(context, "_validate_page_revision", _validate_page_revision)(connection, deps, payload)
             total = total_hint if total_hint is not None else len(file_ids)
             if progress_callback is not None:
                 try:
@@ -387,11 +415,11 @@ def _execute_export_request(
                 destination=destination,
                 mode=mode,
                 preview_cache_root=preview_cache_root,
-                progress_callback=routes._operation_progress_callback(progress_callback, phase=phase, offset=0, total_hint=total),
+                progress_callback=_route(context, "_operation_progress_callback", _operation_progress_callback)(progress_callback, phase=phase, offset=0, total_hint=total),
                 cancel_check=cancel_check,
             )
 
-        snapshot_active, batches = _begin_bulk_selection_snapshot(connection, deps, selection)
+        snapshot_active, batches = _begin_bulk_selection_snapshot(context, connection, deps, selection)
         operation_summary = FileOperationSummary(action="export")
         contract_enabled = False
         processed_so_far = 0
@@ -412,7 +440,7 @@ def _execute_export_request(
                     destination=destination,
                     mode=mode,
                     preview_cache_root=preview_cache_root,
-                    progress_callback=routes._operation_progress_callback(progress_callback, phase=phase, offset=processed_so_far, total_hint=batch_total),
+                    progress_callback=_route(context, "_operation_progress_callback", _operation_progress_callback)(progress_callback, phase=phase, offset=processed_so_far, total_hint=batch_total),
                     cancel_check=cancel_check,
                 )
                 if isinstance(batch_result, FileOperationSummary):
@@ -422,7 +450,7 @@ def _execute_export_request(
                     raw_items = getattr(batch_result, "items", None)
                     if isinstance(raw_items, list):
                         contract_enabled = True
-                        operation_summary.merge_payload(routes._export_result_payload(batch_result))
+                        operation_summary.merge_payload(_route(context, "_export_result_payload", _export_result_payload)(batch_result))
                     else:
                         operation_summary.copied += int(getattr(batch_result, "copied", 0) or 0)
                         operation_summary.moved += int(getattr(batch_result, "moved", 0) or 0)
@@ -523,7 +551,7 @@ def _execute_cache_clear_request(
     progress_callback: Callable[[int, int, str], None] | None,
     cancel_check: Callable[[], None] | None,
 ) -> dict[str, int]:
-    deps = cast(WebRouteDependencies, context.dependencies)
+    deps = cast(WebRouteDependencies, context.dependency_views.files)
     scope = deps.required_choice(payload.get("scope"), name="scope", choices=("scores", "review", "all"))
     with deps.database(context.db_path) as connection:
         preview_cache_root = deps.get_preview_cache_root(connection, db_path=context.db_path, persist=False)
@@ -552,7 +580,7 @@ def _execute_missing_cache_apply_request(
     context: WebRouteContext,
     payload: dict[str, object],
 ) -> dict[str, object]:
-    deps = cast(WebRouteDependencies, context.dependencies)
+    deps = cast(WebRouteDependencies, context.dependency_views.files)
     root = _required_missing_cleanup_root(deps, payload.get("root"))
     token = deps.optional_string(payload.get("token"))
     if not token:

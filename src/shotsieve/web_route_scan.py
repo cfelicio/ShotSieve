@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import sys
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -19,11 +18,6 @@ from shotsieve.job_registry import JobRegistry
 from shotsieve.models import ScanRunDiagnostic
 from shotsieve.web_request import ScanRequest
 from shotsieve.web_route_common import WebRouteContext, WebRouteDependencies
-
-
-def _get_web_routes() -> Any:
-    """Resolve the route aggregator lazily so its existing cycle stays intact."""
-    return sys.modules["shotsieve.web_routes"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -389,8 +383,7 @@ def _run_scan_job(
     job_id: str,
 ) -> None:
     """Run all roots while keeping sequencing and pagination explicit."""
-    deps = cast(WebRouteDependencies, context.dependencies)
-    routes = _get_web_routes()
+    deps = cast(WebRouteDependencies, context.dependency_views.jobs)
     aggregated = {
         "files_seen": 0,
         "files_added": 0,
@@ -442,7 +435,7 @@ def _run_scan_job(
                 processed_before_root=processed_before_root,
                 remaining_offset=remaining_offset,
                 remaining_limit=remaining_limit,
-                raise_if_cancelled=routes._raise_if_scan_cancelled,
+                raise_if_cancelled=_raise_if_scan_cancelled,
             )
             attempts.append(attempt)
             if attempt.exception is not None:
@@ -466,7 +459,7 @@ def _run_scan_job(
             remaining_offset = max(
                 0,
                 remaining_offset
-                - routes._scan_offset_consumed(summary, requested_offset=attempted_offset),
+                - _scan_offset_consumed(summary, requested_offset=attempted_offset),
             )
             if remaining_limit is not None:
                 remaining_limit = max(0, remaining_limit - summary.files_seen)

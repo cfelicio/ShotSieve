@@ -13,7 +13,10 @@ from shotsieve.web_route_common import (
     DeleteResultPayload,
     ExportAggregate,
     ExportResultPayload,
+    WebRouteAdapters,
     WebRouteContext,
+    WebRouteDependencyView,
+    WebRouteDependencyViews,
     WebRouteDependencies,
     _SELECTION_BATCH_SIZE,
     _begin_consistent_snapshot,
@@ -38,6 +41,8 @@ from shotsieve.web_route_common import (
     _selection_excluded_ids,
     _validate_page_revision,
     _validate_selection_revision,
+    build_route_dependency_views,
+    set_default_route_adapters,
     log_request_message,
     send_json,
     send_json_error,
@@ -49,18 +54,18 @@ from shotsieve.web_route_files import (
     _execute_delete_request,
     _execute_export_request,
     _execute_missing_cache_apply_request,
-    _handle_file_action_post_routes,
-    _handle_filesystem_get_routes,
-    _handle_media_get_routes,
+    _handle_file_action_post_routes as _files_handle_file_action_post_routes,
+    _handle_filesystem_get_routes as _files_handle_filesystem_get_routes,
+    _handle_media_get_routes as _files_handle_media_get_routes,
     _operation_progress_callback,
     _progress_payload,
     _progress_total_hint,
 )
 from shotsieve.web_route_jobs import (
-    _handle_analysis_post_routes,
-    _handle_cache_post_routes,
-    _handle_job_cancel_post_routes,
-    _handle_job_get_routes,
+    _handle_analysis_post_routes as _jobs_handle_analysis_post_routes,
+    _handle_cache_post_routes as _jobs_handle_cache_post_routes,
+    _handle_job_cancel_post_routes as _jobs_handle_job_cancel_post_routes,
+    _handle_job_get_routes as _jobs_handle_job_get_routes,
     _raise_if_scan_cancelled,
     _scan_offset_consumed,
     _send_rows_total_estimate,
@@ -80,9 +85,9 @@ from shotsieve.web_route_jobs import (
     try_acquire_operation_lock,
 )
 from shotsieve.web_route_review import (
-    _handle_overview_get_routes,
-    _handle_review_get_routes,
-    _handle_review_post_routes,
+    _handle_overview_get_routes as _review_handle_overview_get_routes,
+    _handle_review_get_routes as _review_handle_review_get_routes,
+    _handle_review_post_routes as _review_handle_review_post_routes,
 )
 
 _STATIC_FILES = {
@@ -106,6 +111,106 @@ _STATIC_FILES = {
     "/app-controller.js": ("app-controller.js", "application/javascript; charset=utf-8"),
     "/app-events.js": ("app-events.js", "application/javascript; charset=utf-8"),
 }
+
+
+_ROUTE_ADAPTER_NAMES = (
+    "send_json",
+    "send_json_error",
+    "send_bytes",
+    "resolve_media_request",
+    "serve_media_response",
+    "_delete_result_payload",
+    "_execute_cache_clear_request",
+    "_execute_delete_request",
+    "_execute_export_request",
+    "_execute_missing_cache_apply_request",
+    "_export_result_payload",
+    "_frozen_selection_batches",
+    "_operation_progress_callback",
+    "_parse_selection_payload",
+    "_progress_payload",
+    "_progress_total_hint",
+    "_require_registry",
+    "_require_root_for_destructive_selection",
+    "_send_rows_total_estimate",
+    "_validate_page_revision",
+    "_validate_selection_revision",
+    "_compare_request_models",
+    "comparison_summary_payload",
+    "handle_job_cancel",
+    "handle_job_result",
+    "handle_job_status",
+    "progress_payload",
+    "start_ai_support_install_job",
+    "start_cache_clear_job",
+    "start_compare_job",
+    "start_delete_job",
+    "start_export_job",
+    "start_model_prepare_job",
+    "start_scan_job",
+    "start_score_job",
+    "try_acquire_operation_lock",
+)
+
+
+def _build_route_adapters() -> WebRouteAdapters:
+    callbacks = {
+        name: (lambda *args, _name=name, **kwargs: globals()[_name](*args, **kwargs))
+        for name in _ROUTE_ADAPTER_NAMES
+        if callable(globals().get(name))
+    }
+    return WebRouteAdapters(callbacks)
+
+
+set_default_route_adapters(_build_route_adapters())
+
+
+def _with_route_adapters(context: WebRouteContext) -> WebRouteContext:
+    if context.route_adapters is None:
+        # Keep the historical identity of manually constructed contexts used
+        # by integrations and tests while attaching explicit route callbacks.
+        object.__setattr__(context, "route_adapters", _build_route_adapters())
+    return context
+
+
+def _handle_filesystem_get_routes(handler: Any, context: WebRouteContext, parsed: Any) -> bool:
+    return _files_handle_filesystem_get_routes(handler, _with_route_adapters(context), parsed)
+
+
+def _handle_media_get_routes(handler: Any, context: WebRouteContext, parsed: Any) -> bool:
+    return _files_handle_media_get_routes(handler, _with_route_adapters(context), parsed)
+
+
+def _handle_file_action_post_routes(handler: Any, context: WebRouteContext, parsed: Any) -> bool:
+    return _files_handle_file_action_post_routes(handler, _with_route_adapters(context), parsed)
+
+
+def _handle_analysis_post_routes(handler: Any, context: WebRouteContext, parsed: Any) -> bool:
+    return _jobs_handle_analysis_post_routes(handler, _with_route_adapters(context), parsed)
+
+
+def _handle_job_cancel_post_routes(handler: Any, context: WebRouteContext, parsed: Any) -> bool:
+    return _jobs_handle_job_cancel_post_routes(handler, _with_route_adapters(context), parsed)
+
+
+def _handle_cache_post_routes(handler: Any, context: WebRouteContext, parsed: Any) -> bool:
+    return _jobs_handle_cache_post_routes(handler, _with_route_adapters(context), parsed)
+
+
+def _handle_job_get_routes(handler: Any, context: WebRouteContext, parsed: Any) -> bool:
+    return _jobs_handle_job_get_routes(handler, _with_route_adapters(context), parsed)
+
+
+def _handle_overview_get_routes(handler: Any, context: WebRouteContext, parsed: Any) -> bool:
+    return _review_handle_overview_get_routes(handler, _with_route_adapters(context), parsed)
+
+
+def _handle_review_get_routes(handler: Any, context: WebRouteContext, parsed: Any) -> bool:
+    return _review_handle_review_get_routes(handler, _with_route_adapters(context), parsed)
+
+
+def _handle_review_post_routes(handler: Any, context: WebRouteContext, parsed: Any) -> bool:
+    return _review_handle_review_post_routes(handler, _with_route_adapters(context), parsed)
 
 def _handle_static_get_routes(handler: Any, context: WebRouteContext, parsed: Any) -> bool:
     static_entry = _STATIC_FILES.get(parsed.path)
@@ -155,7 +260,10 @@ __all__ = [
     "ExportResultPayload",
     "MediaDependencies",
     "WebRouteContext",
+    "WebRouteDependencyView",
+    "WebRouteDependencyViews",
     "WebRouteDependencies",
+    "WebRouteAdapters",
     "_STATIC_FILES",
     "_SELECTION_BATCH_SIZE",
     "_begin_consistent_snapshot",
@@ -201,6 +309,7 @@ __all__ = [
     "_send_rows_total_estimate",
     "_validate_page_revision",
     "_validate_selection_revision",
+    "build_route_dependency_views",
     "comparison_summary_payload",
     "handle_get",
     "handle_job_cancel",

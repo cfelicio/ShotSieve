@@ -138,6 +138,15 @@ ownership, registry creation, progress publication, cancellation checks, result
 retention, failure conversion, and guaranteed lock release; their worker payloads and
 diagnostic schemas remain operation-specific.
 
+HTTP route construction keeps the legacy `WebRouteDependencies` injection object for
+compatibility, but each route family consumes a read-only dependency view for its own
+services. `web.py` now builds that context separately from the request handler class.
+The route aggregator supplies explicit response and cross-family callbacks to the
+family modules, so common, scan, file, job, review, and media routes do not resolve
+`shotsieve.web_routes` through `sys.modules`. Existing aggregator exports and
+monkeypatch seams remain available, while import order no longer determines whether a
+route family can find a helper.
+
 The folder browser accepts a full local path or UNC path such as `\\server\share\folder`; press Enter after editing the path to open it. The browser does not enumerate network servers or probe write/delete permissions against user photos.
 
 ### Media cache behavior
