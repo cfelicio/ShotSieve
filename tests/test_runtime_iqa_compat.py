@@ -77,6 +77,63 @@ def test_create_metric_safely_re_emits_captured_output_when_metric_init_fails(
     assert "native extension mismatch" in captured.err
 
 
+@pytest.mark.parametrize("thread_count", [1, 2])
+@pytest.mark.parametrize("offline_flag", [None, "HF_HUB_OFFLINE", "TRANSFORMERS_OFFLINE"])
+def test_qrealign_loads_processor_and_weights_from_pinned_snapshot(
+    monkeypatch, tmp_path, thread_count, offline_flag,
+) -> None:
+    from shotsieve import learned_iqa_backend as backend_module
+
+    snapshot = tmp_path / "snapshots" / "fe1f45a7574c9e9d908875af9f7e90cb946aa19f"
+    cache = tmp_path / "cache"
+    monkeypatch.setenv("HF_HUB_CACHE", str(cache))
+    for flag in ("HF_HUB_OFFLINE", "TRANSFORMERS_OFFLINE"):
+        monkeypatch.delenv(flag, raising=False)
+    if offline_flag:
+        monkeypatch.setenv(offline_flag, "YES")
+    monkeypatch.setattr(backend_module.threading, "active_count", lambda: thread_count)
+
+    def snapshot_download(**kwargs):
+        assert kwargs == {
+            "repo_id": "q-future/Q-ReAlign-Mini-0.8B",
+            "revision": snapshot.name,
+            "cache_dir": str(cache),
+            "local_files_only": offline_flag is not None,
+        }
+        return str(snapshot)
+
+    monkeypatch.setitem(sys.modules, "huggingface_hub", types.SimpleNamespace(snapshot_download=snapshot_download))
+    metric = object()
+
+    def create_metric(model_name, *, device, model):
+        assert model_name == "qrealign-mini"
+        assert device == "cpu"
+        assert model == str(snapshot)
+        return metric
+
+    assert backend_module.create_metric_safely(
+        types.SimpleNamespace(create_metric=create_metric), "qrealign-mini", device="cpu",
+        configure_runtime_noise_controls_fn=lambda: None,
+        install_runtime_warning_filters_fn=lambda: None,
+    ) is metric
+
+
+def test_qrealign_missing_pinned_snapshot_does_not_fall_back_to_upstream_default(monkeypatch) -> None:
+    from shotsieve import learned_iqa_backend as backend_module
+
+    def snapshot_download(**kwargs):
+        raise FileNotFoundError("pinned snapshot missing from offline cache")
+
+    monkeypatch.setitem(sys.modules, "huggingface_hub", types.SimpleNamespace(snapshot_download=snapshot_download))
+    with pytest.raises(FileNotFoundError, match="pinned snapshot missing"):
+        backend_module.create_metric_safely(
+            types.SimpleNamespace(create_metric=lambda *args, **kwargs: pytest.fail("loaded unpinned model")),
+            "qrealign-mini", device="cpu",
+            configure_runtime_noise_controls_fn=lambda: None,
+            install_runtime_warning_filters_fn=lambda: None,
+        )
+
+
 def test_runtime_noise_controls_set_env_and_logger_levels(monkeypatch) -> None:
     monkeypatch.delenv("HF_HUB_DISABLE_PROGRESS_BARS", raising=False)
     monkeypatch.delenv("TRANSFORMERS_VERBOSITY", raising=False)
@@ -263,7 +320,24 @@ def test_qrealign_version_probe_accepts_supported_runtime(monkeypatch: pytest.Mo
 
     monkeypatch.setattr(learned_iqa_module, "import_pyiqa_runtime", lambda: (FakePyiqa, FakeTorch))
 
-    assert learned_iqa_module.resolve_learned_model_version("q-realign", device="cuda") == "pyiqa:0.1.16:qrealign-mini:cuda"
+    expected_version = "pyiqa:0.1.16:qrealign-mini:cuda:fe1f45a7574c9e9d908875af9f7e90cb946aa19f"
+    assert learned_iqa_module.resolve_learned_model_version("q-realign", device="cuda") == expected_version
+
+    # Initialization and the lightweight score-cache probe must agree.
+    from shotsieve import learned_iqa_backend as backend_module
+
+    backend = types.SimpleNamespace()
+    backend_module.initialize_backend(
+        backend, "qrealign-mini", device="cuda",
+        import_pyiqa_runtime_fn=lambda: (FakePyiqa, FakeTorch),
+        normalize_model_name_fn=lambda name: name,
+        preferred_model_names_fn=sorted,
+        resolve_device_fn=lambda device, torch_module: types.SimpleNamespace(
+            runtime="cuda", metric_device="cuda", display_device="cuda", tensor_device="cuda",
+        ),
+        create_metric_safely_fn=lambda *args, **kwargs: types.SimpleNamespace(),
+    )
+    assert backend.model_version == expected_version
 
 
 def test_model_catalog_contains_only_reviewed_product_models() -> None:

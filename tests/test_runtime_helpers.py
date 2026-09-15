@@ -26,9 +26,6 @@ from shotsieve.learned_iqa import (
 def _new_module(name: str) -> Any:
     return types.ModuleType(name)
 
-def _new_module(name: str) -> Any:
-    return types.ModuleType(name)
-
 
 def test_runtime_support_aliases_share_one_facade() -> None:
     from shotsieve import bootstrap_sidecar, desktop, runtime_support

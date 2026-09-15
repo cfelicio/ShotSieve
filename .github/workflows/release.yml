@@ -54,6 +54,9 @@ jobs:
       - name: Run focused static checks
         run: python -m ruff check --select F,E9 src tests
 
+      - name: Install browser for frontend tests
+        run: python -m playwright install --with-deps chromium
+
       - name: Run test suite
         run: python -m pytest -q
 

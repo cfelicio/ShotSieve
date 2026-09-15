@@ -5,6 +5,7 @@ from dataclasses import dataclass
 import gc
 import io
 import logging
+import os
 import sys
 import threading
 from pathlib import Path
@@ -16,6 +17,7 @@ from .learned_iqa_catalog import (
     DEFAULT_INPUT_SIZE,
     DEFAULT_INPUT_SIZES,
     MAX_BATCH_SIZES,
+    MODEL_CATALOG,
     is_model_runtime_compatible,
     is_supported_model_name,
     validate_model_name,
@@ -91,17 +93,33 @@ def release_learned_backend(backend: object) -> None:
 
 def create_metric_safely(pyiqa_module, model_name: str, *, device, configure_runtime_noise_controls_fn, install_runtime_warning_filters_fn):
     configure_runtime_noise_controls_fn()
+    metric_options = {}
+    spec = next((spec for spec in MODEL_CATALOG if spec.canonical_id == model_name), None)
+    if spec is not None and spec.upstream_model_id and spec.checkpoint_revision:
+        from huggingface_hub import snapshot_download
+
+        # PyIQA's Q-ReAlign constructor accepts a local model path, but does
+        # not forward a revision to its processor and model loaders.
+        metric_options["model"] = snapshot_download(
+            repo_id=spec.upstream_model_id,
+            revision=spec.checkpoint_revision,
+            cache_dir=os.environ.get("HF_HUB_CACHE") or os.environ.get("HUGGINGFACE_HUB_CACHE"),
+            local_files_only=any(
+                os.environ.get(name, "").strip().casefold() in {"1", "true", "yes", "on"}
+                for name in ("HF_HUB_OFFLINE", "TRANSFORMERS_OFFLINE")
+            ),
+        )
     with warnings.catch_warnings():
         install_runtime_warning_filters_fn()
         capture_stdio = threading.active_count() == 1
         if not capture_stdio:
-            return pyiqa_module.create_metric(model_name, device=device)
+            return pyiqa_module.create_metric(model_name, device=device, **metric_options)
 
         with _stdio_capture_lock:
             with io.StringIO() as stdout_buffer, io.StringIO() as stderr_buffer:
                 try:
                     with redirect_stdout(stdout_buffer), redirect_stderr(stderr_buffer):
-                        return pyiqa_module.create_metric(model_name, device=device)
+                        return pyiqa_module.create_metric(model_name, device=device, **metric_options)
                 except Exception:
                     captured_stdout = stdout_buffer.getvalue().strip()
                     captured_stderr = stderr_buffer.getvalue().strip()
@@ -120,6 +138,14 @@ def _ensure_model_runtime_compatible(model_name: str, *, runtime: str, torch_ver
         f"Learned IQA model '{model_name}' is not compatible with runtime '{runtime}'. "
         "Choose a supported accelerator runtime or a different model."
     )
+
+
+def _model_version(pyiqa_module, model_name: str, runtime: str) -> str:
+    version = f"pyiqa:{getattr(pyiqa_module, '__version__', 'unknown')}:{model_name}:{runtime}"
+    spec = next(spec for spec in MODEL_CATALOG if spec.canonical_id == model_name)
+    if spec.checkpoint_revision:
+        version += f":{spec.checkpoint_revision}"
+    return version
 
 
 def resolve_learned_model_version(model_name: str, *, device: str | None = None, import_pyiqa_runtime_fn, normalize_model_name_fn, preferred_model_names_fn, resolve_device_fn) -> str:
@@ -163,7 +189,7 @@ def resolve_learned_model_version(model_name: str, *, device: str | None = None,
         runtime=resolved_device.runtime,
         torch_version=getattr(torch, "__version__", None),
     )
-    return f"pyiqa:{getattr(pyiqa, '__version__', 'unknown')}:{canonical_model_name}:{resolved_device.runtime}"
+    return _model_version(pyiqa, canonical_model_name, resolved_device.runtime)
 
 
 def _restore_cudnn_benchmark(backend) -> None:
@@ -243,7 +269,7 @@ def initialize_backend(backend, model_name: str, *, device: str | None = None, i
     backend.lower_better = bool(getattr(backend.metric, "lower_better", False))
     backend.score_range = str(getattr(backend.metric, "score_range", "0, 1"))
     backend.input_size = getattr(getattr(backend.metric, "net", None), "test_img_size", None) or input_sizes.get(canonical_model_name, default_input_size)
-    backend.model_version = f"pyiqa:{getattr(pyiqa, '__version__', 'unknown')}:{canonical_model_name}:{backend.runtime}"
+    backend.model_version = _model_version(pyiqa, canonical_model_name, backend.runtime)
 
 
 def close_backend(backend, *, gc_module: _GcModuleLike = gc) -> None:

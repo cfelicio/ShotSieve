@@ -3,14 +3,108 @@
 Updated 2026-09-14.
 
 This is the remaining candidate, target, hardware, storage, and human-review
-checklist. Most bounded implementation work is complete. Active model work is
-tracked in `implement.md`: Q-ReAlign Mini is now integrated as the forward model.
+checklist. Bounded implementation work is complete. Remaining code investigations
+are tracked in `implement2.md`; `implement.md` retains the completion history.
+Q-ReAlign Mini is now integrated as the forward model.
 DirectML retirement
 implementation is complete, but its remaining release and hardware validation
 gates are still open; Windows ML/ONNX is deferred, and native XPU/ROCm are
 separate unvalidated target tracks. I06 and the candidate-specific gates remain
 open. Do not mark a release candidate ready until the applicable items below
 have recorded evidence.
+
+## 0.4.0 review handoff - 2026-09-14
+
+The implementation review found and fixed Q-ReAlign checkpoint pinning and the
+missing Chromium installation in the tag-release test job. It also removed an
+environment-dependent state-reset test fixture that caused browser setup to
+time out when real model options were unavailable. W06-W19 are complete;
+W01-W04 code paths are present, while their applicable acceptance evidence and
+W05 remain open. The remaining work is validation, but a failed model or target
+check can still require a code fix. The Q-ReAlign acquisition stall was resolved
+by the exact-target runs recorded below; no product defect was reproduced.
+
+Run the applicable gates in this order:
+
+1. **R01 / W04:** Complete fresh online and new-process offline Q-ReAlign Mini
+   CPU/CUDA smokes, plus the other advertised models and missing/corrupt-asset
+   cases. Previous attempts stopped before downloading a complete checkpoint.
+2. **R02 / I06:** Rebuild and validate the final candidate's shipped bundles.
+   The Windows hashes below predate this review's loader fix and must be replaced
+   with new evidence. Linux CPU/NVIDIA and macOS CPU/MPS still lack target evidence.
+   Review the complete Q-ReAlign checkpoint, Qwen base-model, and PyIQA terms
+   against `THIRD_PARTY_LICENSES.md`, and record the revision and notices shipped.
+3. **R03 / W01:** Finish advertised-accelerator and Windows-without-CUDA fallback
+   checks. Python 3.11-3.12 source-stack checks remain open; the packaged matrix
+   uses Python 3.13. XPU/ROCm are separate source-only tracks and do not gate the
+   six packaged targets unless those providers are advertised as validated.
+4. **R04 and human review:** Complete the disposable-file storage cases and
+   `docs/accessibility-checklist.md`, then record evidence for the exact commit/tag.
+5. **Publication:** Review the candidate diff, notices, manifests and hashes,
+   then follow the publication section. The tag workflow publishes automatically.
+
+### Review validation
+
+- Final full suite with installed Chromium: **662 passed, 1 skipped** in
+  **220.40 seconds**. The skip is the opt-in performance baseline. The earlier
+  state-reset setup timeout was reproduced, fixed by removing its local fixture
+  override, and verified in this complete run; browser skips are not counted as
+  passes.
+- Focused runtime/model-assets/release coverage passed **99 tests**; the corrected
+  state-reset subset passed **5 tests**. Ruff `--isolated --select F,E9`, Python
+  compilation, `git diff --check`, and six-target release-matrix generation passed.
+- Both existing exact Windows Python 3.13.14 CPU/NVIDIA environments passed a
+  fresh `pip check` with no broken requirements.
+- A real CPU Q-ReAlign smoke with an empty cache and network disabled correctly
+  exited with a sanitized `missing_offline_assets` diagnostic and recovery action
+  in about **4.2 seconds**. Its expected-failure report is
+  `build/audit-reports/review-040-missing-qrealign.json`. This validates only the
+  missing-pinned-checkpoint failure path; it is not successful inference or
+  complete-cache offline reuse evidence.
+- Exact Python 3.13.14 Windows CPU and NVIDIA target environments completed
+  fresh Q-ReAlign Mini online and new-process offline smokes. All four reports
+  use immutable revision `fe1f45a7574c9e9d908875af9f7e90cb946aa19f` and are
+  recorded at `build/audit-reports/manual-040-w01-qrealign-cpu-online.json`,
+  `build/audit-reports/manual-040-w01-qrealign-cpu-offline.json`,
+  `build/audit-reports/manual-040-w01-qrealign-cuda-online.json`, and
+  `build/audit-reports/manual-040-w01-qrealign-cuda-offline.json`. CPU used
+  Torch `2.14.0+cpu` and scored normalized `14.4073` online/offline; CUDA
+  used Torch `2.14.0+cu130`, scored normalized `14.2039` online/offline,
+  and recorded about `2262.48 MB` peak allocated memory. Both exact
+  environments passed `pip check`; the offline processes reused their complete
+  caches with network access disabled.
+- These results cover the working tree based on `671e533` plus this review's
+  fixes. No bundle was rebuilt or published during this review; the broader
+  release, storage, license, and human-review gates remain open.
+
+### Focused 0.4.0 polish pass
+
+Use the final rebuilt candidate for these checks alongside R01-R04 and the
+accessibility checklist. Add a concrete defect to `implement2.md` if a check
+requires a code change.
+
+- [ ] **Upgrade continuity:** Open a disposable copy of an existing data
+  directory. Confirm roots, review decisions, historical scores, and preferences
+  remain usable. An old DirectML selection must give clear migration/fallback
+  guidance. A preparation record from the unpinned Mini loader must require
+  preparation again rather than appear current.
+- [ ] **First-run and recovery wording:** With a fresh data directory, check
+  empty-library and unavailable-model states. During model preparation, confirm
+  the current phase is understandable; exercise an interrupted run and confirm
+  restart/retry guidance does not leave a false ready state.
+- [ ] **Operation completion:** After deleting or moving the last item on a
+  Review page, confirm pagination and selection update correctly. For a partial
+  failure, confirm the result explains what happened and only eligible files
+  are offered for retry. Check results against disk and catalog state under R04.
+- [ ] **Visible finishing details:** At the required sizes and zoom, review
+  long filenames, empty results, errors, dialogs, focus, and primary actions.
+  Confirm model names, runtime labels, and support wording are consistent across
+  Library, Compare, Review, Settings, and the release notes.
+- [ ] **Candidate consistency:** Confirm the actual rebuilt distribution's
+  package version is 0.4.0 and its changelog, notices, manifest, hashes, and
+  support claims describe that same candidate. Preserve the test/model evidence
+  for the final commit/tag; choose the intended release channel before following
+  the publication steps.
 
 ## Follow-up setup and evidence - 2026-09-13
 
@@ -30,7 +124,7 @@ weights live under `build/audit-model-cache-latest`. The old DirectML cache at
 These are disposable build locations: move or copy a cache to a durable
 location and pass it via `--model-cache-dir` before deleting build output.
 Q-ReAlign Mini's published safetensors are about 2.2 GB; allow
-additional tokenizer/configuration, temporary loading, and runtime memory. The
+additional tokenizer/configuration, temporary loading, and runtime memory.
 
 For a normal source environment upgrade, use the appropriate target constraints
 from `docs/building.md`. For a portable install, run Settings > Install / Repair
@@ -52,7 +146,7 @@ $env:PLAYWRIGHT_BROWSERS_PATH = "$PWD/build/audit-browsers"
 Use a fresh `--basetemp` directory when old test files are inaccessible. Local
 browser skips must not be recorded as passes; CI treats launch problems as errors.
 
-## Follow-up validation results
+## Prior follow-up validation results - 2026-09-13
 
 - Existing-environment full suite: **584 passed, 52 skipped**. Browser skips were
   due to a missing Chromium binary, subsequently installed in the workspace.
@@ -63,16 +157,16 @@ browser skips must not be recorded as passes; CI treats launch problems as error
   uninterrupted all-green browser run.
 - Focused Ruff `--isolated --select F,E9`, Python compilation and `git diff --check`
   passed. A bare Ruff invocation inherits unrelated extra rules in this workspace.
-- **Q-ReAlign Mini is integrated but has not yet been downloaded or scored in this
-  checkout.** Run the fresh-cache and network-disabled checks below and record the
-  immutable model revision `fe1f45a7574c9e9d908875af9f7e90cb946aa19f`, exact
-  dependency versions, score range, elapsed time, and peak memory. Do not treat
-  the upstream under-4-GB estimate as local validation.
+- **At the time of this prior snapshot,** Q-ReAlign Mini was integrated but had
+  not yet been downloaded or scored in this checkout. The exact-target online
+  and network-disabled validation is now recorded in the 0.4.0 review handoff
+  above. Do not treat the upstream under-4-GB estimate as local validation.
 
-Q-ReAlign Mini still requires a fresh online and new-process offline smoke after
-code integration. DirectML is being retired rather than ported: its available Torch
-2.4.1 stack conflicts with Q-ReAlign's published Torch >=2.6 requirement, so
-installing Python 3.12 or downloading the weights does not establish support.
+At that point Q-ReAlign Mini still required a fresh online and new-process
+offline smoke after code integration. DirectML is being retired rather than
+ported: its available Torch 2.4.1 stack conflicts with Q-ReAlign's published
+Torch >=2.6 requirement, so installing Python 3.12 or downloading the weights
+does not establish support.
 
 ## Current automated release follow-up - 2026-09-14
 
@@ -114,14 +208,16 @@ gates below.
   `files_failed=0`). The frozen bundle contains the corrected operation-result
   reconciliation call. This supersedes the earlier
   unclaimed-NVIDIA-score status for this current source build only.
-- Fresh Q-ReAlign Mini CPU and CUDA online attempts reached only
+- Earlier Q-ReAlign Mini CPU and CUDA online attempts reached only
   `preparing_model`. The records are
   `build/agent-qrealign-cpu-online-data/model-preparation.json` and
   `build/agent-qrealign-cuda-online-data/model-preparation.json`; both retain
   revision `fe1f45a7574c9e9d908875af9f7e90cb946aa19f`, zero validation images,
   no score, and no completed report. The attempts were stopped after the
   bounded preparation window; no offline run was started because neither cache
-  contains a complete checkpoint. These are diagnostic blockers, not passes.
+  contains a complete checkpoint. These remain historical diagnostic blockers,
+  not passes; the exact-target completion is recorded in the review handoff
+  above.
 
 The new Windows bundle evidence is still only Windows CPU/NVIDIA evidence.
 Linux CPU/NVIDIA, macOS CPU/MPS, Windows-without-CUDA fallback, R04 storage
@@ -252,45 +348,60 @@ Use a fresh cache and disposable data directory for each target. Do not reuse a
 cache from another model or runtime.
 
 ```powershell
-$python = "build/audit-latest/Scripts/python.exe"
-$cache = "$PWD/build/audit-qrealign-mini-cache"
-$data = "$PWD/build/audit-qrealign-mini-data"
+$cudaPython = "build/w01-release-targets/windows-nvidia/.venv/Scripts/python.exe"
+$cpuPython = "build/w01-release-targets/windows-cpu/.venv/Scripts/python.exe"
+$cache = "$PWD/build/manual-040-w01-qrealign-cuda-cache"
+$data = "$PWD/build/manual-040-w01-qrealign-cuda-data"
+
+& $cudaPython -m pip check
+if ($LASTEXITCODE -ne 0) { throw "CUDA target requirements are not clean" }
+& $cpuPython -m pip check
+if ($LASTEXITCODE -ne 0) { throw "CPU target requirements are not clean" }
 
 # Online preparation and one-image validation.
-& $python scripts/model_smoke.py --model qrealign-mini --device cuda `
+& $cudaPython scripts/model_smoke.py --model qrealign-mini --device cuda `
   --cache-dir $cache --data-dir $data `
-  --report-path build/audit-reports/qrealign-mini-cuda-online.json
+  --report-path build/audit-reports/manual-040-w01-qrealign-cuda-online.json
+if ($LASTEXITCODE -ne 0) { throw "CUDA online smoke failed; inspect its report before offline validation" }
 
 # New-process offline reuse of the complete cache.
-& $python scripts/model_smoke.py --model qrealign-mini --device cuda --offline `
+& $cudaPython scripts/model_smoke.py --model qrealign-mini --device cuda --offline `
   --cache-dir $cache --data-dir $data `
-  --report-path build/audit-reports/qrealign-mini-cuda-offline.json
+  --report-path build/audit-reports/manual-040-w01-qrealign-cuda-offline.json
+if ($LASTEXITCODE -ne 0) { throw "CUDA offline smoke failed" }
 
 # Repeat in a fresh CPU cache/data directory when CPU support is being claimed.
-$cpuCache = "$PWD/build/audit-qrealign-mini-cpu-cache"
-$cpuData = "$PWD/build/audit-qrealign-mini-cpu-data"
-& $python scripts/model_smoke.py --model qrealign-mini --device cpu `
+$cpuCache = "$PWD/build/manual-040-w01-qrealign-cpu-cache"
+$cpuData = "$PWD/build/manual-040-w01-qrealign-cpu-data"
+& $cpuPython scripts/model_smoke.py --model qrealign-mini --device cpu `
   --cache-dir $cpuCache --data-dir $cpuData `
-  --report-path build/audit-reports/qrealign-mini-cpu-online.json
-& $python scripts/model_smoke.py --model qrealign-mini --device cpu --offline `
+  --report-path build/audit-reports/manual-040-w01-qrealign-cpu-online.json
+if ($LASTEXITCODE -ne 0) { throw "CPU online smoke failed; inspect its report before offline validation" }
+& $cpuPython scripts/model_smoke.py --model qrealign-mini --device cpu --offline `
   --cache-dir $cpuCache --data-dir $cpuData `
-  --report-path build/audit-reports/qrealign-mini-cpu-offline.json
+  --report-path build/audit-reports/manual-040-w01-qrealign-cpu-offline.json
+if ($LASTEXITCODE -ne 0) { throw "CPU offline smoke failed" }
 ```
 
-Repeat with `--device cpu` if CPU support is a release target. While the online
+These commands use the existing exact Windows target environments, not the
+historical Python 3.14 audit environment. Recreate them with the release build
+helper if absent. Choose new cache/data/report paths for each fresh candidate
+attempt; only the paired offline run should reuse its online cache. Allow the
+approximately 2.2 GB checkpoint acquisition to finish; an interrupted or stalled
+preparation is not a successful smoke. While the online
 run executes, record peak GPU memory (or process working set for CPU), elapsed
 time, model revision, resolved versions, and the returned score range. Confirm
 the offline process makes no network connection and that failure reports redact
 local image paths and model artifacts. Do not add a DirectML model run to release
 evidence; DirectML removal is covered by the retirement checklist below.
 
-Validation attempt on 2026-09-13: the CUDA online command was started with the
-exact `build/audit-latest` environment and a fresh cache. It remained in
-`preparing_model` for about 150 seconds without creating the model cache or a
-report, so it was stopped before inference. The resulting pending
-`model-preparation.json` is diagnostic context only, not a pass; rerun the
-online step when external model acquisition completes, then perform the CPU
-and new-process offline checks.
+Historical validation attempt on 2026-09-13: the CUDA online command was
+started with the `build/audit-latest` environment and a fresh cache. It
+remained in `preparing_model` for about 150 seconds without creating the model
+cache or a report, so it was stopped before inference. The resulting pending
+`model-preparation.json` remains diagnostic context only, not a pass. The
+later exact-target CPU/CUDA runs recorded above supersede this attempt and
+completed both online inference and new-process offline reuse.
 
 ## DirectML retirement verification
 

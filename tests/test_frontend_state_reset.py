@@ -1,36 +1,6 @@
 from __future__ import annotations
 
-import threading
-from pathlib import Path
 from urllib.request import urlopen
-
-import pytest
-
-from shotsieve.web import build_review_server
-
-
-def _find_free_port() -> int:
-    import socket
-
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-        sock.bind(("127.0.0.1", 0))
-        return sock.getsockname()[1]
-
-
-@pytest.fixture()
-def frontend_server(tmp_path: Path):
-    db_path = tmp_path / "data" / "shotsieve.db"
-    port = _find_free_port()
-    server = build_review_server(db_path, host="127.0.0.1", port=port)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-    try:
-        yield f"http://127.0.0.1:{port}"
-    finally:
-        server.shutdown()
-        server.server_close()
-        thread.join(timeout=5)
-
 
 def test_reset_everything_clears_persisted_ui_state(frontend_server: str) -> None:
     state_body = urlopen(f"{frontend_server}/app-state.js").read().decode("utf-8")

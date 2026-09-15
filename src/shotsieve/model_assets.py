@@ -187,6 +187,9 @@ def _dependency_fingerprint(
         "dependency_versions": dict(dependency_versions),
         "offline": _offline_flags(environ),
     }
+    if spec.checkpoint_revision:
+        # Invalidate records created before loading enforced the recorded pin.
+        payload["checkpoint_loading"] = "pinned-snapshot-v1"
     serialized = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
     return hashlib.sha256(serialized).hexdigest()
 

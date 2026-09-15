@@ -8,6 +8,11 @@ All notable changes to this project will be documented in this file.
 
 ### Changed
 
+- Enforced Q-ReAlign Mini's immutable checkpoint revision during loading and in
+  saved score versions; invalidated preparation records made by the unpinned
+  loader. The release test workflow now installs its required Chromium browser.
+- Made state-reset browser tests use the shared model-options fixture so their
+  setup does not depend on the host's optional AI installation.
 - Fixed frontend operation-result reconciliation so completed disk-delete
   operations refresh the review queue and clamp pagination after the last page
   is removed.

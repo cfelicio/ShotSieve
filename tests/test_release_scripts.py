@@ -120,6 +120,12 @@ def test_windows_release_script_validates_target_arguments() -> None:
     assert "Failed to install" in completed.stderr or "invalid" in completed.stderr.lower()
 
 
+def test_release_workflow_installs_chromium_before_required_browser_tests() -> None:
+    workflow = (PROJECT_ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
+    test_job = workflow.split("  prepare-release-matrix:", 1)[0]
+    assert test_job.index("python -m playwright install --with-deps chromium") < test_job.index("python -m pytest -q")
+
+
 def test_integrated_release_script_installs_target_runtime_dependencies() -> None:
     script_text = SCRIPT_PATH.read_text(encoding="utf-8")
 
