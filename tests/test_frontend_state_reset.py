@@ -232,13 +232,14 @@ def test_load_queue_keeps_query_available_after_page_clamp_retry(frontend_server
 def test_operation_results_and_decision_csv_controls_are_present(frontend_server: str) -> None:
     index_body = urlopen(f"{frontend_server}/").read().decode("utf-8")
     export_body = urlopen(f"{frontend_server}/app-workflow-export.js").read().decode("utf-8")
-    library_body = urlopen(f"{frontend_server}/app-workflow-library.js").read().decode("utf-8")
+    export_ui_body = urlopen(f"{frontend_server}/app-workflow-export-ui.js").read().decode("utf-8")
+    library_body = urlopen(f"{frontend_server}/app-workflow-library-operations.js").read().decode("utf-8")
     polling_body = urlopen(f"{frontend_server}/app-workflow-polling.js").read().decode("utf-8")
 
     assert 'id="operation-result-panel"' in index_body
     assert 'id="operation-result-download"' in index_body
     assert 'id="download-decisions-csv"' in index_body
-    assert 'startPath: "/api/files/delete/start"' in export_body
+    assert 'startPath: "/api/files/delete/start"' in export_ui_body
     assert 'result.safe_retry_ids' in export_body
     assert 'textContent' in export_body
     assert 'retainFailedResult: true' in library_body

@@ -106,8 +106,13 @@ class TestStaticAssetHeaders:
             urlopen(f"{base_url}/app-busy.js").read().decode("utf-8"),
             urlopen(f"{base_url}/app-review.js").read().decode("utf-8"),
             urlopen(f"{base_url}/app-workflow-polling.js").read().decode("utf-8"),
+            urlopen(f"{base_url}/app-workflow-operation-results.js").read().decode("utf-8"),
             urlopen(f"{base_url}/app-workflow-compare.js").read().decode("utf-8"),
+            urlopen(f"{base_url}/app-workflow-export-ui.js").read().decode("utf-8"),
             urlopen(f"{base_url}/app-workflow-export.js").read().decode("utf-8"),
+            urlopen(f"{base_url}/app-workflow-library-operations.js").read().decode("utf-8"),
+            urlopen(f"{base_url}/app-workflow-library-analysis.js").read().decode("utf-8"),
+            urlopen(f"{base_url}/app-workflow-library-browser.js").read().decode("utf-8"),
             urlopen(f"{base_url}/app-workflow-library.js").read().decode("utf-8"),
             urlopen(f"{base_url}/app-workflows.js").read().decode("utf-8"),
             urlopen(f"{base_url}/app-grid.js").read().decode("utf-8"),
@@ -286,11 +291,23 @@ class TestStaticAssetHeaders:
         busy_index = body.index('<script src="/app-busy.js"></script>')
         review_index = body.index('<script src="/app-review.js"></script>')
         polling_index = body.index('<script src="/app-workflow-polling.js"></script>')
+        results_index = body.index('<script src="/app-workflow-operation-results.js"></script>')
+        export_ui_index = body.index('<script src="/app-workflow-export-ui.js"></script>')
+        export_index = body.index('<script src="/app-workflow-export.js"></script>')
+        library_operations_index = body.index('<script src="/app-workflow-library-operations.js"></script>')
+        library_analysis_index = body.index('<script src="/app-workflow-library-analysis.js"></script>')
+        library_browser_index = body.index('<script src="/app-workflow-library-browser.js"></script>')
+        library_index = body.index('<script src="/app-workflow-library.js"></script>')
         workflows_index = body.index('<script src="/app-workflows.js"></script>')
         events_index = body.index('<script src="/app-events.js"></script>')
         main_index = body.index('<script src="/app.js"></script>')
 
-        assert state_index < utils_index < busy_index < review_index < polling_index < workflows_index < events_index < main_index
+        assert (
+            state_index < utils_index < busy_index < review_index < polling_index
+            < results_index < export_ui_index < export_index
+            < library_operations_index < library_analysis_index < library_browser_index
+            < library_index < workflows_index < events_index < main_index
+        )
 
     def test_static_html_review_tab_uses_simplified_actions(self, test_server):
         base_url, _, _ = test_server
@@ -624,7 +641,16 @@ class TestStaticAssetHeaders:
 
     def test_static_frontend_support_modules_include_content_length(self, test_server):
         base_url, _, _ = test_server
-        for route in ("/app-state.js", "/app-busy.js", "/app-workflow-polling.js"):
+        for route in (
+            "/app-state.js",
+            "/app-busy.js",
+            "/app-workflow-polling.js",
+            "/app-workflow-operation-results.js",
+            "/app-workflow-export-ui.js",
+            "/app-workflow-library-operations.js",
+            "/app-workflow-library-analysis.js",
+            "/app-workflow-library-browser.js",
+        ):
             response = urlopen(f"{base_url}{route}")
             assert response.headers.get("Content-Length") is not None
             assert int(response.headers["Content-Length"]) > 0
@@ -659,7 +685,11 @@ class TestStaticAssetHeaders:
     def test_static_workflow_facade_only_composes_domain_modules(self, test_server):
         base_url, _, _ = test_server
         facade_body = urlopen(f"{base_url}/app-workflows.js").read().decode("utf-8")
-        library_body = urlopen(f"{base_url}/app-workflow-library.js").read().decode("utf-8")
+        operations_body = urlopen(f"{base_url}/app-workflow-library-operations.js").read().decode("utf-8")
+        analysis_body = urlopen(f"{base_url}/app-workflow-library-analysis.js").read().decode("utf-8")
+        browser_body = urlopen(f"{base_url}/app-workflow-library-browser.js").read().decode("utf-8")
+        results_body = urlopen(f"{base_url}/app-workflow-operation-results.js").read().decode("utf-8")
+        export_ui_body = urlopen(f"{base_url}/app-workflow-export-ui.js").read().decode("utf-8")
         export_body = urlopen(f"{base_url}/app-workflow-export.js").read().decode("utf-8")
 
         for function_name in (
@@ -674,8 +704,11 @@ class TestStaticAssetHeaders:
         assert "Object.assign(" in facade_body
         assert "window.ShotSieveWorkflowLibrary.createWorkflowLibrary" in facade_body
         assert "window.ShotSieveWorkflowExport.createWorkflowExport" in facade_body
-        assert "function analyzeLibrary()" in library_body
-        assert "function openOriginalFile(fileId)" in library_body
+        assert "function analyzeLibrary()" in analysis_body
+        assert "function openOriginalFile(fileId)" in browser_body
+        assert "async function runTrackedOperation" in operations_body
+        assert "async function retrySafeOperation" in results_body
+        assert "function installExportDialogEvents()" in export_ui_body
         assert "function saveReview(payload)" in export_body
 
     def test_static_js_omits_hidden_review_compare_overlay_logic(self, test_server):
@@ -762,14 +795,15 @@ class TestStaticAssetHeaders:
 
     def test_static_js_scan_and_score_share_tracked_job_lifecycle(self, test_server):
         base_url, _, _ = test_server
-        body = urlopen(f"{base_url}/app-workflow-library.js").read().decode("utf-8")
+        body = urlopen(f"{base_url}/app-workflow-library-operations.js").read().decode("utf-8")
+        analysis_body = urlopen(f"{base_url}/app-workflow-library-analysis.js").read().decode("utf-8")
 
         assert "async function runTrackedJob({" in body
         assert "const result = await poll(jobId);" in body
         assert "state[stateKey] = jobId;" in body
         assert "state[stateKey] = null;" in body
-        assert 'stateKey: "scanJobId"' in body
-        assert 'stateKey: "scoreJobId"' in body
+        assert 'stateKey: "scanJobId"' in analysis_body
+        assert 'stateKey: "scoreJobId"' in analysis_body
         assert "onUnknown" in body
 
     def test_static_js_uses_backend_default_raw_preview_mode_without_selector(self, test_server):
@@ -777,15 +811,15 @@ class TestStaticAssetHeaders:
         state_body = urlopen(f"{base_url}/app-state.js").read().decode("utf-8")
         controller_body = urlopen(f"{base_url}/app-controller.js").read().decode("utf-8")
         workflows_body = urlopen(f"{base_url}/app-workflows.js").read().decode("utf-8")
-        library_body = urlopen(f"{base_url}/app-workflow-library.js").read().decode("utf-8")
+        analysis_body = urlopen(f"{base_url}/app-workflow-library-analysis.js").read().decode("utf-8")
         events_body = urlopen(f"{base_url}/app-events.js").read().decode("utf-8")
 
         assert 'previewMode:' not in state_body
         assert 'currentPreviewMode' not in workflows_body
         assert 'preview_mode:' not in workflows_body
         assert 'preview-mode-select' not in events_body
-        assert 'const reviewRoot = syncReviewRoot(root) || root;' in library_body
-        assert 'rootFilter.add(new Option(root, root, true, true));' in library_body
+        assert 'const reviewRoot = syncReviewRoot(root) || root;' in analysis_body
+        assert 'rootFilter.add(new Option(root, root, true, true));' in analysis_body
         assert 'replace(/^(?:\\.\\/|~\\/)+/, "")' in controller_body
         assert 'rootFilter.add(new Option(previous, previous, false, true));' in controller_body
 
@@ -963,11 +997,11 @@ class TestStaticAssetHeaders:
     def test_static_review_open_file_uses_local_open_endpoint(self, test_server):
         base_url, _, _ = test_server
         review_body = urlopen(f"{base_url}/app-review.js").read().decode("utf-8")
-        library_body = urlopen(f"{base_url}/app-workflow-library.js").read().decode("utf-8")
+        browser_body = urlopen(f"{base_url}/app-workflow-library-browser.js").read().decode("utf-8")
 
         assert "openOriginalFile(detail.id)" in review_body
         assert "event.preventDefault();" in review_body
-        assert 'postJson("/api/files/open", { file_id: Number(fileId) })' in library_body
+        assert 'postJson("/api/files/open", { file_id: Number(fileId) })' in browser_body
 
     def test_static_js_compare_cards_use_header_rows_for_alignment(self, test_server):
         base_url, _, _ = test_server

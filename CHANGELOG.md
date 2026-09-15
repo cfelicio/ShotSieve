@@ -18,6 +18,11 @@ All notable changes to this project will be documented in this file.
 
 ### Changed
 
+- Split the frontend workflow domains into injected operation-result/retry,
+  export-dialog, library-operation, analysis, and browser modules. The stable
+  `ShotSieveWorkflows` API and script load order remain compatible while result
+  fields, retry behavior, operation polling, and user-facing messages are
+  preserved.
 - Consolidated the repeated desktop and sidecar runtime-support delegates behind
   one shared facade while retaining their private module aliases and dynamic
   monkeypatch/test seams.

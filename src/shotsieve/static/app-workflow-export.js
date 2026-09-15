@@ -6,12 +6,11 @@
       notifications,
       review,
       state,
-      ui,
       workflowLibrary,
     } = deps;
 
     const { fetchJson, postJson } = api;
-    const { setBusyMessage, setBusyPhaseProgress, withBusy } = busy;
+    const { withBusy } = busy;
     const { addLogEntry, showToast } = notifications;
     const {
       applyReviewUpdate,
@@ -23,7 +22,18 @@
       selectFile,
       renderPagination,
     } = review;
-    const { openBrowser, handleError } = ui;
+    const operationResults = deps.operationResults || window.ShotSieveWorkflowResults;
+    if (!operationResults) {
+      throw new Error("ShotSieve operation-result module failed to load.");
+    }
+    const {
+      operationActionLabel,
+      operationItems,
+      operationTone,
+      retainOperationSelection,
+      mergeOperationResults,
+      retrySafeOperation: runSafeRetry,
+    } = operationResults;
 
     async function saveReview(payload) {
       if (!state.activeId) {
@@ -242,63 +252,8 @@
       return parts.join(", ");
     }
 
-    function operationActionLabel(result, request = null) {
-      const rawAction = String(result?.action || "").toLowerCase();
-      const action = rawAction === "export"
-        ? String(request?.payload?.mode || "copy").toLowerCase()
-        : (rawAction || String(request?.payload?.mode || "operation").toLowerCase());
-      return action === "copy" ? "Copy" : action === "move" ? "Move" : action === "delete" ? "Delete" : "Operation";
-    }
-
-    function operationItems(result) {
-      return Array.isArray(result?.items) ? result.items.filter((item) => item && typeof item === "object") : [];
-    }
-
-    function operationRequestIds(request) {
-      const rawIds = request?.payload?.file_ids;
-      return Array.isArray(rawIds)
-        ? rawIds.map(Number).filter((fileId) => Number.isInteger(fileId) && fileId > 0)
-        : [];
-    }
-
-    function retainOperationSelection(result, request = null) {
-      if (result?.job_status === "unknown" || result?.outcome === "unknown") return;
-      const items = operationItems(result);
-      const operatedIds = new Set(operationRequestIds(request));
-      items.forEach((item) => {
-        const fileId = Number(item.file_id || item.id);
-        if (Number.isInteger(fileId) && fileId > 0) operatedIds.add(fileId);
-      });
-      const preservedIds = [...state.selectedIds].filter((fileId) => !operatedIds.has(Number(fileId)));
-      if (!items.length) {
-        state.bulkSelection = null;
-        state.selectedIds = request?.payload?.selection ? new Set() : new Set(preservedIds);
-        state.lastSelectionAnchorIndex = -1;
-        return;
-      }
-
-      const remainingIds = items
-        .filter((item) => String(item.outcome || "") !== "success")
-        .map((item) => Number(item.file_id || item.id))
-        .filter((fileId) => Number.isInteger(fileId) && fileId > 0);
-      state.bulkSelection = null;
-      state.selectedIds = new Set([...preservedIds, ...remainingIds]);
-      state.lastSelectionAnchorIndex = -1;
-    }
-
-    function operationTone(result) {
-      const outcome = String(result?.outcome || "").toLowerCase();
-      if (!outcome) {
-        if (Array.isArray(result?.failed) && result.failed.length) return "error";
-        return Number(result?.copied || 0) || Number(result?.moved || 0) || Number(result?.deleted_count || 0)
-          ? "success"
-          : "warning";
-      }
-      if (outcome === "success") return result.warnings?.length ? "warning" : "success";
-      if (outcome === "partial") return "warning";
-      if (outcome === "noop") return "warning";
-      return "error";
-    }
+    // Operation result shape, retry safety, and selection reconciliation live in
+    // the injected domain utility so this module can focus on review/export UI.
 
     function appendOperationLine(container, label, value) {
       const line = document.createElement("p");
@@ -311,125 +266,6 @@
       container.appendChild(line);
     }
 
-    function operationDetailsText(result) {
-      return JSON.stringify(result || {}, null, 2);
-    }
-
-    function operationItemId(item) {
-      const fileId = Number(item?.file_id || item?.id);
-      return Number.isInteger(fileId) && fileId > 0 ? fileId : null;
-    }
-
-    function mergeOperationResults(previous, next) {
-      if (!previous) {
-        return {
-          ...next,
-          items: operationItems(next).map((item) => ({ ...item })),
-          warnings: Array.isArray(next?.warnings) ? [...next.warnings] : [],
-        };
-      }
-      if (!next) {
-        return previous;
-      }
-
-      const itemsById = new Map();
-      const itemOrder = [];
-      for (const item of [...operationItems(previous), ...operationItems(next)]) {
-        const fileId = operationItemId(item);
-        if (fileId === null) {
-          continue;
-        }
-        if (!itemsById.has(fileId)) {
-          itemOrder.push(fileId);
-        }
-        itemsById.set(fileId, { ...item, file_id: fileId, id: fileId });
-      }
-      const items = itemOrder.map((fileId) => itemsById.get(fileId));
-      const warnings = [];
-      const warningKeys = new Set();
-      for (const warning of [...(previous.warnings || []), ...(next.warnings || [])]) {
-        const key = JSON.stringify(warning);
-        if (!warningKeys.has(key)) {
-          warningKeys.add(key);
-          warnings.push(warning);
-        }
-      }
-
-      const merged = { ...previous };
-      for (const [key, value] of Object.entries(next)) {
-        if (value !== undefined) {
-          merged[key] = value;
-        }
-      }
-      Object.assign(merged, {
-        items,
-        warnings,
-        deleted_ids: [...new Set([
-          ...(previous.deleted_ids || []),
-          ...(next.deleted_ids || []),
-        ].map(Number).filter((fileId) => Number.isInteger(fileId) && fileId > 0))],
-      });
-      if (items.length) {
-        merged.completed_count = items.filter((item) => item.outcome === "success").length;
-        merged.failed_count = items.filter((item) => item.outcome === "failed").length;
-        merged.partial_count = items.filter((item) => ["partial", "uncertain", "catalog_failed"].includes(item.outcome)).length;
-        merged.unprocessed_count = items.filter((item) => item.outcome === "unprocessed").length;
-        merged.failed = items.filter((item) => item.outcome !== "success");
-        merged.safe_retry_ids = items
-          .filter((item) => item.retry_safe)
-          .map((item) => operationItemId(item))
-          .filter((fileId) => fileId !== null);
-        merged.copied = items.filter((item) => item.outcome === "success" && item.action === "copy").length;
-        merged.moved = items.filter((item) => item.outcome === "success" && item.action === "move").length;
-        merged.deleted_count = merged.deleted_ids.length;
-      }
-      const unresolved = items.some((item) => item.outcome !== "success");
-      merged.cancelled = Boolean((next.cancelled || previous.cancelled) && unresolved);
-      if (next.job_status === "unknown" || next.outcome === "unknown"
-        || previous.job_status === "unknown" || previous.outcome === "unknown") {
-        merged.job_status = "unknown";
-        merged.outcome = "unknown";
-      } else if (merged.cancelled) {
-        merged.outcome = "cancelled";
-      } else if (merged.partial_count || merged.unprocessed_count) {
-        merged.outcome = "partial";
-      } else if (merged.failed_count) {
-        merged.outcome = merged.completed_count ? "partial" : "failed";
-      } else {
-        merged.outcome = items.length ? "success" : (next.outcome || previous.outcome || "noop");
-      }
-      return merged;
-    }
-
-    function appendRetryItems(result, fileIds, { action, outcome, error, retrySafe, stage }) {
-      if (!fileIds.length) {
-        return result;
-      }
-      const existing = new Set(operationItems(result).map(operationItemId).filter((fileId) => fileId !== null));
-      const appended = fileIds
-        .filter((fileId) => !existing.has(fileId))
-        .map((fileId) => ({
-          id: fileId,
-          file_id: fileId,
-          source: "",
-          path: "",
-          destination: null,
-          action,
-          requested_action: action,
-          outcome,
-          stage,
-          error_text: String(error || "Retry was not started."),
-          error: String(error || "Retry was not started."),
-          retry_safe: retrySafe,
-        }));
-      return mergeOperationResults(result, {
-        action,
-        items: appended,
-        outcome: outcome === "uncertain" ? "unknown" : "partial",
-        job_status: outcome === "uncertain" ? "unknown" : undefined,
-        fatal_error: outcome === "uncertain" ? String(error || "Job status is unknown.") : undefined,
-      });
-    }
 
     function presentOperationResult(result, request = null) {
       if (!result || typeof result !== "object") {
@@ -524,381 +360,22 @@
       }
     }
 
-    async function retrySafeOperation() {
-      const result = state.latestOperationResult;
-      const request = state.latestOperationRequest;
-      const safeIds = [...new Set((result?.safe_retry_ids || []).map(Number))].filter((id) => Number.isInteger(id) && id > 0);
-      if (!safeIds.length || !request) {
-        showToast("There are no safely retryable files.", "error");
-        return;
-      }
-
-      const payload = { ...(request.payload || {}) };
-      const originalSelection = payload.selection;
-      const pageSelection = payload.page_selection
-        ? { ...payload.page_selection }
-        : originalSelection
-          ? { ...originalSelection }
-          : null;
-      if (!pageSelection) {
-        throw new Error("The original review scope is unavailable. Refresh the results and select again.");
-      }
-      delete pageSelection.selection_revision;
-      delete pageSelection.exclude_file_ids;
-      delete payload.selection;
-      delete payload.exclude_file_ids;
-      payload.page_selection = pageSelection;
-      payload.file_ids = safeIds;
-      payload.count = safeIds.length;
-      const mode = String(payload.mode || result.action || "").toLowerCase();
-      if ((mode === "move" || mode === "delete") && !confirm(`Retry ${mode} for ${safeIds.length} file(s)?`)) {
-        return;
-      }
-
-      let aggregate = mergeOperationResults(null, result);
-      let currentChunkIds = [];
-      let currentChunkEnd = 0;
-      let retryStopped = false;
-
-      const stopBeforeChunk = (error) => {
-        const message = `Retry could not verify the current selection: ${String(error?.message || error)}`;
-        aggregate = appendRetryItems(
-          aggregate,
-          currentChunkIds,
-          { action: mode, outcome: "unprocessed", error: message, retrySafe: true, stage: "not_started" },
-        );
-        aggregate = appendRetryItems(
-          aggregate,
-          safeIds.slice(currentChunkEnd),
-          { action: mode, outcome: "unprocessed", error: message, retrySafe: true, stage: "not_started" },
-        );
-        aggregate.outcome = "partial";
-        aggregate.fatal_error = message;
-        state.latestOperationResult = aggregate;
-        presentOperationResult(aggregate, request);
-        retryStopped = true;
-      };
-
-      const finishRetry = async () => {
-        state.latestOperationResult = aggregate;
-        presentOperationResult(aggregate, {
-          ...request,
-          payload: { ...payload, file_ids: safeIds, count: safeIds.length },
-        });
-        await refreshWorkspace();
-      };
-
-      await withBusy(`Retrying ${safeIds.length} file(s)...`, async () => {
-        for (let offset = 0; offset < safeIds.length; offset += 500) {
-          const chunkIds = safeIds.slice(offset, offset + 500);
-          currentChunkIds = chunkIds;
-          currentChunkEnd = offset + chunkIds.length;
-          const chunkPayload = { ...payload, file_ids: chunkIds, count: chunkIds.length };
-          try {
-            chunkPayload.selection_revision = await fetchSelectionRevision(pageSelection);
-          } catch (error) {
-            stopBeforeChunk(error);
-            break;
-          }
-          if (!chunkPayload.selection_revision) {
-            stopBeforeChunk(new Error("the review selection changed or is still loading"));
-            break;
-          }
-          try {
-            const next = await workflowLibrary.runTrackedOperation({
-              startPath: request.startPath,
-              payload: chunkPayload,
-              fallbackLabel: request.fallbackLabel,
-              failureMessage: request.failureMessage,
-            });
-            if (next) {
-              aggregate = mergeOperationResults(aggregate, next);
-            }
-            if (next?.job_status === "failed" || ["cancelled", "unknown"].includes(String(next?.outcome || ""))) {
-              aggregate = appendRetryItems(
-                aggregate,
-                safeIds.slice(currentChunkEnd),
-                { action: mode, outcome: "unprocessed", error: next.fatal_error || next.job_error || "Retry stopped.", retrySafe: true, stage: "not_started" },
-              );
-              retryStopped = true;
-              break;
-            }
-          } catch (error) {
-            if (error?.name === "AbortError") {
-              throw error;
-            }
-            const unknown = state.latestOperationResult?.job_status === "unknown";
-            aggregate = unknown
-              ? mergeOperationResults(aggregate, state.latestOperationResult)
-              : appendRetryItems(
-                aggregate,
-                currentChunkIds,
-                { action: mode, outcome: "uncertain", error: error.message || error, retrySafe: false, stage: "status_unknown" },
-              );
-            aggregate = appendRetryItems(
-              aggregate,
-              safeIds.slice(currentChunkEnd),
-              { action: mode, outcome: "unprocessed", error: error.message || error, retrySafe: true, stage: "not_started" },
-            );
-            aggregate.job_status = "unknown";
-            aggregate.outcome = "unknown";
-            aggregate.fatal_error = String(error.message || error);
-            state.latestOperationResult = aggregate;
-            presentOperationResult(aggregate, request);
-            retryStopped = true;
-            return;
-          }
-        }
-        if (!retryStopped) {
-          await finishRetry();
-        } else if (state.recoveryJob?.kind !== "operation") {
-          await finishRetry();
-        }
-      }, {
-        operationType: "operation",
-        onCancelled: async ({ confirmed, result: cancelledResult }) => {
-          if (confirmed && cancelledResult) {
-            aggregate = mergeOperationResults(aggregate, cancelledResult);
-          } else {
-            aggregate = appendRetryItems(
-              aggregate,
-              currentChunkIds,
-              { action: mode, outcome: "uncertain", error: "Cancellation status is unknown.", retrySafe: false, stage: "status_unknown" },
-            );
-            aggregate.job_status = "unknown";
-            aggregate.outcome = "unknown";
-            aggregate.fatal_error = "Cancellation was requested, but the server has not confirmed a terminal state.";
-          }
-          aggregate = appendRetryItems(
-            aggregate,
-            safeIds.slice(currentChunkEnd),
-            { action: mode, outcome: "unprocessed", error: confirmed ? "Retry was cancelled." : "Cancellation status is unknown.", retrySafe: true, stage: "not_started" },
-          );
-          state.latestOperationResult = aggregate;
-          presentOperationResult(aggregate, request);
-          if (confirmed) {
-            await refreshWorkspace();
-          }
-        },
-      });
-    }
-
-    function installOperationResultEvents() {
-      const panel = document.getElementById("operation-result-panel");
-      if (!panel || panel.dataset.eventsInstalled === "true") return;
-      panel.dataset.eventsInstalled = "true";
-      document.getElementById("operation-result-dismiss")?.addEventListener("click", () => {
-        panel.classList.add("hidden");
-      });
-      document.getElementById("operation-result-copy")?.addEventListener("click", async () => {
-        try {
-          const details = operationDetailsText(state.latestOperationResult);
-          if (navigator.clipboard?.writeText) {
-            await navigator.clipboard.writeText(details);
-          } else {
-            const fallback = document.createElement("textarea");
-            fallback.value = details;
-            fallback.setAttribute("readonly", "true");
-            fallback.style.position = "fixed";
-            fallback.style.opacity = "0";
-            document.body.appendChild(fallback);
-            fallback.select();
-            if (!document.execCommand("copy")) throw new Error("copy command failed");
-            fallback.remove();
-          }
-          showToast("Operation details copied.");
-        } catch {
-          showToast("Could not copy operation details.", "error");
-        }
-      });
-      document.getElementById("operation-result-download")?.addEventListener("click", () => {
-        const blob = new Blob([operationDetailsText(state.latestOperationResult)], { type: "application/json" });
-        const url = URL.createObjectURL(blob);
-        const link = document.createElement("a");
-        link.href = url;
-        link.download = "shotsieve-operation-result.json";
-        link.click();
-        URL.revokeObjectURL(url);
-      });
-      document.getElementById("operation-result-retry")?.addEventListener("click", () => {
-        retrySafeOperation().catch(handleError);
-      });
-      document.getElementById("operation-result-check-status")?.addEventListener("click", async () => {
-        try {
-          const checked = await workflowLibrary.checkTrackedOperation();
-          if (checked) presentOperationResult(checked, state.latestOperationRequest);
-        } catch (error) {
-          handleError(error);
-        }
+    function retrySafeOperation() {
+      return runSafeRetry({
+        state,
+        withBusy,
+        fetchSelectionRevision,
+        runTrackedOperation: workflowLibrary.runTrackedOperation,
+        refreshWorkspace,
+        presentResult: presentOperationResult,
+        showToast,
+        confirmRetry: (message) => confirm(message),
       });
     }
 
     state.operationResultHandler = presentOperationResult;
 
-    function buildSelectedExportRequest(mode) {
-      return {
-        mode,
-        resolveRequest: async () => activeSelectionRequest(),
-        busyMessage: (count) => `${mode === "move" ? "Moving" : "Copying"} ${count} files...`,
-        successPrefix: mode === "move" ? "Move complete" : "Copy complete",
-        logTitle: "Export",
-        emptyResultMessage: "Select at least one file to export.",
-      };
-    }
-
-    function openExportDialog(mode, emptySelectionMessage, request = null) {
-      if (!request && !hasActiveSelection()) {
-        showToast(emptySelectionMessage, "error");
-        return;
-      }
-      state.pendingExport = request || buildSelectedExportRequest(mode);
-      document.getElementById("export-mode").value = mode;
-      document.getElementById("export-dialog").showModal();
-    }
-
-    function installExportDialogEvents() {
-      document.getElementById("browse-export-dir").addEventListener("click", () => openBrowser("export-destination").catch(handleError));
-      document.getElementById("export-confirm").addEventListener("click", () => {
-        const destination = document.getElementById("export-destination").value.trim();
-        const request = state.pendingExport || buildSelectedExportRequest(document.getElementById("export-mode").value);
-        if (!destination) {
-          showToast("Choose a destination folder.", "error");
-          return;
-        }
-        document.getElementById("export-dialog").close();
-        state.pendingExport = null;
-
-        withBusy("Preparing export...", async () => {
-          const selectionRequest = await request.resolveRequest();
-          if (!selectionRequest.count) {
-            showToast(request.emptyResultMessage, "error");
-            return;
-          }
-
-          if (request.mode === "move") {
-            const msg = `Move ${selectionRequest.count} file(s) to ${destination}?\n\nThis will remove the original files and replace them at the new location.`;
-            if (!confirm(msg)) return;
-          }
-
-          const phaseLabel = request.mode === "move" ? "Moving files" : "Exporting files";
-          setBusyMessage(request.busyMessage(selectionRequest.count));
-          setBusyPhaseProgress({ percent: 0, phaseIndex: 1, phaseCount: 1, phaseLabel });
-          const result = await workflowLibrary.runTrackedOperation({
-            startPath: "/api/files/export/start",
-            payload: {
-              ...selectionRequest,
-              destination,
-              mode: request.mode,
-              count: selectionRequest.count,
-            },
-            fallbackLabel: phaseLabel,
-            failureMessage: `${phaseLabel} failed.`,
-          });
-          presentOperationResult(result, {
-            startPath: "/api/files/export/start",
-            payload: {
-              ...selectionRequest,
-              destination,
-              mode: request.mode,
-              count: selectionRequest.count,
-            },
-            fallbackLabel: phaseLabel,
-            failureMessage: `${phaseLabel} failed.`,
-          });
-          const summary = summarizeExportResult(result);
-          const resultLabel = operationTone(result) === "success"
-            ? request.successPrefix
-            : `${request.mode === "move" ? "Move" : "Copy"} results`;
-          showToast(`${resultLabel}: ${summary || "no matching files"}.`, operationTone(result));
-          addLogEntry(request.logTitle, `${request.mode} to ${destination}: ${summary}`);
-          await refreshWorkspace();
-        }).catch(handleError);
-      });
-    }
-
-    function installRejectedActionEvents() {
-      document.getElementById("delete-all-rejected").addEventListener("click", () => {
-        const root = document.getElementById("root-filter")?.value || "";
-        const rejectedCount = Number(state.overview?.active_library?.delete_marked || state.overview?.summary?.delete_marked || 0);
-        if (!root) {
-          showToast("Choose a library before deleting rejected photos. The All libraries view is global.", "error");
-          return;
-        }
-        if (!rejectedCount) {
-          showToast("No rejected photos to delete.", "error");
-          return;
-        }
-        const msg = `Permanently delete ${rejectedCount} rejected photo${rejectedCount !== 1 ? "s" : ""} in this library from disk?\n\nLibrary: ${root}\n\nThis cannot be undone. The original files will be removed from your computer.`;
-        if (!confirm(msg)) return;
-        withBusy(`Deleting ${rejectedCount} rejected files in this library...`, async () => {
-          const selectionRevision = await fetchReviewStateSelectionRevision("delete", root);
-          if (!selectionRevision) {
-            showToast("Review results are refreshing. Try again in a moment.", "error");
-            return;
-          }
-          const selection = { scope: "review-state", marked: "delete", root };
-          if (!rejectedCount) {
-            showToast("No rejected files found.", "error");
-            return;
-          }
-          const operationRequest = {
-            startPath: "/api/files/delete/start",
-            payload: {
-              selection,
-              selection_revision: selectionRevision,
-              delete_from_disk: true,
-              count: rejectedCount,
-            },
-            fallbackLabel: "Deleting rejected files",
-            failureMessage: "Delete rejected files failed.",
-          };
-          const result = await workflowLibrary.runTrackedOperation({
-            startPath: operationRequest.startPath,
-            payload: operationRequest.payload,
-            fallbackLabel: operationRequest.fallbackLabel,
-            failureMessage: operationRequest.failureMessage,
-          });
-          presentOperationResult(result, operationRequest);
-          addLogEntry("Delete rejected in library", `Deleted ${result.deleted_count} files from ${root}, ${result.failed_count} failed.`);
-          showToast(`Deleted ${result.deleted_count || 0} rejected files from this library.`, operationTone(result));
-          await refreshWorkspace();
-        }).catch(handleError);
-      });
-
-      document.getElementById("move-all-rejected").addEventListener("click", () => {
-        const root = document.getElementById("root-filter")?.value || "";
-        const rejectedCount = Number(state.overview?.active_library?.delete_marked || state.overview?.summary?.delete_marked || 0);
-        if (!root) {
-          showToast("Choose a library before moving rejected photos. The All libraries view is global.", "error");
-          return;
-        }
-        if (!rejectedCount) {
-          showToast("No rejected photos to move.", "error");
-          return;
-        }
-        openExportDialog("move", "No rejected photos to move.", {
-          mode: "move",
-          resolveRequest: async () => {
-            const selectionRevision = await fetchReviewStateSelectionRevision("delete", root);
-            if (!selectionRevision) {
-              throw new Error("Review results are refreshing. Try again in a moment.");
-            }
-            return {
-              selection: { scope: "review-state", marked: "delete", root },
-              selection_revision: selectionRevision,
-              count: rejectedCount,
-            };
-          },
-          busyMessage: (count) => `Moving ${count} rejected files in this library...`,
-          successPrefix: "Move complete",
-          logTitle: "Move rejected",
-          emptyResultMessage: "No rejected files found.",
-        });
-      });
-      installOperationResultEvents();
-    }
-
-    return {
+    const workflowExport = {
       saveReview,
       reviewDecisionPayload,
       hasActiveSelection,
@@ -913,17 +390,21 @@
       runBatchReviewDecision,
       fetchMarkedFileIds,
       summarizeExportResult,
-      buildSelectedExportRequest,
-      openExportDialog,
-      installExportDialogEvents,
-      installRejectedActionEvents,
       presentOperationResult,
       operationTone,
       mergeOperationResults,
       retrySafeOperation,
       fetchSelectionRevision,
-      installOperationResultEvents,
     };
+    const exportUi = deps.exportUi || window.ShotSieveWorkflowExportUi;
+    if (exportUi?.createWorkflowExportUi) {
+      Object.assign(workflowExport, exportUi.createWorkflowExportUi({
+        ...deps,
+        workflowExport,
+        operationResults,
+      }));
+    }
+    return workflowExport;
   }
 
   window.ShotSieveWorkflowExport = {
