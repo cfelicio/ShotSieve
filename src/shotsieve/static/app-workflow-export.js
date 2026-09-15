@@ -275,7 +275,7 @@
       if (request) {
         state.latestOperationRequest = request;
       }
-      retainOperationSelection(result, request);
+      retainOperationSelection(state, result, request);
 
       const panel = document.getElementById("operation-result-panel");
       if (!panel) return;

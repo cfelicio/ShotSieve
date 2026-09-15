@@ -1,6 +1,6 @@
 # ShotSieve manual release steps
 
-Updated 2026-09-13.
+Updated 2026-09-14.
 
 This is the remaining candidate, target, hardware, storage, and human-review
 checklist. Most bounded implementation work is complete. Active model work is
@@ -73,6 +73,60 @@ Q-ReAlign Mini still requires a fresh online and new-process offline smoke after
 code integration. DirectML is being retired rather than ported: its available Torch
 2.4.1 stack conflicts with Q-ReAlign's published Torch >=2.6 requirement, so
 installing Python 3.12 or downloading the weights does not establish support.
+
+## Current automated release follow-up - 2026-09-14
+
+This follow-up started from commit `ee8e9fc` and includes the current working-tree
+frontend fix and the 0.4.0 version bump, using fresh ignored build directories. It improves the Windows
+evidence but does not close the model, cross-platform, storage, or human-review
+gates below.
+
+- The fresh workspace full suite passed **601 tests with 54 skips** in 149.51
+  seconds. Focused Ruff (`--isolated --select F,E9`), Python compilation,
+  `git diff --check`, and six-target release-matrix generation also passed.
+- Installed headless Chromium enabled the frontend checks: **51 browser tests
+  passed** across accessibility, responsive layout, state reset, and workflow
+  coverage. This caught and fixed a real operation-result wiring error that had
+  prevented disk-delete completion from refreshing and clamping the review page;
+  the isolated regression test and the complete browser subsets now pass. The
+  two remaining warnings are from the workspace development Torch build not
+  supporting this host's RTX 5060 Ti architecture, not from the exact release
+  target environments.
+- The current exact Python 3.13.14 `windows-cpu` environment passed `pip check`.
+  The rebuilt archive is
+  `build/agent-release-040-dist/ShotSieve-windows-cpu-x64.zip`, SHA-256
+  `ACE6E3F63F0A0FDE41781C0577EDCF35850A24C7E7E163BE28A9354EB8D8CC6E`.
+  Its staged bundle has 19,105 files, one `ShotSieve-CPU.exe`, no model-weight
+  files, and no DirectML artifacts. The launcher accepted `--help`; the frozen
+  server answered `/api/options`, scanned three disposable JPEGs (`files_seen=3`,
+  `files_added=3`, `files_failed=0`), and completed a CPU TOPIQ score for three
+  disposable JPEGs (`files_scored=3`, `learned_scored=3`, `files_failed=0`).
+  The frozen bundle contains the corrected operation-result reconciliation call.
+- The current exact Python 3.13.14 `windows-nvidia` environment also passed
+  `pip check`. The rebuilt archive is
+  `build/agent-release-040-dist/ShotSieve-windows-nvidia-x64.zip`, SHA-256
+  `D96C43520120F0C3892946C9A1C7FDD89F984D1B97FD18D5AFCAAEC4C963A8F4`.
+  Its staged bundle has 19,143 files, one `ShotSieve-NVIDIA.exe`, no
+  model-weight files, and no DirectML artifacts. The launcher accepted `--help`;
+  CUDA `2.14.0+cu130` on the RTX 5060 Ti answered `/api/options`, scanned three
+  disposable JPEGs (`files_seen=3`, `files_added=3`, `files_failed=0`),
+  and completed a CUDA TOPIQ score (`files_scored=3`, `learned_scored=3`,
+  `files_failed=0`). The frozen bundle contains the corrected operation-result
+  reconciliation call. This supersedes the earlier
+  unclaimed-NVIDIA-score status for this current source build only.
+- Fresh Q-ReAlign Mini CPU and CUDA online attempts reached only
+  `preparing_model`. The records are
+  `build/agent-qrealign-cpu-online-data/model-preparation.json` and
+  `build/agent-qrealign-cuda-online-data/model-preparation.json`; both retain
+  revision `fe1f45a7574c9e9d908875af9f7e90cb946aa19f`, zero validation images,
+  no score, and no completed report. The attempts were stopped after the
+  bounded preparation window; no offline run was started because neither cache
+  contains a complete checkpoint. These are diagnostic blockers, not passes.
+
+The new Windows bundle evidence is still only Windows CPU/NVIDIA evidence.
+Linux CPU/NVIDIA, macOS CPU/MPS, Windows-without-CUDA fallback, R04 storage
+cases, and the human visual/accessibility review remain open. XPU and ROCm
+remain source-only and are not release passes.
 
 ## W05 model and release evidence - 2026-09-13
 

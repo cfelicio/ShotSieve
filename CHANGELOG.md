@@ -2,22 +2,15 @@
 
 All notable changes to this project will be documented in this file.
 
-## [0.3.2] - 2026-07-26
-
-### Fixed
-
-- Fixed Github builds failing due to build test changes
-
-## [0.3.1] - 2026-07-26
-
-### Fixed
-
-- Fixed Github builds failing due to build test changes
-
 ## [Unreleased]
+
+## [0.4.0] - 2026-09-14
 
 ### Changed
 
+- Fixed frontend operation-result reconciliation so completed disk-delete
+  operations refresh the review queue and clamp pagination after the last page
+  is removed.
 - Split the frontend workflow domains into injected operation-result/retry,
   export-dialog, library-operation, analysis, and browser modules. The stable
   `ShotSieveWorkflows` API and script load order remain compatible while result
@@ -112,6 +105,18 @@ All notable changes to this project will be documented in this file.
 - Completed file mutations remain committed across cancellation or later failures, while operation jobs retain failed/cancelled summaries through their existing status and result endpoints.
 - Transfer and delete failures now distinguish missing files from unknown filesystem state, retain both paths and observation errors after uncertain mutations, reconcile catalog failures before move compensation, and preserve every unprocessed ID in the failing batch.
 - The folder picker can still choose the explicitly typed local or UNC path when directory listing is unavailable; the later scan reports any access failure with its path.
+
+## [0.3.2] - 2026-07-26
+
+### Fixed
+
+- Fixed Github builds failing due to build test changes
+
+## [0.3.1] - 2026-07-26
+
+### Fixed
+
+- Fixed Github builds failing due to build test changes
 
 ## [0.3.0] - 2026-07-25
 
