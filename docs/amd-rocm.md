@@ -1,10 +1,8 @@
-# AMD ROCm source-install track
+# AMD ROCm install and release track
 
 ShotSieve can use native AMD ROCm through the logical `rocm` runtime target
-(`amd` is its vendor alias). This is an isolated source-install track, not a
-packaged runtime target. The six-target release matrix remains CPU, NVIDIA
-CUDA, and Apple MPS only until a separate release-pack and model validation
-passes.
+(`amd` is its vendor alias). Windows and Linux runtime packs include this
+track, and the same pinned instructions can be used for source installs.
 
 The commands below follow AMD's currently documented ROCm 7.2.1 Radeon
 PyTorch pair: PyTorch 2.9.1, Python 3.12, and the AMD-published wheels. Use a
@@ -154,6 +152,6 @@ private paths in an evidence report.
 Also run one separate `--device cpu` smoke when documenting fallback behavior.
 An unavailable explicit ROCm request must remain a failure; do not rerun it as
 CPU and count that as an accelerator pass. Successful source-install smokes do
-not authorize a packaged ROCm release target. Q-ReAlign Mini and any Windows
-AMD claim require their own model/host evidence before user-facing support is
+not certify every packaged host. Q-ReAlign Mini and any Windows AMD claim
+require their own model/host evidence before a user-facing hardware claim is
 expanded.

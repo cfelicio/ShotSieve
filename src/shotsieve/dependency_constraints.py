@@ -20,16 +20,14 @@ TORCH_REQUIREMENTS = (
 )
 
 # Native Intel XPU wheels are intentionally separate from the CPU/CUDA/MPS
-# release pair. They are consumed by the documented source-install track only;
-# no XPU runtime pack or sidecar is built from these requirements.
+# release pair. They are consumed by the documented source and release tracks.
 XPU_TORCH_REQUIREMENTS = (
     "torch==2.14.0+xpu",
     "torchvision==0.29.0+xpu",
 )
 
-# AMD's validated ROCm 7.2.1 Radeon wheels are a separate source-install
-# track.  They intentionally do not replace the common CPU/CUDA/MPS release
-# pair or enter the packaged runtime matrix.
+# AMD's validated ROCm 7.2.1 Radeon wheels are a separate release track. They
+# intentionally do not replace the common CPU/CUDA/MPS release pair.
 ROCM_TORCH_REQUIREMENTS = (
     "torch==2.9.1+rocm7.2.1.lw.gitff65f5bc",
     "torchvision==0.24.0+rocm7.2.1.gitb919bd0c",

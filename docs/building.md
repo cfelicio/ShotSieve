@@ -25,17 +25,17 @@ Optional extras:
 - Learned IQA support: `python -m pip install -e .[learned-iqa]` (`pyiqa==0.1.16`)
 - Windows build tooling: `python -m pip install -e .[windows-build]`
 
-Intel XPU is a source-install-only track. The pinned Windows/Linux install,
-driver prerequisites, runtime probe, and model-evidence commands are in
-[intel-xpu.md](./intel-xpu.md). Do not use the CPU/CUDA release constraints
-for an XPU environment; use `scripts/source-constraints-xpu.txt` and the
-official PyTorch XPU wheel index.
+Intel XPU is a packaged Windows/Linux track as well as a source-install track.
+The pinned install, driver prerequisites, runtime probe, and model-evidence
+commands are in [intel-xpu.md](./intel-xpu.md). Do not use the CPU/CUDA
+release constraints for an XPU environment; use
+`scripts/source-constraints-xpu.txt` and the official PyTorch XPU wheel index.
 
-AMD ROCm is also a source-install-only track, Linux first. The exact
-ROCm/PyTorch wheels, AMD driver boundary, Windows limitation, runtime probe,
-and model-evidence commands are in [amd-rocm.md](./amd-rocm.md). Do not use
-the CPU/CUDA release constraints for ROCm; use the matching source constraints
-and AMD's current hardware matrix. No ROCm pack is published.
+AMD ROCm is a packaged Windows/Linux track as well as a source-install track,
+with Linux first. The exact ROCm/PyTorch wheels, AMD driver boundary, Windows
+limitation, runtime probe, and model-evidence commands are in
+[amd-rocm.md](./amd-rocm.md). Do not use the CPU/CUDA release constraints for
+ROCm; use the matching target constraints and AMD's current hardware matrix.
 
 ## Desktop entry point
 
@@ -49,14 +49,18 @@ Downloaded runtime packs use target-specific launcher names instead:
 
 - Windows CPU: `ShotSieve-CPU.exe`
 - Windows NVIDIA / CUDA: `ShotSieve-NVIDIA.exe`
+- Windows Intel / XPU: `ShotSieve-Intel.exe`
+- Windows AMD / ROCm: `ShotSieve-AMD.exe`
 - Linux CPU: `ShotSieve-CPU`
 - Linux NVIDIA / CUDA: `ShotSieve-NVIDIA`
+- Linux Intel / XPU: `ShotSieve-Intel`
+- Linux AMD / ROCm: `ShotSieve-AMD`
 - macOS CPU: `ShotSieve-CPU`
 - macOS Apple Silicon / MPS: `ShotSieve-MPS`
 
-Intel XPU remains a source-only runtime path today; there is no prebuilt XPU runtime-pack target yet. AMD ROCm is also source-only, with no prebuilt ROCm
-runtime-pack target. See [intel-xpu.md](./intel-xpu.md) and
-[amd-rocm.md](./amd-rocm.md) for the exact source-install tracks.
+The XPU and ROCm packs use the same learned-model catalog as the CPU and CUDA
+packs. Hardware acceleration still requires a supported driver, GPU, and
+matching runtime; a bundle existing does not certify every device.
 
 Useful flags:
 
@@ -104,11 +108,11 @@ Score and Compare job failures reuse the same diagnostic schema as Prepare. Thei
 
 `--model-cache-dir ROOT` sets default `HF_HOME=ROOT/huggingface`, `HF_HUB_CACHE=ROOT/huggingface/hub`, and `TORCH_HOME=ROOT/torch` before learned-IQA runtime preparation. Explicit environment values win, including Hub endpoints, proxy/certificate, and offline settings, so the resulting cache paths may be split. For an offline portable setup, prepare the selected model into the intended compatible cache tree, shut down the app, copy that tree with the app-data readiness record, and validate it in a fresh offline process. ShotSieve does not migrate or remove caches automatically.
 
-The release and sidecar paths use the tested learned-IQA package set `pyiqa==0.1.16`, `timm==1.0.29`, `huggingface-hub==1.31.0`, `transformers==5.17.0`, and `openai-clip==1.0.1`, `accelerate==1.15.0`, `sentencepiece==0.2.2`, and `einops==0.8.2`. CPU, CUDA, and Apple MPS targets use `torch==2.14.0` with `torchvision==0.29.0`; the CUDA path selects the cu130 index, while CPU selects the PyTorch CPU index. The corresponding target constraint file is `scripts/release-constraints-torch.txt`. The source-only ROCm track uses AMD's separately validated ROCm 7.2.1 PyTorch wheels and `scripts/source-constraints-rocm.txt` (or the explicit Windows variant); it is not a packaged target.
+The release and sidecar paths use the tested learned-IQA package set `pyiqa==0.1.16`, `timm==1.0.29`, `huggingface-hub==1.31.0`, `transformers==5.17.0`, and `openai-clip==1.0.1`, `accelerate==1.15.0`, `sentencepiece==0.2.2`, and `einops==0.8.2`. CPU, CUDA, and Apple MPS targets use `torch==2.14.0` with `torchvision==0.29.0`; the CUDA path selects the cu130 index, while CPU selects the PyTorch CPU index. Intel XPU targets use the pinned `2.14.0+xpu` pair from the official XPU index. AMD targets use AMD's separately validated ROCm 7.2.1 wheels from `repo.radeon.com`, with platform-specific target constraints in `scripts/source-constraints-rocm.txt` and `scripts/source-constraints-rocm-windows.txt`.
 
-Windows AMD hardware remains on CPU unless the exact host is in AMD's supported ROCm/PyTorch matrix and passes the separate source-install validation. The retired DirectML package, sidecar path, and Windows-DML release target are absent from new installs and release builds. Local Windows release builds and CI run `pip check` after resolving the target environment.
+Windows AMD hardware requires an exact match with AMD's supported ROCm/PyTorch matrix and the documented driver. Local Windows release builds and CI run `pip check` after resolving the target environment.
 
-Pull requests run the offline test workflow in `.github/workflows/ci.yml`; it sets the learned-model offline flags so an accidental model download fails rather than silently reaching the Hub. The separate `.github/workflows/model-smoke.yml` workflow is manual/weekly and prepares TOPIQ and CLIPIQA in fresh isolated caches, then repeats the CPU check in a new process with socket access disabled. Q-ReAlign Mini requires fresh target-specific cache and model smoke evidence; its online/offline checks are described in `manualsteps.md` and are not replaced by the CPU-only GitHub-hosted job. The workflow does not upload caches or generated images.
+Pull requests run the offline test workflow in `.github/workflows/ci.yml`; it sets the learned-model offline flags so an accidental model download fails rather than silently reaching the Hub. The separate `.github/workflows/model-smoke.yml` workflow is manual/weekly and prepares TOPIQ, CLIPIQA, and Q-ReAlign Mini in fresh isolated caches, then repeats the CPU check in a new process with socket access disabled. The workflow does not upload caches or generated images.
 
 Each model-smoke invocation records resolved model dependency versions. On failure it writes a sanitized JSON diagnostic containing only model/runtime/cache context and redacted causes; the workflow uploads those JSON reports for troubleshooting and never uploads model caches, weights, or generated images.
 
@@ -216,17 +220,23 @@ Useful examples:
 
 # Build only the NVIDIA runtime pack
 ./scripts/build_windows_releases.ps1 -Mode runtime -TargetIds windows-nvidia
+
+# Use the target's reproducible Python interpreter explicitly when `python`
+# resolves to a different installed version
+./scripts/build_windows_releases.ps1 -PythonExe C:\\Python313\\python.exe -Mode runtime -TargetIds windows-nvidia
 ```
 
 Current Windows runtime-pack outputs:
 
 - `ShotSieve-windows-cpu`
 - `ShotSieve-windows-nvidia`
+- `ShotSieve-windows-intel`
+- `ShotSieve-windows-amd`
 
 Tier 1 runtime-pack targets are currently defined for:
 
-- Windows CPU and NVIDIA CUDA
-- Linux CPU and NVIDIA CUDA
+- Windows CPU, NVIDIA CUDA, Intel XPU, and AMD ROCm
+- Linux CPU, NVIDIA CUDA, Intel XPU, and AMD ROCm
 - macOS CPU and Apple Silicon MPS
 
 The target matrix lives in `src/shotsieve/release_targets.py` and is emitted by `scripts/release_target_matrix.py`.
@@ -258,11 +268,10 @@ The current tag-push workflow does not support `-PreRelease`; if you need a pre-
 ### Model-stack validation follow-up (2026-09-13)
 
 The selected stack was exercised locally on CPU and CUDA 13.0 (RTX 5060 Ti).
-The former DirectML experiment is retained only as historical retirement
-evidence; it is not a supported stack or release target. Exact shipped bundles
-and MPS remain release validation gates. Existing source environments must be
-upgraded explicitly; changing release constraints does not modify an existing
-virtual environment.
+Exact shipped bundles and MPS remain release validation gates. Existing source
+environments must be upgraded explicitly; changing release constraints does
+not modify an existing virtual environment.
 
-Q-ReAlign Mini model validation is tracked in `manualsteps.md`; no model-specific
-hardware support is claimed until its fresh online/offline smoke evidence passes.
+Q-ReAlign Mini is included in every runtime-pack catalog. Model-specific
+hardware support still requires fresh online/offline smoke evidence on the
+target host.

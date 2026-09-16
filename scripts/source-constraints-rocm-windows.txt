@@ -1,5 +1,5 @@
-# Optional Windows-only AMD ROCm source track. This file is not used by
-# release packs and is valid only for the explicitly supported Python/GPU/
-# driver combinations documented in docs/amd-rocm.md.
+# AMD ROCm 7.2.1 Windows target constraints. This remains valid only for the
+# explicitly supported Python/GPU/driver combinations documented in
+# docs/amd-rocm.md.
 torch==2.9.1+rocm7.2.1
 torchvision==0.24.1

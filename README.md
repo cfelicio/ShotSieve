@@ -4,6 +4,20 @@ ShotSieve is a local-first photo culling app for people who want AI help without
 
 <img width="1844" height="1251" alt="image" src="https://github.com/user-attachments/assets/31cb0d90-6ec9-4e2e-88f9-9ecfbaecdca6" />
 
+## Release 0.4.0 highlights
+
+Release 0.4.0 established ShotSieve's current learned-IQA lineup and runtime
+direction. The 0.4.x fixes are recorded in [CHANGELOG.md](CHANGELOG.md).
+
+- Replaced the retired Q-Align integration with **Q-ReAlign Mini**
+  (`qrealign-mini`), while keeping **TOPIQ (Recommended)** as the default and
+  **CLIPIQA** as the complementary comparison model.
+- Added Intel XPU and AMD ROCm runtime tracks. These use matching PyTorch
+  wheels, drivers, and model validation, and are now packaged for supported
+  Windows and Linux release targets.
+- Retired the unsupported legacy Windows GPU adapter and removed its package,
+  runtime selection, and release target.
+
 
 ## What ShotSieve does
 
@@ -28,8 +42,8 @@ If you are choosing between the packaged builds, pick the one that matches your 
 |---|---|---|
 | `CPU` | Any machine, safest fallback | Runs entirely on the processor. Slowest, but the most compatible. |
 | `NVIDIA / CUDA` | Windows or Linux machines with an NVIDIA GPU | Best choice when you have a supported NVIDIA card and want the fastest learned-IQA scoring. |
-| `Intel XPU` (source install) | Supported Intel accelerators with the matching PyTorch XPU runtime | Source-install path; not a packaged runtime download. |
-| `AMD ROCm` (source install) | AMD GPUs in the current ROCm/PyTorch support matrix | Linux-first source-install path; not a packaged runtime download. |
+| `Intel XPU` | Supported Intel accelerators with the matching PyTorch XPU runtime | Packaged Windows/Linux target; driver and device support still apply. |
+| `AMD ROCm` | AMD GPUs in the current ROCm/PyTorch support matrix | Packaged Windows/Linux target; Linux-first and hardware-specific. |
 | `Apple Silicon / MPS` | Recent Macs with Apple Silicon | Best choice on Apple Silicon when you want GPU acceleration without a separate CUDA stack. |
 
 Practical rule of thumb:
@@ -39,7 +53,15 @@ Practical rule of thumb:
 - If you are on Windows without a validated CUDA, XPU, or explicitly supported ROCm runtime, choose **CPU**.
 - If you just want the most reliable option or are unsure, choose **CPU**.
 
-Intel XPU and AMD ROCm remain source-install/runtime options today, but neither is one of the packaged runtime downloads listed above. See [docs/intel-xpu.md](docs/intel-xpu.md) and [docs/amd-rocm.md](docs/amd-rocm.md) for the pinned install and one-image evidence workflows.
+Intel XPU and AMD ROCm are available both as packaged runtime downloads and
+source-install tracks. See [docs/intel-xpu.md](docs/intel-xpu.md) and
+[docs/amd-rocm.md](docs/amd-rocm.md) for the pinned install, driver boundary,
+and one-image evidence workflows.
+
+GitHub runtime-pack releases publish ten downloads: Windows and Linux CPU,
+NVIDIA/CUDA, Intel/XPU, and AMD/ROCm, plus macOS arm64 CPU and Apple/MPS.
+They also publish the Python source distribution and wheel plus a checksummed
+bootstrap manifest. Model weights are never included in release archives.
 
 ## Quick start with `shotsieve-desktop`
 
@@ -55,8 +77,12 @@ Downloaded bundles use platform- and runtime-specific launcher names instead of 
 |---|---|---|
 | Windows | CPU | `ShotSieve-CPU.exe` |
 | Windows | NVIDIA / CUDA | `ShotSieve-NVIDIA.exe` |
+| Windows | Intel / XPU | `ShotSieve-Intel.exe` |
+| Windows | AMD / ROCm | `ShotSieve-AMD.exe` |
 | Linux | CPU | `ShotSieve-CPU` |
 | Linux | NVIDIA / CUDA | `ShotSieve-NVIDIA` |
+| Linux | Intel / XPU | `ShotSieve-Intel` |
+| Linux | AMD / ROCm | `ShotSieve-AMD` |
 | macOS | CPU | `ShotSieve-CPU` |
 | macOS | Apple Silicon / MPS | `ShotSieve-MPS` |
 
@@ -128,25 +154,25 @@ The supported in-app model catalog is intentionally small:
 - `clipiqa` is a fast secondary option for quick comparisons
 - `qrealign-mini` is the compact Q-ReAlign Mini option for CPU and compatible accelerators
 
-TReS, QualiCLIP, ARNIQA, and other PyIQA names are not supported for new scoring or comparison runs. Q-ReAlign Mini is a distinct Qwen3.5-VL-based checkpoint, and its CPU/accelerator support remains subject to model-specific validation. Stored scores retain their saved model name; disabling or replacing a model does not relabel or delete those rows.
+TReS, QualiCLIP, ARNIQA, and other PyIQA names are not supported for new scoring or comparison runs. Q-ReAlign Mini is a distinct Qwen3.5-VL-based checkpoint and is catalog-compatible with CPU, CUDA, ROCm, XPU, and MPS, but that is not blanket certification: the local runtime must initialize it successfully and each release claim needs target-specific validation. Stored scores retain their saved model name; disabling or replacing a model does not relabel or delete those rows.
 
 Runtime names you may see in settings or developer docs:
 
 - `cpu`: no GPU acceleration
 - `cuda`: NVIDIA GPU acceleration
-- `xpu`: Intel accelerator path for source installs where the local PyTorch runtime exposes it
-- `rocm`: AMD ROCm path for source installs where the local HIP-enabled PyTorch runtime exposes it
+- `xpu`: Intel accelerator path where the local PyTorch runtime exposes it
+- `rocm`: AMD ROCm path where the local HIP-enabled PyTorch runtime exposes it
 - `mps`: Apple Silicon GPU acceleration
 
 The Settings model list is populated from runtime discovery. If discovery or initialization is unavailable, the list stays empty instead of claiming that a model is ready. Auto mode may fall back to CPU and reports the failed accelerator reason; an explicitly requested unavailable runtime fails with recovery guidance.
 
-The release and sidecar paths use the tested learned-IQA package set `pyiqa==0.1.16`, `timm==1.0.29`, `huggingface-hub==1.31.0`, `transformers==5.17.0`, and `openai-clip==1.0.1`, `accelerate==1.15.0`, `sentencepiece==0.2.2`, and `einops==0.8.2`. CPU, CUDA, and Apple MPS targets use `torch==2.14.0` with `torchvision==0.29.0`; CUDA selects the cu130 index and CPU selects the PyTorch CPU index. AMD ROCm is a Linux-first source-install track using AMD's exact supported ROCm/PyTorch wheels; unsupported Windows AMD hardware falls back to CPU. The retired DirectML package and release target are not installed or published.
+The release and sidecar paths use the tested learned-IQA package set `pyiqa==0.1.16`, `timm==1.0.29`, `huggingface-hub==1.31.0`, `transformers==5.17.0`, and `openai-clip==1.0.1`, `accelerate==1.15.0`, `sentencepiece==0.2.2`, and `einops==0.8.2`. CPU, CUDA, and Apple MPS targets use `torch==2.14.0` with `torchvision==0.29.0`; CUDA selects the cu130 index and CPU selects the PyTorch CPU index. XPU targets use the pinned `2.14.0+xpu` pair from the official XPU index. ROCm targets use AMD's exact ROCm 7.2.1 PyTorch wheels with separate Windows/Linux constraints. The matching target's driver and device support remain required.
 
-The manual/weekly model smoke workflow installs these constraints, runs `pip check`, prepares TOPIQ and CLIPIQA in separate fresh caches, and repeats both checks offline in a new process. It records resolved versions and retains sanitized JSON diagnostics on failure; caches, weights, and generated images are not uploaded.
+The manual/weekly model smoke workflow installs these constraints, runs `pip check`, prepares TOPIQ, CLIPIQA, and Q-ReAlign Mini in separate fresh caches, and repeats all checks offline in a new process. It records resolved versions and retains sanitized JSON diagnostics on failure; caches, weights, and generated images are not uploaded.
 
-Optional AI runtime packages are not downloaded during an ordinary noninteractive launch. The catalog and Review UI remain usable without learned-IQA support. Use Settings > **Install / Repair AI support** for one explicit best-effort runtime installation/repair action; it shows the selected target and runtime/cache paths, retains sanitized failures for retry, and may require a restart. This action installs runtime packages only. Model weights remain a separate **Prepare selected model** operation, with the existing first-use and license guidance.
+Runtime setup may occur during an interactive first launch when learned-IQA support is missing; the catalog and Review UI remain usable without it. Model weights remain a separate **Prepare selected model** operation, with the existing first-use and license guidance.
 
-In Settings, **Prepare selected model** downloads any missing assets through the normal learned-IQA backend and validates one generated image on CPU. Preparation is for the selected model only; it does not make accelerator readiness claims, and scoring still validates the requested runtime when used. The small readiness record under the app data directory retains the last check (`not_checked`, `preparing`, `prepared`, `failed`, or `runtime_unavailable`), cache paths and effective cache-volume free space, dependency fingerprint, tested runtime, and sanitized recovery diagnostics. If a process ends during preparation, the next startup downgrades the orphaned `preparing` state to an interrupted failure. `/api/options` only reads that record and performs local metadata/disk checks; it does not download assets or construct a model.
+In Settings, **Prepare selected model** downloads any missing assets through the normal learned-IQA backend and validates one generated image using CPU for CPU-compatible models or the selected accelerator for Q-ReAlign Mini. Preparation is for the selected model only; scoring still validates the requested runtime when used. The small readiness record under the app data directory retains the last check (`not_checked`, `preparing`, `prepared`, `failed`, or `runtime_unavailable`), cache paths and effective cache-volume free space, dependency fingerprint, tested runtime, and sanitized recovery diagnostics. If a process ends during preparation, the next startup downgrades the orphaned `preparing` state to an interrupted failure. `/api/options` only reads that record and performs local metadata/disk checks; it does not download assets or construct a model.
 
 Scoring and Compare use the same sanitized diagnostic contract as Prepare. A failed model initialization or job reports the model, requested and actual runtime when known, effective cache paths/volumes, offline flags, exception chain, category, and recovery action through the job status/result API. Unknown causes remain visible without credentials, proxy passwords, Hub tokens, or URL query credentials. The recovery action links back to **Prepare selected model**, which is a last successful check rather than a promise that a later accelerator run will remain available.
 

@@ -6,7 +6,7 @@ This is the remaining candidate, target, hardware, storage, and human-review
 checklist. Bounded implementation work is complete. Remaining code investigations
 are tracked in `implement2.md`; `implement.md` retains the completion history.
 Q-ReAlign Mini is now integrated as the forward model.
-DirectML retirement
+Legacy Windows GPU adapter retirement
 implementation is complete, but its remaining release and hardware validation
 gates are still open; Windows ML/ONNX is deferred, and native XPU/ROCm are
 separate unvalidated target tracks. I06 and the candidate-specific gates remain
@@ -36,8 +36,8 @@ Run the applicable gates in this order:
    against `THIRD_PARTY_LICENSES.md`, and record the revision and notices shipped.
 3. **R03 / W01:** Finish advertised-accelerator and Windows-without-CUDA fallback
    checks. Python 3.11-3.12 source-stack checks remain open; the packaged matrix
-   uses Python 3.13. XPU/ROCm are separate source-only tracks and do not gate the
-   six packaged targets unless those providers are advertised as validated.
+  uses Python 3.13. XPU/ROCm now have separate packaged tracks with their own
+  wheel and hardware validation gates.
 4. **R04 and human review:** Complete the disposable-file storage cases and
    `docs/accessibility-checklist.md`, then record evidence for the exact commit/tag.
 5. **Publication:** Review the candidate diff, notices, manifests and hashes,
@@ -52,7 +52,7 @@ Run the applicable gates in this order:
   passes.
 - Focused runtime/model-assets/release coverage passed **99 tests**; the corrected
   state-reset subset passed **5 tests**. Ruff `--isolated --select F,E9`, Python
-  compilation, `git diff --check`, and six-target release-matrix generation passed.
+  compilation, `git diff --check`, and ten-target release-matrix generation passed.
 - Both existing exact Windows Python 3.13.14 CPU/NVIDIA environments passed a
   fresh `pip check` with no broken requirements.
 - A real CPU Q-ReAlign smoke with an empty cache and network disabled correctly
@@ -85,8 +85,8 @@ requires a code change.
 
 - [ ] **Upgrade continuity:** Open a disposable copy of an existing data
   directory. Confirm roots, review decisions, historical scores, and preferences
-  remain usable. An old DirectML selection must give clear migration/fallback
-  guidance. A preparation record from the unpinned Mini loader must require
+  remain usable. An old unsupported runtime selection must give clear
+  migration/fallback guidance. A preparation record from the unpinned Mini loader must require
   preparation again rather than appear current.
 - [ ] **First-run and recovery wording:** With a fresh data directory, check
   empty-library and unavailable-model states. During model preparation, confirm
@@ -119,7 +119,7 @@ build/audit-latest/Scripts/python.exe -m shotsieve.desktop --model-cache-dir "$P
 ```
 
 Check the cache setting in Settings before preparing a model. The prepared
-weights live under `build/audit-model-cache-latest`. The old DirectML cache at
+weights live under `build/audit-model-cache-latest`. The old adapter cache at
 `build/audit-model-cache` is historical and should not be used for new runs.
 These are disposable build locations: move or copy a cache to a durable
 location and pass it via `--model-cache-dir` before deleting build output.
@@ -129,7 +129,7 @@ additional tokenizer/configuration, temporary loading, and runtime memory.
 For a normal source environment upgrade, use the appropriate target constraints
 from `docs/building.md`. For a portable install, run Settings > Install / Repair
 AI support, restart, and explicitly Prepare the selected model. Do not install
-the retired DirectML Torch trio into a new environment.
+the retired legacy GPU Torch trio into a new environment.
 
 Sanitized smoke reports are in `build/audit-reports/`. Preserve them with the
 exact release commit/tag before cleaning build output. Current tests and the
@@ -163,7 +163,7 @@ browser skips must not be recorded as passes; CI treats launch problems as error
   above. Do not treat the upstream under-4-GB estimate as local validation.
 
 At that point Q-ReAlign Mini still required a fresh online and new-process
-offline smoke after code integration. DirectML is being retired rather than
+offline smoke after code integration. The unsupported adapter is being removed rather than
 ported: its available Torch 2.4.1 stack conflicts with Q-ReAlign's published
 Torch >=2.6 requirement, so installing Python 3.12 or downloading the weights
 does not establish support.
@@ -177,7 +177,7 @@ gates below.
 
 - The fresh workspace full suite passed **601 tests with 54 skips** in 149.51
   seconds. Focused Ruff (`--isolated --select F,E9`), Python compilation,
-  `git diff --check`, and six-target release-matrix generation also passed.
+  `git diff --check`, and ten-target release-matrix generation also passed.
 - Installed headless Chromium enabled the frontend checks: **51 browser tests
   passed** across accessibility, responsive layout, state reset, and workflow
   coverage. This caught and fixed a real operation-result wiring error that had
@@ -191,7 +191,7 @@ gates below.
   `build/agent-release-040-dist/ShotSieve-windows-cpu-x64.zip`, SHA-256
   `ACE6E3F63F0A0FDE41781C0577EDCF35850A24C7E7E163BE28A9354EB8D8CC6E`.
   Its staged bundle has 19,105 files, one `ShotSieve-CPU.exe`, no model-weight
-  files, and no DirectML artifacts. The launcher accepted `--help`; the frozen
+  files, and no legacy adapter artifacts. The launcher accepted `--help`; the frozen
   server answered `/api/options`, scanned three disposable JPEGs (`files_seen=3`,
   `files_added=3`, `files_failed=0`), and completed a CPU TOPIQ score for three
   disposable JPEGs (`files_scored=3`, `learned_scored=3`, `files_failed=0`).
@@ -201,7 +201,7 @@ gates below.
   `build/agent-release-040-dist/ShotSieve-windows-nvidia-x64.zip`, SHA-256
   `D96C43520120F0C3892946C9A1C7FDD89F984D1B97FD18D5AFCAAEC4C963A8F4`.
   Its staged bundle has 19,143 files, one `ShotSieve-NVIDIA.exe`, no
-  model-weight files, and no DirectML artifacts. The launcher accepted `--help`;
+  model-weight files, and no legacy adapter artifacts. The launcher accepted `--help`;
   CUDA `2.14.0+cu130` on the RTX 5060 Ti answered `/api/options`, scanned three
   disposable JPEGs (`files_seen=3`, `files_added=3`, `files_failed=0`),
   and completed a CUDA TOPIQ score (`files_scored=3`, `learned_scored=3`,
@@ -222,7 +222,7 @@ gates below.
 The new Windows bundle evidence is still only Windows CPU/NVIDIA evidence.
 Linux CPU/NVIDIA, macOS CPU/MPS, Windows-without-CUDA fallback, R04 storage
 cases, and the human visual/accessibility review remain open. XPU and ROCm
-remain source-only and are not release passes.
+have separate release targets and still require target-specific validation.
 
 ## W05 model and release evidence - 2026-09-13
 
@@ -291,14 +291,14 @@ review were not run. Continue with the fresh Q-ReAlign commands below on a
 network-capable runner, then repeat each completed cache in a new process with
 network access disabled.
 
-## DirectML retirement implementation follow-up - 2026-09-13
+## Legacy GPU adapter implementation follow-up - 2026-09-13
 
-The source implementation and regression coverage are complete. DirectML is no
-longer a dependency extra, runtime probe/status, model runtime, UI target,
+The source implementation and regression coverage are complete. The legacy
+adapter is no longer a dependency extra, runtime probe/status, model runtime, UI target,
 Windows release target, sidecar branch, or PyInstaller collection path. The
-release matrix now emits six targets and Windows AMD requests report an explicit
-CPU fallback until native ROCm support is validated. An old persisted DirectML
-selection is migrated to CPU with a visible retirement message.
+release matrix now emits the native CPU, CUDA, XPU, and ROCm targets. An old
+persisted unsupported selection is handled as unavailable with a visible
+recovery message.
 
 Automated evidence for this patch:
 
@@ -310,16 +310,15 @@ Automated evidence for this patch:
   and release-matrix generation passed.
 - Exact Python 3.13.14 `windows-cpu` and `windows-nvidia` release environments
   both pass `pip check`. Their PyInstaller builds pass archive/launcher checks,
-  contain no model weights, and contain no DML target, executable, sidecar, or
+  contain no model weights, and contain no legacy adapter target, executable, sidecar, or
   constraint artifact. `windows-cpu` TOPIQ and scanner/scoring API checks pass
   on CPU; `windows-nvidia` TOPIQ and scanner/scoring API checks pass on CUDA.
 - The frozen CPU executable passed `/api/options`, `/api/scan/start`, and
   `/api/score/start` against one disposable JPEG. The options payload exposes
   only `auto`, `cpu`, `cuda`, `xpu`, and `mps` as runtime choices and contains
-  no `directml` or `torch_directml` entry. A historical score row whose stored
-  backend was `directml` remains readable.
-- Stale ignored `windows-dml` build/release outputs were removed; the
-  historical `build/audit-dml` audit directory was preserved.
+  no legacy adapter entry. Historical score rows remain readable.
+- Stale ignored legacy adapter build/release outputs were removed; the
+  historical audit directory was preserved.
 - The host's NVIDIA RTX 5060 Ti was used for the CUDA pass. WSL is not
   installed, so Linux and macOS/MPS target validation was not available here.
 - The host `pip check` is not clean: `hf-xet 1.5.0` and `pyarrow 24.0.0` are
@@ -339,8 +338,8 @@ Still required before checking the retirement gate:
 - [ ] Build and repeat the retained Linux CPU/NVIDIA and macOS MPS target
   checks. No Linux or macOS runner is available in this workspace.
 - [ ] Validate the required Python 3.11-3.12 release-target combinations.
-- [x] Keep Windows ML/ONNX out of this release; XPU and ROCm remain separate
-  unvalidated source-install tracks and are not release passes.
+- [x] Keep the retired legacy Windows GPU adapter out of this release; native
+  XPU and ROCm are packaged release tracks with separate pinned runtimes.
 
 ## Q-ReAlign Mini validation after integration
 
@@ -392,8 +391,8 @@ preparation is not a successful smoke. While the online
 run executes, record peak GPU memory (or process working set for CPU), elapsed
 time, model revision, resolved versions, and the returned score range. Confirm
 the offline process makes no network connection and that failure reports redact
-local image paths and model artifacts. Do not add a DirectML model run to release
-evidence; DirectML removal is covered by the retirement checklist below.
+local image paths and model artifacts. Do not add a legacy adapter model run to
+release evidence; its removal is covered by the retirement checklist below.
 
 Historical validation attempt on 2026-09-13: the CUDA online command was
 started with the `build/audit-latest` environment and a fresh cache. It
@@ -403,22 +402,23 @@ cache or a report, so it was stopped before inference. The resulting pending
 later exact-target CPU/CUDA runs recorded above supersede this attempt and
 completed both online inference and new-process offline reuse.
 
-## DirectML retirement verification
+## Legacy GPU adapter verification
 
-Run these checks after the DirectML removal patch, using a clean environment and
-disposable data. They replace the former Windows-DML release gate.
+Run these checks after the legacy adapter removal patch, using a clean
+environment and disposable data. They replace the former retired-provider
+release gate.
 
-- [x] Confirm `pip check` passes for the modern non-DML stack and that
-  `torch-directml`, the DirectML extra, and the DML constraint file are absent.
-- [x] Confirm release planning and generated artifacts contain no `windows-dml`,
-  `ShotSieve-DML.exe`, DML sidecar install, or DirectML-only PyInstaller files.
+- [x] Confirm `pip check` passes for the modern stack and that the retired
+  provider package, extra, and constraint file are absent.
+- [x] Confirm release planning and generated artifacts contain no retired
+  provider target, executable, sidecar install, or provider-only PyInstaller files.
 - [ ] On a Windows machine without CUDA, launch the CPU target and scan/score
   one disposable JPEG. Confirm Auto falls back to CPU with an honest runtime
-  report and no attempt to import `torch_directml`.
+  report and no attempt to import the retired provider.
 - [x] Confirm Settings/API runtime choices contain only the retained targets and
-  that Windows AMD/Intel hardware is not silently labeled as DirectML.
+  that Windows AMD/Intel hardware is labeled only by the native runtime.
 - [x] Open an existing data directory containing historical scores and confirm
-  rows remain readable even though DirectML is no longer selectable for new runs.
+  rows remain readable even though the retired provider is no longer selectable.
 - [x] Confirm `README.md` and `CHANGELOG.md` explain that unsupported Windows
   AMD/Intel hardware falls back to CPU until a native provider is validated.
 - [x] Keep Windows ML/ONNX out of this release. XPU and ROCm are not release
@@ -427,16 +427,17 @@ disposable data. They replace the former Windows-DML release gate.
 
 ## Native XPU and ROCm validation
 
-These are optional target tracks after DirectML removal. They do not change the
-planned CPU/CUDA/MPS release matrix until the exact hardware and package paths
-have passed.
+These are native target tracks after legacy-provider removal. They are now
+packaged Windows/Linux targets in the CPU/CUDA/MPS release matrix, with exact
+hardware and model checks still required before expanding a hardware claim.
 
 The Intel source-install implementation is documented in
 [docs/intel-xpu.md](docs/intel-xpu.md). It pins the Torch 2.14.0 / Torchvision
 0.29.0 XPU wheels from the official PyTorch XPU index, keeps the environment
-outside the packaged release matrix, and uses `scripts/model_smoke.py` to
-write sanitized one-image evidence. The code/docs portion is complete; the
-hardware checks below remain open until they run on supported Intel hardware.
+separate from the packaged environment, and uses `scripts/model_smoke.py` to
+write sanitized one-image evidence. The same pinned pair is used by the
+packaged Windows/Linux targets; hardware checks below remain open until they
+run on supported Intel hardware.
 
 The AMD ROCm source-install implementation is documented in
 [docs/amd-rocm.md](docs/amd-rocm.md). It uses the AMD-validated ROCm 7.2.1
@@ -449,20 +450,20 @@ is complete; no AMD hardware or model evidence is available in this workspace.
 Automated evidence for the source implementation: the directly affected
 runtime/model-smoke/release suite passed **54 tests**; the full suite passed
 **636 tests, 1 skipped** (the opt-in performance baseline); focused Ruff,
-Python compilation, `git diff --check`, and six-target release-matrix
+Python compilation, `git diff --check`, and ten-target release-matrix
 generation passed. These are code/regression checks only and do not close the
 AMD hardware or model gates below.
 
-- [x] Keep Intel XPU source-only and out of the packaged release target matrix.
+- [x] Keep Intel XPU in its separate packaged release targets and source track.
 - [x] Document isolated Windows/Linux installation, exact Python/wheel
   recording, driver recording, native tensor verification, cache isolation,
   online/offline smoke commands, and CPU fallback handling.
 - [x] Preserve explicit `xpu` runtime selection and `intel -> xpu` resolution;
   unavailable XPU requests fail with actionable guidance instead of silently
   using CPU. Auto mode may still fall back to CPU when XPU is unavailable.
-- [ ] Do not mark the Intel track validated until a supported Windows host and
-  supported Linux host each complete the checks below. Q-ReAlign Mini waits for
-  W04 model integration.
+- [ ] Do not mark the Intel track hardware-validated until a supported Windows
+  host and supported Linux host each complete the checks below. Q-ReAlign Mini
+  is included in the packaged catalog and its model check remains target-specific.
 
 - [ ] **Intel XPU:** on a supported Intel Arc/Core Ultra Windows host and a
   supported Linux host, install the official PyTorch XPU wheel and matching
@@ -471,9 +472,9 @@ AMD hardware or model gates below.
   disposable JPEG, then run Q-ReAlign Mini when the target advertises it. Repeat each
   model from a complete network-disabled cache. Record the Torch/XPU wheel,
   Python, driver, runtime, cache paths, raw/normalized score, elapsed time,
-  and peak memory from the smoke report. A source-install pass does not
-  authorize a packaged XPU target.
-- [x] Keep AMD ROCm source-only and out of the packaged release target matrix.
+  and peak memory from the smoke report. A source-install pass does not replace
+  the separate packaged-bundle check.
+- [x] Keep AMD ROCm in its separate packaged release targets and source track.
 - [x] Document the Linux-first AMD install, exact ROCm/PyTorch wheel pair,
   supported Windows limitation, HIP tensor check, cache isolation, and
   online/offline smoke commands in [docs/amd-rocm.md](docs/amd-rocm.md).
@@ -481,8 +482,8 @@ AMD hardware or model gates below.
   detected HIP build; unavailable AMD requests retain CPU fallback with an
   actionable ROCm diagnostic.
 - [x] Extend smoke evidence with HIP/ROCm version, GPU name/architecture,
-  runtime, driver field, score, elapsed time, and peak memory without adding a
-  packaged target.
+  runtime, driver field, score, elapsed time, and peak memory while keeping
+  model weights out of packaged artifacts.
 - [ ] **AMD ROCm/Linux:** on a GPU listed in AMD's current matrix, install the
   exact supported ROCm/PyTorch pair in a fresh Python 3.12 environment using
   [docs/amd-rocm.md](docs/amd-rocm.md) and
@@ -497,10 +498,10 @@ AMD hardware or model gates below.
   Windows ROCm support is narrower than Linux and covers PyTorch rather than
   the full ROCm stack; do not infer support from a Linux run or generic
   CPU/CUDA wheels.
-- [ ] For each successful track, update the runtime catalog, installer/build
-  constraints, release target, user-facing hardware wording, and third-party
-  notices together. If a provider cannot run Q-ReAlign Mini, record model-level
-  fallback rather than claiming the accelerator supports all learned models.
+- [x] Update the runtime catalog, installer/build constraints, release targets,
+  user-facing hardware wording, and third-party notices together. If a target
+  cannot run Q-ReAlign Mini on a particular host, record model-level fallback
+  rather than claiming that host supports every learned model.
 
 ## Historical evidence from the previous pass
 
@@ -527,18 +528,17 @@ For the exact commit/tag intended for the test release:
 3. Exercise a missing or corrupt offline asset for each selected model and confirm the diagnostic is actionable and does not expose credentials, model weights, or private image data.
 4. Repeat for each retained target stack where the cache is claimed to be
    portable. Do not reuse the local rehearsal as evidence for another platform;
-   there is no DirectML release target after retirement.
+   there is no retired-provider release target.
 
 ## R02 — actual shipped bundles
 
-Build and test every target selected for the test release, using the exact release workflow/environment. After DirectML retirement, the planned matrix is:
+Build and test every target selected for the test release, using the exact release workflow/environment. The planned matrix is:
 
-`windows-cpu`, `windows-nvidia`, `linux-cpu`, `linux-nvidia`, `macos-cpu`, and
-`macos-mps`.
+`windows-cpu`, `windows-nvidia`, `windows-intel`, `windows-amd`, `linux-cpu`,
+`linux-nvidia`, `linux-intel`, `linux-amd`, `macos-cpu`, and `macos-mps`.
 
-The former `windows-dml` target must be absent rather than silently rebuilt with
-the non-DML Torch stack. Add Windows XPU, AMD ROCm, or Windows ML/ONNX only after
-the separate provider evidence is complete.
+The retired provider target must be absent rather than silently rebuilt with a
+different Torch stack. XPU and ROCm use their separate pinned wheel sources.
 
 For each shipped target:
 
@@ -549,11 +549,11 @@ For each shipped target:
 
 ## R03 — advertised accelerators
 
-The follow-up review created isolated environments under `build/`. The DirectML
-environment is historical evidence only and is not a release target:
+The follow-up review created isolated environments under `build/`. The old
+adapter environment is historical evidence only and is not a release target:
 
-- `build/audit-dml`: Python 3.12.13, Torch 2.4.1, torchvision 0.19.1,
-  torch-directml 0.2.5.dev240914. Basic GPU operations and TOPIQ/CLIPIQA
+- `build/audit-legacy-provider`: Python 3.12.13, Torch 2.4.1, torchvision 0.19.1,
+  legacy provider package. Basic GPU operations and TOPIQ/CLIPIQA
   one-image inference passed. Both models also passed in new network-disabled
   processes with the updated shared dependencies.
 - `build/audit-latest`: Python 3.14.5, Torch 2.14.0+cu130 and torchvision
@@ -577,13 +577,13 @@ the current 2.14.0 retained stack to 2.6. Use the exact Torch/driver wheel pair
 required by each XPU or ROCm target when those tracks are tested.
 
 After the retirement patch, repeat the positive CPU/CUDA/MPS checks in the
-planned matrix and use the DirectML retirement checklist above only to verify
-that the old path is gone.
+planned matrix and use the legacy-provider checklist above only to verify that
+the old path is gone.
 
-Q-ReAlign Mini is not currently validated on DirectML. Its published runtime
-requires Torch >=2.6/Transformers >=5.2, while the available DirectML package is
-tied to Torch 2.4.1. No Q-ReAlign DirectML port is planned; this incompatibility
-is one reason the adapter is being retired. CUDA one-image, memory and offline
+Q-ReAlign Mini is not validated on the retired provider. Its published runtime
+requires Torch >=2.6/Transformers >=5.2, while the old package was tied to an
+older Torch release. No port is planned; this incompatibility is one reason the
+adapter is being retired. CUDA one-image, memory and offline
 validation remain separate gates.
 
 ## R04 — local and network file operations

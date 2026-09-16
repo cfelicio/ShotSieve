@@ -145,11 +145,13 @@ def test_integrated_release_script_marks_cuda_targets_to_skip_bundled_torch() ->
     assert "TargetIds" in script_text
 
 
-def test_integrated_release_script_has_no_directml_path() -> None:
+def test_integrated_release_script_has_native_accelerator_install_paths() -> None:
     script_text = SCRIPT_PATH.read_text(encoding="utf-8")
 
-    assert "directml" not in script_text.casefold()
-    assert "torch-directml" not in script_text.casefold()
+    assert '"xpu"' in script_text
+    assert '"rocm"' in script_text
+    assert "download.pytorch.org/whl/xpu" in script_text
+    assert "repo.radeon.com/rocm/windows" in script_text
 
 
 def test_integrated_release_script_installs_pinned_cuda_runtime_for_torchless_bundles() -> None:
@@ -175,6 +177,16 @@ def test_integrated_release_script_installs_dependencies_before_each_target_buil
     assert "Build-WindowsTarget -PythonCommand $targetPythonCommand" not in script_text
     assert "Creating isolated build environment" in script_text
     assert "$PythonCommand -m pip check" in script_text
+
+
+def test_integrated_release_script_enforces_target_python_version() -> None:
+    script_text = SCRIPT_PATH.read_text(encoding="utf-8")
+
+    assert "function Get-PythonVersion" in script_text
+    assert "ExpectedPythonVersion" in script_text
+    assert "target.pythonVersion" in script_text
+    assert "Configured Python $baseVersion" in script_text
+    assert "-PythonExe pointing to a matching interpreter" in script_text
 
 
 def test_integrated_release_script_recreates_broken_target_virtualenv(tmp_path: Path) -> None:
@@ -364,15 +376,15 @@ def test_build_guide_documents_prepare_then_publish_release_flow() -> None:
     assert "does **not** edit version files" in build_doc_text
 
 
-def test_build_guide_clarifies_xpu_is_source_only_not_packaged() -> None:
+def test_build_guide_documents_xpu_and_rocm_packaged_targets() -> None:
     build_doc_text = (PROJECT_ROOT / "docs" / "building.md").read_text(encoding="utf-8")
 
-    assert "Intel XPU remains a source-only runtime path today" in build_doc_text
-    assert "there is no prebuilt XPU runtime-pack target" in build_doc_text
+    assert "Intel XPU is a packaged Windows/Linux track" in build_doc_text
+    assert "AMD ROCm is a packaged Windows/Linux track" in build_doc_text
     assert "intel-xpu.md" in build_doc_text
 
 
-def test_xpu_source_track_is_pinned_and_not_in_release_matrix() -> None:
+def test_xpu_track_is_pinned_and_in_release_matrix() -> None:
     constraints = XPU_CONSTRAINTS_PATH.read_text(encoding="utf-8")
     assert "torch==2.14.0+xpu" in constraints
     assert "torchvision==0.29.0+xpu" in constraints
@@ -385,7 +397,7 @@ def test_xpu_source_track_is_pinned_and_not_in_release_matrix() -> None:
     )
 
     matrix = run_release_matrix("runtime")
-    assert not any("xpu" in str(entry["id"]).casefold() for entry in matrix)
+    assert {entry["id"] for entry in matrix if entry["torchVariant"] == "xpu"} == {"windows-intel", "linux-intel"}
 
     xpu_doc = (PROJECT_ROOT / "docs" / "intel-xpu.md").read_text(encoding="utf-8")
     assert "https://download.pytorch.org/whl/xpu" in xpu_doc
@@ -393,7 +405,7 @@ def test_xpu_source_track_is_pinned_and_not_in_release_matrix() -> None:
     assert "qrealign-mini" in xpu_doc
 
 
-def test_rocm_source_track_is_pinned_and_not_in_release_matrix() -> None:
+def test_rocm_track_is_pinned_and_in_release_matrix() -> None:
     constraints = ROCM_CONSTRAINTS_PATH.read_text(encoding="utf-8")
     windows_constraints = ROCM_WINDOWS_CONSTRAINTS_PATH.read_text(encoding="utf-8")
     assert "torch==2.9.1+rocm7.2.1" in constraints
@@ -409,7 +421,7 @@ def test_rocm_source_track_is_pinned_and_not_in_release_matrix() -> None:
     )
 
     matrix = run_release_matrix("runtime")
-    assert not any("rocm" in str(entry["id"]).casefold() for entry in matrix)
+    assert {entry["id"] for entry in matrix if entry["torchVariant"] == "rocm"} == {"windows-amd", "linux-amd"}
 
     rocm_doc = (PROJECT_ROOT / "docs" / "amd-rocm.md").read_text(encoding="utf-8")
     assert "rocm7.2.1" in rocm_doc
@@ -455,13 +467,12 @@ def test_target_modules_do_not_keep_dead_imports() -> None:
     assert completed.returncode == 0, completed.stdout + completed.stderr
 
 
-def test_pyproject_has_no_directml_extra() -> None:
+def test_pyproject_has_no_legacy_gpu_extra() -> None:
     pyproject_text = (PROJECT_ROOT / "pyproject.toml").read_text(encoding="utf-8")
     pyproject = tomllib.loads(pyproject_text)
 
     optional_dependencies = pyproject["project"]["optional-dependencies"]
-    assert "learned-iqa-directml" not in optional_dependencies
-    assert all("torch-directml" not in entry for entry in optional_dependencies["learned-iqa"])
+    assert all("legacy-gpu" not in entry for entry in optional_dependencies["learned-iqa"])
 
 
 def test_learned_iqa_extras_include_icecream_dependency() -> None:
@@ -499,14 +510,22 @@ def test_tier1_release_matrix_covers_all_runtime_pack_targets() -> None:
     assert set(targets) == {
         "windows-cpu",
         "windows-nvidia",
+        "windows-intel",
+        "windows-amd",
         "linux-cpu",
         "linux-nvidia",
+        "linux-intel",
+        "linux-amd",
         "macos-cpu",
         "macos-mps",
     }
 
     assert targets["windows-cpu"]["runsOn"] == "windows-latest"
     assert targets["linux-cpu"]["runsOn"] == "ubuntu-latest"
+    assert targets["windows-intel"]["torchVariant"] == "xpu"
+    assert targets["linux-intel"]["torchVariant"] == "xpu"
+    assert targets["windows-amd"]["torchVariant"] == "rocm"
+    assert targets["linux-amd"]["torchVariant"] == "rocm"
     assert targets["macos-mps"]["runsOn"] == "macos-latest"
     assert targets["windows-cpu"]["constraintsFile"] == "scripts/release-constraints-torch.txt"
     assert targets["windows-nvidia"]["constraintsFile"] == "scripts/release-constraints-torch.txt"

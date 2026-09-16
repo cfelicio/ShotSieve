@@ -146,19 +146,16 @@
         return;
       }
 
-      const restoreFocus = () => {
-        if (!returnTarget.isConnected || returnTarget.hasAttribute("disabled")) {
-          return;
-        }
-        returnTarget.focus();
-      };
-
-      if (typeof window.requestAnimationFrame === "function") {
-        window.requestAnimationFrame(restoreFocus);
+      if (!returnTarget.isConnected || returnTarget.hasAttribute("disabled")) {
         return;
       }
 
-      window.setTimeout(restoreFocus, 0);
+      // Native dialog close events run after the dialog has left the top layer,
+      // so restoring focus synchronously is both reliable and accessible. A
+      // deferred animation-frame restore can leave focus on the closing dialog
+      // long enough for callers and assistive technology to observe the wrong
+      // target.
+      returnTarget.focus();
     }
 
     function bindOverlayLifecycle(overlay) {

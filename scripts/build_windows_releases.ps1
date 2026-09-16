@@ -42,11 +42,64 @@ function Resolve-PythonCommand {
     return $ConfiguredPythonExe
 }
 
+function Get-PythonVersion {
+    param(
+        [string]$PythonCommand
+    )
+
+    $versionOutput = & $PythonCommand -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')"
+    if ($LASTEXITCODE -ne 0) {
+        throw "Failed to determine the Python version for '$PythonCommand'."
+    }
+
+    $version = ($versionOutput | Select-Object -Last 1).Trim()
+    if ([string]::IsNullOrWhiteSpace($version)) {
+        throw "Python '$PythonCommand' did not report a version."
+    }
+
+    return $version
+}
+
+function Resolve-PythonCommandForTarget {
+    param(
+        [string]$BasePythonCommand,
+        [string]$ConfiguredPythonExe,
+        [string]$ExpectedPythonVersion
+    )
+
+    $baseVersion = Get-PythonVersion -PythonCommand $BasePythonCommand
+    if ($baseVersion -eq $ExpectedPythonVersion) {
+        return $BasePythonCommand
+    }
+
+    if ($ConfiguredPythonExe -ne "python") {
+        throw "Configured Python $baseVersion does not match target requirement Python $ExpectedPythonVersion. Re-run with -PythonExe pointing to a matching interpreter."
+    }
+
+    $pythonLauncher = Get-Command py -ErrorAction SilentlyContinue
+    if ($null -eq $pythonLauncher) {
+        throw "Target requires Python $ExpectedPythonVersion, but the configured Python is $baseVersion and the Windows Python launcher could not be found. Re-run with -PythonExe pointing to a matching interpreter."
+    }
+
+    $candidate = & $pythonLauncher.Source "-$ExpectedPythonVersion" -c "import sys; print(sys.executable)"
+    if ($LASTEXITCODE -ne 0) {
+        throw "Target requires Python $ExpectedPythonVersion, but the Windows Python launcher could not resolve that interpreter. Re-run with -PythonExe pointing to a matching interpreter."
+    }
+
+    $candidatePath = ($candidate | Select-Object -Last 1).Trim()
+    if ([string]::IsNullOrWhiteSpace($candidatePath) -or -not (Test-Path $candidatePath)) {
+        throw "Target requires Python $ExpectedPythonVersion, but the Windows Python launcher returned no usable interpreter. Re-run with -PythonExe pointing to a matching interpreter."
+    }
+
+    return $candidatePath
+}
+
 function Resolve-TargetPythonCommand {
     param(
         [string]$BasePythonCommand,
         [string]$ResolvedBuildRoot,
-        [string]$TargetId
+        [string]$TargetId,
+        [string]$ExpectedPythonVersion = ""
     )
 
     $targetVenvRoot = Join-Path (Join-Path $ResolvedBuildRoot $TargetId) ".venv"
@@ -71,6 +124,13 @@ function Resolve-TargetPythonCommand {
                 Write-Host "Recreating broken build environment for '$TargetId' at '$targetVenvRoot' (python startup failed)..."
                 $needsRecreate = $true
             }
+            elseif (-not [string]::IsNullOrWhiteSpace($ExpectedPythonVersion)) {
+                $actualPythonVersion = Get-PythonVersion -PythonCommand $targetPython
+                if ($actualPythonVersion -ne $ExpectedPythonVersion) {
+                    Write-Host "Recreating build environment for '$TargetId' at '$targetVenvRoot' (requires Python $ExpectedPythonVersion, found $actualPythonVersion)..."
+                    $needsRecreate = $true
+                }
+            }
         }
     }
     else {
@@ -86,6 +146,13 @@ function Resolve-TargetPythonCommand {
         & $BasePythonCommand -m venv $targetVenvRoot
         if ($LASTEXITCODE -ne 0) {
             throw "Failed to create virtual environment for target '$TargetId'."
+        }
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace($ExpectedPythonVersion)) {
+        $actualPythonVersion = Get-PythonVersion -PythonCommand $targetPython
+        if ($actualPythonVersion -ne $ExpectedPythonVersion) {
+            throw "Build environment for '$TargetId' uses Python $actualPythonVersion, but the target requires Python $ExpectedPythonVersion. Re-run with -PythonExe pointing to a matching interpreter."
         }
     }
 
@@ -155,6 +222,25 @@ function Install-TorchVariant {
         "cuda" {
             Write-Host "Installing the pinned CUDA Torch/Torchvision pair for torchless runtime-pack target..."
             & $PythonCommand -m pip install --upgrade --force-reinstall --no-cache-dir torch torchvision --index-url https://download.pytorch.org/whl/cu130 --trusted-host download.pytorch.org @constraintArgs
+            break
+        }
+        "xpu" {
+            Write-Host "Installing the pinned Intel XPU Torch/Torchvision pair..."
+            & $PythonCommand -m pip install --upgrade --force-reinstall --no-cache-dir torch torchvision --index-url https://download.pytorch.org/whl/xpu --extra-index-url https://pypi.org/simple @constraintArgs
+            break
+        }
+        "rocm" {
+            Write-Host "Installing the AMD ROCm 7.2.1 Torch runtime for the Windows release target..."
+            $rocmPackages = @(
+                "https://repo.radeon.com/rocm/windows/rocm-rel-7.2.1/rocm_sdk_core-7.2.1-py3-none-win_amd64.whl",
+                "https://repo.radeon.com/rocm/windows/rocm-rel-7.2.1/rocm_sdk_devel-7.2.1-py3-none-win_amd64.whl",
+                "https://repo.radeon.com/rocm/windows/rocm-rel-7.2.1/rocm_sdk_libraries_custom-7.2.1-py3-none-win_amd64.whl",
+                "https://repo.radeon.com/rocm/windows/rocm-rel-7.2.1/rocm-7.2.1.tar.gz",
+                "https://repo.radeon.com/rocm/windows/rocm-rel-7.2.1/torch-2.9.1%2Brocm7.2.1-cp312-cp312-win_amd64.whl",
+                "https://repo.radeon.com/rocm/windows/rocm-rel-7.2.1/torchaudio-2.9.1%2Brocm7.2.1-cp312-cp312-win_amd64.whl",
+                "https://repo.radeon.com/rocm/windows/rocm-rel-7.2.1/torchvision-0.24.1%2Brocm7.2.1-cp312-cp312-win_amd64.whl"
+            )
+            & $PythonCommand -m pip install --upgrade --force-reinstall --no-cache-dir @rocmPackages --trusted-host repo.radeon.com @constraintArgs
             break
         }
         default {
@@ -337,7 +423,8 @@ if ($PlanOnly) {
 
 foreach ($target in $selectedTargets) {
     Write-Host "Building Windows release target '$($target.id)'..."
-    $targetPythonCommand = Resolve-TargetPythonCommand -BasePythonCommand $resolvedPythonCommand -ResolvedBuildRoot $resolvedBuildRoot -TargetId $target.id
+    $targetBasePythonCommand = Resolve-PythonCommandForTarget -BasePythonCommand $resolvedPythonCommand -ConfiguredPythonExe $PythonExe -ExpectedPythonVersion ([string]$target.pythonVersion)
+    $targetPythonCommand = Resolve-TargetPythonCommand -BasePythonCommand $targetBasePythonCommand -ResolvedBuildRoot $resolvedBuildRoot -TargetId $target.id -ExpectedPythonVersion ([string]$target.pythonVersion)
     Install-TargetDependencies -PythonCommand $targetPythonCommand -Target $target -ProjectRoot $projectRoot -ConstraintsFile $constraintsFile
     $archivePath = New-WindowsTargetBundle -PythonCommand $targetPythonCommand -ProjectRoot $projectRoot -Target $target -ResolvedDistRoot $resolvedDistRoot -ResolvedBuildRoot $resolvedBuildRoot
     Write-Host "Built archive: $archivePath"

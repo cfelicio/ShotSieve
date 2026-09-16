@@ -1,8 +1,8 @@
-# Intel XPU source-install track
+# Intel XPU install and release track
 
-ShotSieve can use native PyTorch XPU through the `xpu` runtime target. This is
-an isolated source-install track, not a packaged runtime target. The release
-matrix intentionally continues to publish CPU, CUDA, and Apple MPS packs only.
+ShotSieve can use native PyTorch XPU through the `xpu` runtime target. Windows
+and Linux runtime packs include this track, and the same pinned instructions
+can be used for source installs.
 
 The commands below pin the Torch pair used by this checkout and must be run in
 a fresh virtual environment. Do not mix the XPU wheels with the CPU, CUDA, or
@@ -125,6 +125,7 @@ private paths in a report intended for sharing.
 
 Record a failed explicit-XPU run as unavailable rather than silently rerunning
 it on CPU. Separately run one `--device cpu` smoke when documenting the
-fallback behavior. A successful source-install smoke does not authorize a
-packaged XPU target; PyInstaller collection and a dedicated release target
-remain intentionally out of scope until separately tested.
+fallback behavior. The packaged Windows/Linux XPU targets use the same pinned
+Torch pair and learned-model catalog; source-install evidence does not replace
+the target-specific packaged-bundle and hardware checks required for a release
+claim.

@@ -452,7 +452,6 @@ def test_learned_model_catalog_exposes_all_supported_backends() -> None:
     assert "musiq-spaq" not in models
     assert "maniqa" not in models
     assert "nima" not in models
-    assert "directml" not in runtimes
     assert "intel" in runtimes
     assert "amd" in runtimes
     assert "rocm" in runtimes
@@ -571,10 +570,8 @@ def test_learned_model_aliases_and_runtime_resolution() -> None:
     assert amd_result.runtime == "cpu"
     assert amd_result.fallback_reason is not None
     assert "ROCm" in amd_result.fallback_reason
-    legacy_result = resolve_device("directml", torch_module=NoCudaTorch, import_module=import_missing, system_name="Windows")
-    assert legacy_result.runtime == "cpu"
-    assert legacy_result.fallback_reason is not None
-    assert "retired" in legacy_result.fallback_reason
+    with pytest.raises(learned_iqa_module.LearnedRuntimeUnavailableError, match="runtime 'legacy-adapter'"):
+        resolve_device("legacy-adapter", torch_module=NoCudaTorch, import_module=import_missing, system_name="Windows")
     assert resolve_device("apple", torch_module=MpsTorch, import_module=import_missing, system_name="Darwin").runtime == "mps"
     assert resolve_device("auto", torch_module=MpsTorch, import_module=import_missing, system_name="Darwin").runtime == "mps"
 

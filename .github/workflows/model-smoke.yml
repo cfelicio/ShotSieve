@@ -15,9 +15,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        model:
-          - topiq_nr
-          - clipiqa
+          model:
+            - topiq_nr
+            - clipiqa
+            - qrealign-mini
 
     steps:
       - name: Checkout

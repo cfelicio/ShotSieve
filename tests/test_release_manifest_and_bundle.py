@@ -111,9 +111,6 @@ def test_release_constraints_file_exists_with_required_pins() -> None:
     assert "torch==2.14.0" in torch_constraints
     assert "torchvision==0.29.0" in torch_constraints
 
-    assert not (PROJECT_ROOT / "scripts" / "release-constraints-windows-dml.txt").exists()
-
-
 def test_release_targets_module_does_not_define_bootstrap_matrix_helpers() -> None:
     module_text = (PROJECT_ROOT / "src" / "shotsieve" / "release_targets.py").read_text(encoding="utf-8")
 

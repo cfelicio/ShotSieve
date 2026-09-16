@@ -35,11 +35,11 @@ DEFAULT_RUNTIME_STATUS_TEXT = "rocm:unavailable,cuda:unavailable,xpu:unavailable
 RUNTIME_STATUS_ORDER = ("rocm", "cuda", "xpu", "mps", "cpu")
 XPU_UNAVAILABLE_MESSAGE = (
     "XPU is unavailable in the installed Torch runtime; install the pinned "
-    "source-only Intel XPU wheels and matching Intel GPU driver"
+    "Intel XPU wheels and matching Intel GPU driver"
 )
 ROCM_UNAVAILABLE_MESSAGE = (
     "ROCm is unavailable in the installed Torch runtime; install the pinned "
-    "source-only AMD ROCm wheels and matching ROCm/driver stack"
+    "AMD ROCm wheels and matching ROCm/driver stack"
 )
 RESOURCE_PROFILES = {
     "aggressive": {"vram_factor": 0.80, "cpu_factor": 2.0, "ram_factor": 0.75},
@@ -98,11 +98,6 @@ def normalize_device_target(device: str | None, *, system_name: str | None = Non
     requested = device.strip().casefold()
     normalized = DEVICE_TARGET_ALIASES.get(requested, requested)
     system = current_system_name(system_name)
-
-    if normalized in {"directml", "dml"}:
-        # Keep an old persisted target usable while making the migration visible
-        # in the resolver's fallback reason. The retired runtime is never probed.
-        return "cpu"
 
     if normalized == "apple":
         return "mps" if system == "Darwin" else "apple"
@@ -176,11 +171,8 @@ def _sanitize_runtime_cause(exc: BaseException) -> str:
 
 def resolve_device(device: str | None, *, torch_module, import_module=importlib.import_module, system_name: str | None = None) -> ResolvedDevice:
     system = current_system_name(system_name)
-    raw_requested = (device or "").strip().casefold()
     requested = normalize_device_target(device, system_name=system)
     failures: list[str] = []
-    if raw_requested in {"directml", "dml"}:
-        failures.append("The previously selected DirectML runtime has been retired; using CPU.")
     if requested == "amd" and system == "Windows":
         failures.append("AMD GPU acceleration is supported only for explicitly listed Windows ROCm combinations; using CPU until that source track is validated.")
 
