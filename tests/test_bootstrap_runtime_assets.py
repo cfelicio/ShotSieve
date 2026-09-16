@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from email.message import Message
+import hashlib
 import io
 import sys
 import types
@@ -339,6 +340,113 @@ def test_embedded_install_learned_iqa_sidecar_installs_pyiqa_without_deps(
     assert installed is True
     pyiqa_args = next(args for args in captured_args if any(arg.startswith("pyiqa==") for arg in args))
     assert "--no-deps" in pyiqa_args
+
+
+def test_embedded_install_learned_iqa_sidecar_does_not_replace_loaded_torch(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    site_packages = tmp_path / "site-packages"
+    captured_args: list[list[str]] = []
+
+    fake_pip_main_module = _new_module("pip._internal.cli.main")
+
+    def fake_main(args):
+        captured_args.append(list(args))
+        return 0
+
+    fake_pip_main_module.main = fake_main
+    monkeypatch.setitem(sys.modules, "pip._internal.cli.main", fake_pip_main_module)
+    monkeypatch.setattr(bootstrap_module, "_path_has_pyiqa", lambda path: True, raising=False)
+
+    installed = bootstrap_module._install_learned_iqa_sidecar_with_embedded_pip(
+        runtime="cuda",
+        site_packages=site_packages,
+    )
+
+    assert installed is True
+    requirements = {"timm==1.0.29", "openai-clip==1.0.1", "accelerate==1.15.0"}
+    args_by_requirement = {
+        requirement: args
+        for args in captured_args
+        for requirement in requirements
+        if requirement in args
+    }
+    for requirement in ("timm==1.0.29", "openai-clip==1.0.1", "accelerate==1.15.0"):
+        assert "--no-deps" in args_by_requirement[requirement]
+    assert "--no-build-isolation" in args_by_requirement["openai-clip==1.0.1"]
+
+
+def test_openai_clip_source_archive_installs_pure_python_package(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from shotsieve import bootstrap_sidecar as sidecar_module
+
+    archive_buffer = io.BytesIO()
+    with tarfile.open(fileobj=archive_buffer, mode="w:gz") as archive:
+        files = {
+            "clip/__init__.py": b"from .clip import load\n",
+            "clip/clip.py": b"def load(*args, **kwargs):\n    return None\n",
+            "clip/bpe_simple_vocab_16e6.txt.gz": b"tokenizer-data",
+        }
+        for relative_name, content in files.items():
+            member = tarfile.TarInfo(f"openai-clip-1.0.1/{relative_name}")
+            member.size = len(content)
+            archive.addfile(member, io.BytesIO(content))
+    archive_bytes = archive_buffer.getvalue()
+
+    class _Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self):
+            return archive_bytes
+
+    monkeypatch.setattr(sidecar_module, "_OPENAI_CLIP_SOURCE_SHA256", hashlib.sha256(archive_bytes).hexdigest())
+    monkeypatch.setattr(sidecar_module.urllib.request, "urlopen", lambda *_args, **_kwargs: _Response())
+
+    sidecar_module._install_openai_clip_source(tmp_path)
+
+    assert (tmp_path / "clip" / "__init__.py").read_bytes() == files["clip/__init__.py"]
+    assert (tmp_path / "clip" / "bpe_simple_vocab_16e6.txt.gz").read_bytes() == files["clip/bpe_simple_vocab_16e6.txt.gz"]
+    assert (tmp_path / "openai_clip-1.0.1.dist-info" / "METADATA").read_text(encoding="utf-8").startswith(
+        "Metadata-Version: 2.1\nName: openai-clip\nVersion: 1.0.1\n"
+    )
+
+
+def test_frozen_learned_iqa_install_uses_openai_clip_source_fallback(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from shotsieve import bootstrap_sidecar as sidecar_module
+
+    calls: list[Path] = []
+
+    def fake_source_install(site_packages: Path) -> None:
+        calls.append(site_packages)
+
+    def fail_if_pip_is_called(_args):
+        raise AssertionError("frozen openai-clip install should not invoke pip")
+
+    monkeypatch.setattr(sidecar_module.sys, "frozen", True, raising=False)
+    monkeypatch.setattr(sidecar_module, "_install_openai_clip_source", fake_source_install)
+    monkeypatch.setattr(bootstrap_module, "_load_embedded_pip_main", lambda: fail_if_pip_is_called)
+    monkeypatch.setattr(bootstrap_module, "_patch_distlib_finder_for_frozen", lambda: None)
+    monkeypatch.setattr(bootstrap_module, "_patch_pip_scriptmaker_for_embedded_install", lambda: None)
+    monkeypatch.setattr(bootstrap_module, "_learned_iqa_packages_for_runtime", lambda _runtime: ["openai-clip==1.0.1"])
+    monkeypatch.setattr(bootstrap_module, "_path_has_pyiqa", lambda _path: True)
+
+    installed = bootstrap_module._install_learned_iqa_sidecar_with_embedded_pip(
+        runtime="cuda",
+        site_packages=tmp_path,
+    )
+
+    assert installed is True
+    assert calls == [tmp_path]
 
 
 def test_embedded_install_learned_iqa_sidecar_installs_opencv_headless(

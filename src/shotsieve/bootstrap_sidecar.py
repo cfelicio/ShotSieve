@@ -1,15 +1,19 @@
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import importlib
 import io
 import os
 import pkgutil
+import shutil
 import sys
+import tarfile
 import traceback
+import urllib.request
 import warnings
 from collections.abc import Callable
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 from shotsieve import runtime_support
@@ -19,6 +23,117 @@ DEFAULT_TORCH_AUTO_INSTALL_ENV = "SHOTSIEVE_BOOTSTRAP_AUTO_INSTALL_TORCH"
 DEFAULT_TORCH_SITE_PACKAGES_DIRNAME = "site-packages"
 DISTUTILS_REPLACEMENT_WARNING_PATTERN = r"Setuptools is replacing distutils\..*"
 PIP_UNEXPECTED_IMPORT_WARNING_PATTERN = r"DEPRECATION: Unexpected import of '.*' after pip install started\..*"
+
+# The CUDA/CPU torch package is installed in a separate sidecar step and is
+# imported by the running application before learned-IQA preparation starts.
+# These packages declare torch as a dependency, so allowing pip to resolve
+# their dependencies here makes pip try to replace the loaded torch DLLs on
+# Windows.  Keep their direct runtime dependencies in the sidecar package list
+# below, but do not let pip manage the already-installed torch pair.
+_LEARNED_IQA_NO_DEPS_PACKAGES = frozenset({
+    "pyiqa",
+    "timm",
+    "openai-clip",
+    "accelerate",
+})
+
+# openai-clip is a source-only package from 2022.  Its isolated build invokes
+# the frozen executable as if it were a normal pip runner, which makes the
+# embedded installer reject the build-dependency arguments.  The bundled
+# setuptools is sufficient when build isolation is disabled.
+_LEARNED_IQA_NO_BUILD_ISOLATION_PACKAGES = frozenset({"openai-clip"})
+
+# PyPI publishes openai-clip 1.0.1 as a source archive only.  A normal Python
+# interpreter can build it, but a PyInstaller executable is also sys.executable
+# and is therefore incorrectly invoked by pip's PEP 517 subprocess.  The
+# frozen-runtime fallback below installs the pure-Python package files directly
+# after verifying the pinned archive digest.
+_OPENAI_CLIP_SOURCE_URL = (
+    "https://files.pythonhosted.org/packages/3f/81/26d701ef9fface424b4ca808a5c5674df645ac46447720a540143d11c41e/"
+    "openai-clip-1.0.1.tar.gz"
+)
+_OPENAI_CLIP_SOURCE_SHA256 = "cd40bf2f205c096c49524fcbff484339f793b52afd6e7ffad80a2fe108151721"
+_OPENAI_CLIP_SOURCE_ROOT = "openai-clip-1.0.1"
+_OPENAI_CLIP_DIST_INFO = "openai_clip-1.0.1.dist-info"
+
+
+def _distribution_name(requirement: str) -> str:
+    return requirement.split("==", 1)[0].split("[", 1)[0].strip().casefold()
+
+
+def _learned_iqa_install_options(requirement: str) -> list[str]:
+    distribution_name = _distribution_name(requirement)
+    options: list[str] = []
+    if distribution_name in _LEARNED_IQA_NO_DEPS_PACKAGES:
+        options.append("--no-deps")
+    if distribution_name in _LEARNED_IQA_NO_BUILD_ISOLATION_PACKAGES:
+        options.append("--no-build-isolation")
+    return options
+
+
+def _install_openai_clip_source(site_packages: Path) -> None:
+    """Install the pinned pure-Python openai-clip source package in place."""
+    request = urllib.request.Request(
+        _OPENAI_CLIP_SOURCE_URL,
+        headers={"User-Agent": "ShotSieve-runtime/0.4"},
+    )
+    with urllib.request.urlopen(request, timeout=120) as response:
+        archive_bytes = response.read()
+
+    digest = hashlib.sha256(archive_bytes).hexdigest()
+    if digest != _OPENAI_CLIP_SOURCE_SHA256:
+        raise RuntimeError(
+            "The downloaded openai-clip archive failed its SHA-256 verification."
+        )
+
+    extracted_files = 0
+    source_root = PurePosixPath(_OPENAI_CLIP_SOURCE_ROOT)
+    with tarfile.open(fileobj=io.BytesIO(archive_bytes), mode="r:gz") as source_archive:
+        for member in source_archive.getmembers():
+            member_path = PurePosixPath(member.name)
+            try:
+                relative_path = member_path.relative_to(source_root)
+            except ValueError:
+                continue
+            if not relative_path.parts or relative_path.parts[0] != "clip":
+                continue
+            if not member.isfile() or any(part in {"", ".", ".."} for part in relative_path.parts):
+                continue
+
+            destination = site_packages.joinpath(*relative_path.parts)
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            source = source_archive.extractfile(member)
+            if source is None:
+                raise RuntimeError(f"The openai-clip archive member '{member.name}' could not be read.")
+            with source, destination.open("wb") as output:
+                shutil.copyfileobj(source, output)
+            extracted_files += 1
+
+    if extracted_files == 0 or not (site_packages / "clip" / "__init__.py").is_file():
+        raise RuntimeError("The openai-clip archive did not contain its clip package.")
+
+    dist_info = site_packages / _OPENAI_CLIP_DIST_INFO
+    dist_info.mkdir(parents=True, exist_ok=True)
+    (dist_info / "METADATA").write_text(
+        "Metadata-Version: 2.1\n"
+        "Name: openai-clip\n"
+        "Version: 1.0.1\n"
+        "Summary: OpenAI CLIP\n"
+        "Requires-Dist: ftfy\n"
+        "Requires-Dist: regex\n"
+        "Requires-Dist: tqdm\n",
+        encoding="utf-8",
+    )
+    (dist_info / "WHEEL").write_text(
+        "Wheel-Version: 1.0\n"
+        "Generator: ShotSieve frozen-runtime bootstrap\n"
+        "Root-Is-Purelib: true\n"
+        "Tag: py3-none-any\n",
+        encoding="utf-8",
+    )
+    (dist_info / "top_level.txt").write_text("clip\n", encoding="utf-8")
+
+
 def _battr(name: str, fallback: Any) -> Any:
     mod = sys.modules.get("shotsieve.bootstrap")
     if mod is not None and hasattr(mod, name):
@@ -393,6 +508,12 @@ def _learned_iqa_packages_for_runtime(runtime: str) -> list[str]:
         "scipy",
         "huggingface-hub",
         "pandas",
+        # Direct dependencies of the torch-dependent packages above.  They
+        # are installed explicitly so those packages can use --no-deps.
+        "safetensors",
+        "psutil",
+        "ftfy",
+        "regex",
         "icecream",
     ]
     return packages
@@ -458,8 +579,7 @@ def _install_learned_iqa_sidecar_with_embedded_pip(
             "--upgrade",
             "--no-cache-dir",
         ]
-        if package_name.split("==", 1)[0] == "pyiqa":
-            install_args.append("--no-deps")
+        install_args.extend(_learned_iqa_install_options(package_name))
 
         install_args.extend(
             [
@@ -476,6 +596,29 @@ def _install_learned_iqa_sidecar_with_embedded_pip(
         stdout_buffer = io.StringIO()
         stderr_buffer = io.StringIO()
         exception_text: str | None = None
+
+        if getattr(sys, "frozen", False) and _distribution_name(package_name) == "openai-clip":
+            # Do not send this source-only package through pip in a frozen
+            # process: PEP 517 would launch the ShotSieve EXE as its Python
+            # interpreter.  The direct installer keeps this one package
+            # compatible with the embedded runtime while preserving the
+            # normal pip path for development/source installations.
+            install_args = ["install-source-archive", package_name]
+            try:
+                _install_openai_clip_source(site_packages)
+                return_code = 0
+            except Exception:
+                return_code = 1
+                exception_text = traceback.format_exc()
+            _append_debug_log(
+                package_name=package_name,
+                install_args=install_args,
+                return_code=return_code,
+                stdout_text=stdout_buffer.getvalue(),
+                stderr_text=stderr_buffer.getvalue(),
+                exception_text=exception_text,
+            )
+            return return_code
 
         coerce_func = _battr("_coerce_pip_main_return_code", _coerce_pip_main_return_code)
         try:

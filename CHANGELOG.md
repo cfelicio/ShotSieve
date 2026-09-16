@@ -4,6 +4,36 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.4.2] - 2026-09-15
+
+### Fixed
+
+- Fixed Q-ReAlign Mini preparation on standard Windows accounts by forcing
+  Hugging Face Hub to use copy-based caching, avoiding the WinError 1314
+  symlink privilege failure. This may use more disk space but does not require
+  Developer Mode or administrator privileges.
+- Fixed frozen-runtime installation of source-only `openai-clip` with a
+  verified direct source-archive fallback, so pip no longer launches the
+  packaged ShotSieve executable as a PEP 517 build interpreter.
+- Fixed legacy saved `topiq` settings being reported as retired; they now map
+  to `TOPIQ (Recommended)`. Retired-model messaging now clearly distinguishes
+  old settings from the current recommended model.
+- Added regression coverage for Windows Hub cache policy, WinError 1314
+  diagnostics, legacy TOPIQ normalization, and frozen `openai-clip` setup.
+
+## [0.4.1] - 2026-09-15
+
+### Fixed
+
+- Fixed first-run Windows CUDA learned-IQA installation so `timm` and
+  `accelerate` no longer ask pip to replace the already-loaded PyTorch runtime
+  or its locked CUDA DLLs. Their direct runtime dependencies are installed
+  explicitly by the sidecar bootstrap.
+- Added frozen-runtime pip options for source-only `openai-clip`; the complete
+  direct source-archive fallback is included in 0.4.2.
+- Added regression coverage for the torch-safe learned-IQA sidecar install
+  options.
+
 ## [0.4.0] - 2026-09-14
 
 ### Changed

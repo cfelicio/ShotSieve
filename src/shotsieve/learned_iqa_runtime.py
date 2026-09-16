@@ -6,6 +6,7 @@ import logging
 import os
 import platform
 import re
+import sys
 import threading
 import warnings
 
@@ -646,6 +647,26 @@ def configure_runtime_noise_controls() -> None:
     os.environ.setdefault("TRANSFORMERS_VERBOSITY", "error")
     os.environ.setdefault("TRANSFORMERS_NO_ADVISORY_WARNINGS", "1")
     os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
+
+    if os.name == "nt":
+        # A standard Windows user may not have the SeCreateSymbolicLinkPrivilege.
+        # Hugging Face Hub usually probes and falls back to copies, but some
+        # Python/Windows combinations surface WinError 1314 as OSError during
+        # the actual snapshot pointer creation.  Copy-based caching is slower
+        # and uses more disk, but it works without Developer Mode or elevation.
+        os.environ.setdefault("HF_HUB_DISABLE_SYMLINKS", "1")
+        os.environ.setdefault("HF_HUB_DISABLE_SYMLINKS_WARNING", "1")
+
+        # Respect a Hub import that happened before this function was called.
+        # The Hub reads these environment variables at import time, so update
+        # its already-loaded constants as well.
+        hub_constants = sys.modules.get("huggingface_hub.constants")
+        if hub_constants is not None:
+            try:
+                setattr(hub_constants, "HF_HUB_DISABLE_SYMLINKS", True)
+                setattr(hub_constants, "HF_HUB_DISABLE_SYMLINKS_WARNING", True)
+            except Exception:
+                pass
 
     logging.getLogger("pyiqa").setLevel(logging.WARNING)
     logging.getLogger("huggingface_hub").setLevel(logging.ERROR)

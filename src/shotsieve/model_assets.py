@@ -511,10 +511,21 @@ def classify_preparation_error(
         category = "missing_offline_assets"
         recovery = "Populate the required model caches or turn off offline mode, then open Settings and choose Prepare selected model."
     elif any(isinstance(item, (PermissionError,)) or getattr(item, "errno", None) in {13, 1} for item in chain) or any(
-        token in messages for token in ("permission denied", "access is denied", "read-only file system")
+        token in messages
+        for token in (
+            "permission denied",
+            "access is denied",
+            "read-only file system",
+            "required privilege is not held",
+            "winerror 1314",
+            "symlink",
+        )
     ):
         category = "cache_permissions"
-        recovery = "Choose a writable model cache directory, open Settings, and choose Prepare selected model."
+        recovery = (
+            "Upgrade to the current ShotSieve release, which uses copy-based Hugging Face caching on Windows, "
+            "then choose Prepare selected model. No administrator privileges or Developer Mode are required."
+        )
     elif any(getattr(item, "errno", None) == 28 for item in chain) or any(
         token in messages for token in ("no space left", "not enough space", "disk full")
     ):

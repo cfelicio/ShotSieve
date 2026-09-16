@@ -29,6 +29,17 @@ def test_gpu_memory_error_with_documentation_url_is_not_network_failure() -> Non
     assert "proxy" not in report["recovery_action"]
 
 
+def test_windows_hub_symlink_privilege_error_has_upgrade_recovery() -> None:
+    report = model_assets.classify_preparation_error(
+        OSError("[WinError 1314] A required privilege is not held by the client: symlink"),
+        phase="preparing_model",
+        environ={},
+    )
+
+    assert report["category"] == "cache_permissions"
+    assert "copy-based Hugging Face caching" in report["recovery_action"]
+
+
 def test_model_dependency_versions_include_loader_and_clip(monkeypatch) -> None:
     monkeypatch.setattr(model_assets.importlib.metadata, "version", lambda name: "test-" + name)
     versions = model_assets._dependency_versions()

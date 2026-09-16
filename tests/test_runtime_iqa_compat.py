@@ -136,6 +136,8 @@ def test_qrealign_missing_pinned_snapshot_does_not_fall_back_to_upstream_default
 
 def test_runtime_noise_controls_set_env_and_logger_levels(monkeypatch) -> None:
     monkeypatch.delenv("HF_HUB_DISABLE_PROGRESS_BARS", raising=False)
+    monkeypatch.delenv("HF_HUB_DISABLE_SYMLINKS", raising=False)
+    monkeypatch.delenv("HF_HUB_DISABLE_SYMLINKS_WARNING", raising=False)
     monkeypatch.delenv("TRANSFORMERS_VERBOSITY", raising=False)
     monkeypatch.delenv("TOKENIZERS_PARALLELISM", raising=False)
 
@@ -145,6 +147,9 @@ def test_runtime_noise_controls_set_env_and_logger_levels(monkeypatch) -> None:
     assert os.environ.get("HF_HUB_DISABLE_PROGRESS_BARS") == "1"
     assert os.environ.get("TRANSFORMERS_VERBOSITY") == "error"
     assert os.environ.get("TOKENIZERS_PARALLELISM") == "false"
+    if os.name == "nt":
+        assert os.environ.get("HF_HUB_DISABLE_SYMLINKS") == "1"
+        assert os.environ.get("HF_HUB_DISABLE_SYMLINKS_WARNING") == "1"
     assert logging.getLogger("pyiqa").getEffectiveLevel() >= logging.WARNING
     assert logging.getLogger("huggingface_hub").getEffectiveLevel() >= logging.ERROR
 

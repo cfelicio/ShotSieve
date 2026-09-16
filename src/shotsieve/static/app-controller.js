@@ -542,7 +542,7 @@
       if (persistedModelWasRetired && modelSelect.value) {
         const selectedLabel = modelLabels.get(modelSelect.value) || modelSelect.value;
         showToast(
-          `Saved model "${persistedModel}" is no longer supported; using ${selectedLabel}. Historical scores remain readable.`,
+          `Saved model "${persistedModel}" is no longer offered for new runs; using ${selectedLabel}. Existing scores remain unchanged.`,
           "warning",
         );
         saveUiState({ immediate: true });

@@ -43,6 +43,7 @@ DEVICE_TARGET_ALIASES = {
     "apple": "apple",
 }
 MODEL_NAME_ALIASES = {
+    "topiq": "topiq_nr",
     "topiq-nr": "topiq_nr",
     "topiq_nr": "topiq_nr",
     "topiq-nr-flive": "topiq_nr-flive",
@@ -104,7 +105,7 @@ _COMMON_RUNTIME_POLICY = ("cpu", "cuda", "rocm", "xpu", "mps")
 MODEL_CATALOG = (
     LearnedModelSpec(
         canonical_id="topiq_nr",
-        aliases=("topiq_nr", "topiq-nr"),
+        aliases=("topiq", "topiq_nr", "topiq-nr"),
         label="TOPIQ (Recommended)",
         description="Fast, stable all-rounder for general photo-quality ranking.",
         supported_runtimes=_COMMON_RUNTIME_POLICY,

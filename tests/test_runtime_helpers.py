@@ -544,6 +544,7 @@ def test_learned_model_aliases_and_runtime_resolution() -> None:
         raise ImportError(name)
 
     assert normalize_model_name("TOPIQ-NR") == "topiq_nr"
+    assert normalize_model_name("TOPIQ") == "topiq_nr"
     assert normalize_model_name("topiq_nr_spaq") == "topiq_nr-spaq"
     assert normalize_model_name("Q-ReAlign Mini") == "qrealign-mini"
     assert normalize_model_name("qrealign") == "qrealign-mini"

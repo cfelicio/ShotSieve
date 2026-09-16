@@ -777,8 +777,8 @@ class TestStaticAssetHeaders:
         body = urlopen(f"{base_url}/app-controller.js").read().decode("utf-8")
 
         assert "catalogModelFor" in body
-        assert "Saved model \"${persistedModel}\" is no longer supported" in body
-        assert "Historical scores remain readable." in body
+        assert "Saved model \"${persistedModel}\" is no longer offered for new runs" in body
+        assert "Existing scores remain unchanged." in body
         assert 'saveUiState({ immediate: true });' in body
 
     def test_static_js_scan_only_uses_fast_metadata_path(self, test_server):
