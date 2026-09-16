@@ -154,6 +154,26 @@ def test_runtime_target_id_from_executable_name_detects_windows_nvidia(
     assert target_id == "windows-nvidia"
 
 
+@pytest.mark.parametrize(
+    ("executable_name", "expected_target", "expected_runtime"),
+    (
+        ("ShotSieve-Intel.exe", "windows-intel", "xpu"),
+        ("ShotSieve-AMD.exe", "windows-amd", "rocm"),
+    ),
+)
+def test_experimental_windows_gpu_launcher_names_select_native_runtime(
+    executable_name: str,
+    expected_target: str,
+    expected_runtime: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setattr(sys, "executable", rf"C:\tmp\{executable_name}", raising=False)
+
+    assert desktop_module.runtime_target_id_from_executable_name(system_name="Windows") == expected_target
+    assert desktop_module._runtime_name_from_target_id(expected_target) == expected_runtime
+
+
 def test_maybe_prepare_cuda_torch_runtime_installs_sidecar_when_auto_enabled(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

@@ -96,7 +96,7 @@ py -3.12 -m venv .venv-rocm
   "https://repo.radeon.com/rocm/windows/rocm-rel-7.2.1/rocm-7.2.1.tar.gz"
 .\.venv-rocm\Scripts\python.exe -m pip install --no-cache-dir `
   "https://repo.radeon.com/rocm/windows/rocm-rel-7.2.1/torch-2.9.1%2Brocm7.2.1-cp312-cp312-win_amd64.whl" `
-  "https://repo.radeon.com/rocm/windows/rocm-rel-7.2.1/torchvision-0.24.1-cp312-cp312-win_amd64.whl"
+  "https://repo.radeon.com/rocm/windows/rocm-rel-7.2.1/torchvision-0.24.1%2Brocm7.2.1-cp312-cp312-win_amd64.whl"
 .\.venv-rocm\Scripts\python.exe -m pip install -e ".[learned-iqa]" `
   -c scripts/source-constraints-rocm-windows.txt
 .\.venv-rocm\Scripts\python.exe -m pip check

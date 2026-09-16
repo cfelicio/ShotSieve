@@ -579,7 +579,7 @@ def build_options_payload(
         for entry in model_catalog
         if isinstance(entry, dict) and entry.get("available") and entry.get("canonical_id")
     ] if isinstance(model_catalog, list) else list(runtime_curated_learned_models())
-    runtime_targets_ui = ["auto", "cpu", "cuda", "xpu", "mps"]
+    runtime_targets_ui = ["auto", "cpu", "cuda", "rocm", "xpu", "mps"]
     ai_support = ai_support_status(db_path.parent) if callable(ai_support_status) else {}
     return {
         "database": str(db_path.resolve()),

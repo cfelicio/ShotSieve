@@ -134,7 +134,7 @@
   }
 
   function isAcceleratedRuntime(runtime) {
-    return ["auto", "cuda", "xpu", "nvidia", "intel", "apple", "mps"].includes(String(runtime || "").toLowerCase());
+    return ["auto", "cuda", "rocm", "xpu", "nvidia", "amd", "intel", "apple", "mps"].includes(String(runtime || "").toLowerCase());
   }
 
   function scoreBatchSize(modelName, runtime, serverRecommendations) {

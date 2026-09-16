@@ -525,8 +525,9 @@
         const learnedStatus = aiSupport.pyiqa_available
           ? "Learned-IQA runtime is available."
           : "Learned-IQA runtime is not installed or is unavailable.";
+        const runtimeLabel = runtimeDisplayName(aiSupport.runtime || "cuda");
         const torchStatus = aiSupport.torch_required
-          ? (aiSupport.torch_available ? " CUDA runtime is available." : " CUDA runtime is unavailable; CPU remains usable when supported.")
+          ? (aiSupport.torch_available ? ` ${runtimeLabel} runtime is available.` : ` ${runtimeLabel} runtime is unavailable; CPU remains usable when supported.`)
           : "";
         aiSupportStatus.textContent = `${learnedStatus}${torchStatus} Install or repair is optional.`;
       }

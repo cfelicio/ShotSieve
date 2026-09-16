@@ -483,7 +483,7 @@ def available_learned_backends(*, resource_profile: str | None = None, import_py
     catalog = ",".join(supported_model_names)
     runtime_targets = ",".join(supported_runtime_targets_fn())
     auto_priority = ",".join(auto_runtime_order_fn())
-    vendor_aliases = "nvidia->cuda,amd->cpu(windows until ROCm),intel->xpu,apple->mps"
+    vendor_aliases = "nvidia->cuda,amd->rocm(with validated HIP build),intel->xpu,apple->mps"
 
     try:
         pyiqa, torch = import_pyiqa_runtime_fn()
