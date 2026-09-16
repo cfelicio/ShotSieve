@@ -119,7 +119,6 @@ class WebRouteDependencies:
     default_batch_size: Callable[[], int]
     thread_factory: Callable[..., Any]
     prepare_model: Callable[..., dict[str, object]] | None = None
-    install_ai_support: Callable[..., dict[str, object]] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -203,7 +202,6 @@ _JOB_DEPENDENCIES = frozenset({
     "default_batch_size",
     "first_value",
     "get_preview_cache_root",
-    "install_ai_support",
     "optional_int",
     "optional_string",
     "parse_compare_request",

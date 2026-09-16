@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Removed
+
+- Removed the redundant Settings AI Support panel and its status/install API.
+  Learned-IQA runtime preparation and selected-model preparation remain
+  available through the normal startup and model workflows.
+
 ## [0.4.2] - 2026-09-15
 
 ### Fixed

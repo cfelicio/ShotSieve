@@ -291,41 +291,6 @@ def test_maybe_prepare_learned_iqa_runtime_non_interactive_skips_install_without
     assert any("skipping automatic installation" in message.casefold() for message in messages)
 
 
-def test_install_ai_support_is_explicit_and_reports_runtime_paths(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    data_dir = tmp_path / "data"
-    data_dir.mkdir(parents=True)
-    monkeypatch.setenv("SHOTSIEVE_BOOTSTRAP_AUTO_INSTALL_TORCH", "0")
-    monkeypatch.setenv("SHOTSIEVE_BOOTSTRAP_AUTO_INSTALL_LEARNED_IQA", "0")
-    monkeypatch.setattr(desktop_module, "runtime_target_id_from_executable_name", lambda system_name=None: "windows-nvidia")
-    monkeypatch.setattr(desktop_module, "runtime_bundle_has_usable_cuda_torch", lambda force_reload=False: True)
-    monkeypatch.setattr(desktop_module, "_runtime_has_learned_iqa", lambda: True)
-
-    calls: list[tuple[str, bool]] = []
-
-    def fake_prepare_cuda(data_dir, *, target_id=None, force_install=False, input_func=input, output_func=print):
-        calls.append(("torch", force_install))
-        return True
-
-    def fake_prepare_learned(data_dir, *, target_id=None, assume_install_consent=False, force_install=False, input_func=input, output_func=print):
-        calls.append(("learned", force_install))
-        return True
-
-    monkeypatch.setattr(desktop_module, "maybe_prepare_cuda_torch_runtime", fake_prepare_cuda)
-    monkeypatch.setattr(desktop_module, "maybe_prepare_learned_iqa_runtime", fake_prepare_learned)
-
-    progress: list[dict[str, object]] = []
-    result = desktop_module.install_ai_support(data_dir, progress_callback=progress.append)
-
-    assert result["outcome"] == "completed"
-    assert calls == [("torch", True), ("learned", True)]
-    assert result["target_id"] == "windows-nvidia"
-    assert str(data_dir / "runtime") in str(result["runtime_root"])
-    assert progress[-1]["phase"] == "complete"
-
-
 def test_runtime_pythonpath_updates_prepend_sidecar_path(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     existing_a = str((tmp_path / "existing-a").resolve())
     existing_b = str((tmp_path / "existing-b").resolve())

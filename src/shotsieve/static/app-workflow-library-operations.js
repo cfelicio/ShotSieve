@@ -31,8 +31,6 @@
       const labels = {
         deleting_files: "Deleting files",
         exporting_files: "Exporting files",
-        installing_ai_support: "Installing AI support",
-        checking_ai_support: "Checking AI support",
         moving_files: "Moving files",
         clearing_cache: "Clearing cache",
       };

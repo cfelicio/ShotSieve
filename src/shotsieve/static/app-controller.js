@@ -518,25 +518,6 @@
         }
       }
 
-      const aiSupport = options.ai_support || {};
-      const aiSupportStatus = document.getElementById("ai-support-status");
-      const aiSupportPaths = document.getElementById("ai-support-paths");
-      if (aiSupportStatus) {
-        const learnedStatus = aiSupport.pyiqa_available
-          ? "Learned-IQA runtime is available."
-          : "Learned-IQA runtime is not installed or is unavailable.";
-        const runtimeLabel = runtimeDisplayName(aiSupport.runtime || "cuda");
-        const torchStatus = aiSupport.torch_required
-          ? (aiSupport.torch_available ? ` ${runtimeLabel} runtime is available.` : ` ${runtimeLabel} runtime is unavailable; CPU remains usable when supported.`)
-          : "";
-        aiSupportStatus.textContent = `${learnedStatus}${torchStatus} Install or repair is optional.`;
-      }
-      if (aiSupportPaths) {
-        const cachePaths = aiSupport.model_cache_paths || {};
-        const cachePath = cachePaths.hf_home || cachePaths.hf_hub_cache || cachePaths.torch_home || "default cache locations";
-        aiSupportPaths.textContent = `Target: ${aiSupport.target_id || "current platform"} Â· Runtime sidecar: ${aiSupport.site_packages || "not configured"} Â· Model cache: ${cachePath}`;
-      }
-
       if (workflows?.renderComparisonModelOptions) {
         workflows.renderComparisonModelOptions(options, scoringModes, persisted);
       }

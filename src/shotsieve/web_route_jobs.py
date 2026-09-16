@@ -194,11 +194,6 @@ def _handle_analysis_post_routes(handler: Any, context: WebRouteContext, parsed:
         _route(context, "start_model_prepare_job", start_model_prepare_job)(handler, context, payload)
         return True
 
-    if parsed.path == "/api/ai-support/install/start":
-        payload = deps.read_json_body(handler, max_body_size=context.max_request_body_size)
-        _route(context, "start_ai_support_install_job", start_ai_support_install_job)(handler, context, payload)
-        return True
-
     if parsed.path in {"/api/score-estimate", "/api/compare-estimate"}:
         _route(context, "_send_rows_total_estimate", _send_rows_total_estimate)(handler, context)
         return True
@@ -521,126 +516,6 @@ def _model_prepare_progress(record: dict[str, object]) -> dict[str, object]:
         "percent": phase_percent,
         "processed_counts": record.get("processed_counts") or {},
     }
-
-
-def start_ai_support_install_job(handler: Any, context: WebRouteContext, payload: dict[str, object]) -> None:
-    _ = payload
-    deps = cast(WebRouteDependencies, context.dependency_views.jobs)
-    registry = _route(context, "_require_registry", _require_registry)(context.operation_registry, label="AI support installation")
-    install_fn = getattr(deps, "install_ai_support", None)
-    if not callable(install_fn):
-        raise RuntimeError("AI support installation is unavailable")
-
-    def install_worker(publish: Callable[..., None], cancel_check: Callable[[], None]) -> object:
-        result = install_fn(
-            context.db_path.parent,
-            progress_callback=publish,
-            cancel_check=cancel_check,
-        )
-        if not isinstance(result, dict):
-            raise TypeError("AI support installer returned an invalid result")
-        return result
-
-    def ai_progress_payload(record: object) -> dict[str, object]:
-        if not isinstance(record, dict):
-            raise TypeError("AI support installer emitted an invalid progress record")
-        phase = str(record.get("phase") or "installing_ai_support")
-        processed = int(record.get("files_processed", 0) or 0)
-        total = int(record.get("files_total", 3) or 3)
-        return _route(context, "_progress_payload", _progress_payload_for_operation)(phase, files_processed=processed, files_total=total)
-
-    def ai_result_payload(result: object) -> dict[str, object]:
-        if not isinstance(result, dict):
-            raise TypeError("AI support installer returned an invalid result")
-        return result
-
-    def finish_ai_result(
-        result_registry: JobRegistry,
-        job_id: str,
-        result: dict[str, object],
-    ) -> None:
-        outcome = str(result.get("outcome") or "").casefold()
-        if outcome not in {"failed", "cancelled"}:
-            result_registry.complete(job_id, summary=result)
-            return
-        if not isinstance(result.get("diagnostic"), dict):
-            failure = _model_failure_summary(
-                RuntimeError(
-                    str(
-                        result.get("error")
-                        or (
-                            "AI support installation was cancelled."
-                            if outcome == "cancelled"
-                            else "AI support installation failed."
-                        )
-                    )
-                ),
-                model_name="optional-ai-support",
-                requested_runtime="auto",
-                phase="installing_ai_support",
-            )
-            result = {
-                **result,
-                "diagnostic": failure["diagnostic"],
-                "error_report": failure["error_report"],
-            }
-        result_registry.fail(
-            job_id,
-            error=str(
-                result.get("error")
-                or (
-                    "AI support installation was cancelled."
-                    if outcome == "cancelled"
-                    else "AI support installation failed."
-                )
-            ),
-            summary=result,
-        )
-
-    def ai_exception_payload(error: BaseException) -> _OperationJobFailure:
-        if isinstance(error, InterruptedError):
-            return _OperationJobFailure(
-                error=str(error),
-                summary={
-                    "action": "install_ai_support",
-                    "outcome": "cancelled",
-                    "error": str(error),
-                    "recovery_action": "Retry Install/Repair AI support to finish the runtime installation.",
-                },
-            )
-        failure = _model_failure_summary(
-            error,
-            model_name="optional-ai-support",
-            requested_runtime="auto",
-            phase="installing_ai_support",
-        )
-        diagnostic = failure["diagnostic"]
-        result = {
-            "action": "install_ai_support",
-            "outcome": "failed",
-            "error": str(diagnostic.get("cause") or "AI support installation failed."),
-            "diagnostic": diagnostic,
-            "error_report": diagnostic,
-            "recovery_action": "Retry Install/Repair AI support. Check the sidecar pip-install.log if it fails again.",
-        }
-        return _OperationJobFailure(error=str(result["error"]), summary=result)
-
-    _start_operation_job(
-        handler,
-        context,
-        registry=registry,
-        initial_progress=_route(context, "_progress_payload", _progress_payload_for_operation)(
-            "installing_ai_support",
-            files_processed=0,
-            files_total=3,
-        ),
-        progress_payload=ai_progress_payload,
-        worker=install_worker,
-        result_payload=ai_result_payload,
-        cancel_error=lambda: InterruptedError("AI support installation was cancelled by user."),
-        exception_payload=ai_exception_payload,
-        result_handler=finish_ai_result,
-    )
 
 
 def start_model_prepare_job(handler: Any, context: WebRouteContext, payload: dict[str, object]) -> None:

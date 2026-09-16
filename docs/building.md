@@ -81,7 +81,7 @@ Release manifests are generated from the exact built archives with `scripts/gene
 
 This check covers archives acquired by the bootstrap path. An explicitly supplied or colocated executable in a frozen bundle is a separate trust boundary and is accepted as supplied; the bootstrap does not hash that executable. Verify the containing bundle through its distribution channel when using that path.
 
-Optional AI runtime packages are not downloaded during an ordinary noninteractive `shotsieve-desktop` launch. ShotSieve still opens the catalog and Review UI when learned-IQA support is missing or broken. In Settings, **Install / Repair AI support** runs the existing sidecar installer as an explicit, cancellable best-effort job; it reports the selected target, runtime sidecar path, model cache paths, failure details, and restart guidance. This runtime installation is separate from **Prepare selected model**, which may download model weights and performs the existing first-use validation on CPU-compatible models or the selected accelerator for Q-ReAlign Mini.
+Optional AI runtime packages are not downloaded during an ordinary noninteractive `shotsieve-desktop` launch. ShotSieve still opens the catalog and Review UI when learned-IQA support is missing or broken. Interactive launches may prompt before installing the runtime dependencies; deliberate startup automation remains available through the `SHOTSIEVE_BOOTSTRAP_AUTO_INSTALL_*` environment variables. Runtime installation is separate from **Prepare selected model**, which may download model weights and performs the existing first-use validation on CPU-compatible models or the selected accelerator for Q-ReAlign Mini.
 
 Startup automation remains available when explicitly configured:
 
@@ -134,8 +134,8 @@ Delete and export use the same bulk-selection boundary: the request is normalize
 root-checked before the database opens, the selection revision is validated inside a
 consistent snapshot, and the filtered IDs are materialized before either operation
 mutates the catalog or filesystem. Their operation-specific mutation, compensation,
-and result contracts remain separate. Delete, export, cache-clear, optional AI-support
-installation, and model-preparation jobs share the operation-job launcher for lock
+and result contracts remain separate. Delete, export, cache-clear, and
+model-preparation jobs share the operation-job launcher for lock
 ownership, registry creation, progress publication, cancellation checks, result
 retention, failure conversion, and guaranteed lock release; their worker payloads and
 diagnostic schemas remain operation-specific.
