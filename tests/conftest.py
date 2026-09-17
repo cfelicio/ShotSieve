@@ -215,6 +215,10 @@ def _wait_for_shell_ready(page, timeout: float = 60000) -> None:
         """,
         timeout=timeout,
     )
+    page.wait_for_function(
+        "() => document.body?.dataset?.appReady === 'true'",
+        timeout=timeout,
+    )
 
 
 @pytest.fixture()

@@ -319,6 +319,7 @@ async function boot() {
 
   await controller.refreshWorkspace();
   renderComparisonResults();
+  document.body.dataset.appReady = "true";
 }
 
 boot().catch(handleError);
