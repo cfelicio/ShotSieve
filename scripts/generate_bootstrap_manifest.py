@@ -16,6 +16,7 @@ from shotsieve.release_targets import ReleaseTarget, runtime_pack_release_target
 
 
 SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
+PART_PATTERN_TEMPLATE = r"^{archive_name}\.part-(?P<index>[0-9]+)$"
 DEFAULT_REPOSITORY = "cfelicio/ShotSieve"
 
 
@@ -41,10 +42,49 @@ def _archive_for_target(archive_root: Path, target: ReleaseTarget) -> Path:
     return candidates[0]
 
 
+def _parts_for_target(archive_root: Path, target: ReleaseTarget) -> list[Path]:
+    pattern = re.compile(PART_PATTERN_TEMPLATE.format(archive_name=re.escape(target.archiveName)))
+    candidates = [
+        path
+        for path in archive_root.rglob("*")
+        if path.is_file() and pattern.fullmatch(path.name)
+    ]
+    if not candidates:
+        raise SystemExit(
+            f"Cannot generate bootstrap manifest: archive '{target.archiveName}' or its split parts "
+            f"were not found under '{archive_root}'."
+        )
+
+    parent_paths = {path.parent for path in candidates}
+    if len(parent_paths) != 1:
+        locations = ", ".join(str(path) for path in candidates)
+        raise SystemExit(f"Split parts for archive '{target.archiveName}' are ambiguous: {locations}")
+
+    indexed = sorted(
+        (int(pattern.fullmatch(path.name).group("index")), path) for path in candidates
+    )
+    expected_indices = list(range(len(indexed)))
+    actual_indices = [index for index, _path in indexed]
+    if actual_indices != expected_indices:
+        raise SystemExit(
+            f"Split parts for archive '{target.archiveName}' must be numbered consecutively from zero."
+        )
+    return [path for _index, path in indexed]
+
+
 def _release_archive_url(repository: str, release_tag: str, archive_name: str) -> str:
     encoded_tag = quote(release_tag, safe="")
     encoded_name = quote(archive_name, safe="")
     return f"https://github.com/{repository}/releases/download/{encoded_tag}/{encoded_name}"
+
+
+def _sha256_paths(paths: list[Path]) -> str:
+    digest = hashlib.sha256()
+    for path in paths:
+        with path.open("rb") as handle:
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                digest.update(chunk)
+    return digest.hexdigest()
 
 
 def build_manifest(*, archive_root: Path, release_tag: str, repository: str = DEFAULT_REPOSITORY) -> dict[str, object]:
@@ -54,23 +94,41 @@ def build_manifest(*, archive_root: Path, release_tag: str, repository: str = DE
 
     assets: list[dict[str, object]] = []
     for target in runtime_pack_release_targets():
-        archive_path = _archive_for_target(archive_root, target)
-        digest = sha256_file(archive_path)
+        try:
+            archive_path = _archive_for_target(archive_root, target)
+        except SystemExit as full_archive_error:
+            try:
+                part_paths = _parts_for_target(archive_root, target)
+            except SystemExit:
+                raise full_archive_error
+            digest = _sha256_paths(part_paths)
+        else:
+            part_paths = []
+            digest = sha256_file(archive_path)
         if SHA256_PATTERN.fullmatch(digest) is None:
-            raise SystemExit(f"Generated an invalid SHA-256 for archive '{archive_path}'")
+            raise SystemExit(f"Generated an invalid SHA-256 for archive '{target.archiveName}'")
 
-        assets.append(
-            {
-                "id": target.id,
-                "platform": target.platform,
-                "runtime": target.runtime,
-                "archive_name": target.archiveName,
-                "executable_name": target.executableName,
-                "variant_folder_name": target.variantFolderName,
-                "url": _release_archive_url(repository, normalized_tag, target.archiveName),
-                "sha256": digest,
-            }
-        )
+        asset: dict[str, object] = {
+            "id": target.id,
+            "platform": target.platform,
+            "runtime": target.runtime,
+            "archive_name": target.archiveName,
+            "executable_name": target.executableName,
+            "variant_folder_name": target.variantFolderName,
+            "sha256": digest,
+        }
+        if part_paths:
+            asset["parts"] = [
+                {
+                    "archive_name": path.name,
+                    "url": _release_archive_url(repository, normalized_tag, path.name),
+                    "sha256": sha256_file(path),
+                }
+                for path in part_paths
+            ]
+        else:
+            asset["url"] = _release_archive_url(repository, normalized_tag, target.archiveName)
+        assets.append(asset)
 
     return {
         "version": 1,

@@ -69,6 +69,43 @@ def test_ensure_runtime_asset_falls_back_to_local_archive_when_download_fails(
     assert not (tmp_path / "runtime" / "downloads" / archive_name).exists()
 
 
+def test_download_archive_reassembles_verified_split_parts(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    part_bytes = (b"first-part-", b"second-part")
+    asset = bootstrap_module.RuntimeAsset(
+        id="linux-amd",
+        platform="linux",
+        runtime="rocm",
+        url=None,
+        archive_name="ShotSieve-linux-amd-x64.tar.gz",
+        executable_name="ShotSieve-AMD",
+        variant_folder_name="ShotSieve-linux-amd",
+        sha256=hashlib.sha256(b"".join(part_bytes)).hexdigest(),
+        parts=tuple(
+            bootstrap_module.RuntimeAssetPart(
+                archive_name=f"archive.part-{index:03d}",
+                url=f"https://example.invalid/part-{index}",
+                sha256=hashlib.sha256(part).hexdigest(),
+            )
+            for index, part in enumerate(part_bytes)
+        ),
+    )
+
+    def fake_open_url(url: str):
+        index = int(url.rsplit("-", 1)[-1])
+        return io.BytesIO(part_bytes[index])
+
+    monkeypatch.setattr(bootstrap_module, "open_url", fake_open_url)
+    archive_path = tmp_path / "downloads" / asset.archive_name
+    archive_path.parent.mkdir()
+
+    bootstrap_module._download_archive_with_local_fallback(asset=asset, archive_path=archive_path)
+
+    assert archive_path.read_bytes() == b"".join(part_bytes)
+
+
 def test_ensure_runtime_asset_raises_when_download_fails_and_no_local_archive(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

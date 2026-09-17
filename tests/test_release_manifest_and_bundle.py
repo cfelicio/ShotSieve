@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib
 import importlib.util
 import json
+import hashlib
 import subprocess
 import sys
 import typing
@@ -19,6 +20,7 @@ SCRIPT_PATH = PROJECT_ROOT / "scripts" / "build_windows_releases.ps1"
 MATRIX_SCRIPT_PATH = PROJECT_ROOT / "scripts" / "release_target_matrix.py"
 BUNDLE_SCRIPT_PATH = PROJECT_ROOT / "scripts" / "build_portable_bundle.py"
 BOOTSTRAP_MANIFEST_SCRIPT_PATH = PROJECT_ROOT / "scripts" / "generate_bootstrap_manifest.py"
+PREPARE_RELEASE_ASSETS_SCRIPT_PATH = PROJECT_ROOT / "scripts" / "prepare_release_assets.py"
 EMBED_BOOTSTRAP_MANIFEST_SCRIPT_PATH = PROJECT_ROOT / "scripts" / "embed_manifest_in_bootstrap_archives.py"
 SPEC_PATH = PROJECT_ROOT / "shotsieve.spec"
 RELEASE_CONSTRAINTS_PATH = PROJECT_ROOT / "scripts" / "release-constraints.txt"
@@ -161,6 +163,74 @@ def test_bootstrap_manifest_generator_rejects_missing_runtime_archive(tmp_path: 
 
     with pytest.raises(SystemExit, match="archive .* was not found"):
         module.build_manifest(archive_root=tmp_path, release_tag="v9.9.9")
+
+
+def test_bootstrap_manifest_generator_records_split_runtime_archive_parts(tmp_path: Path) -> None:
+    spec = importlib.util.spec_from_file_location("generate_bootstrap_manifest_parts", BOOTSTRAP_MANIFEST_SCRIPT_PATH)
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    archive_root = tmp_path / "release-assets"
+    archive_root.mkdir()
+    split_target = next(target for target in module.runtime_pack_release_targets() if target.id == "linux-amd")
+    split_bytes = b"part-zero-part-one"
+    split_root = archive_root / "linux-amd-portable"
+    split_root.mkdir()
+    (split_root / f"{split_target.archiveName}.part-000").write_bytes(split_bytes[:9])
+    (split_root / f"{split_target.archiveName}.part-001").write_bytes(split_bytes[9:])
+
+    for target in module.runtime_pack_release_targets():
+        if target.id == split_target.id:
+            continue
+        (archive_root / target.archiveName).write_bytes(target.id.encode("utf-8"))
+
+    manifest = module.build_manifest(
+        archive_root=archive_root,
+        release_tag="v9.9.9",
+        repository="example/ShotSieve",
+    )
+
+    assets = {asset["id"]: asset for asset in cast(list[dict[str, object]], manifest["assets"])}
+    split_asset = assets[split_target.id]
+    assert "url" not in split_asset
+    assert split_asset["sha256"] == hashlib.sha256(split_bytes).hexdigest()
+    parts = cast(list[dict[str, object]], split_asset["parts"])
+    assert [part["archive_name"] for part in parts] == [
+        f"{split_target.archiveName}.part-000",
+        f"{split_target.archiveName}.part-001",
+    ]
+    assert all(len(cast(str, part["sha256"])) == 64 for part in parts)
+
+
+def test_prepare_release_assets_splits_only_oversized_runtime_archives(tmp_path: Path) -> None:
+    spec = importlib.util.spec_from_file_location("prepare_release_assets_script", PREPARE_RELEASE_ASSETS_SCRIPT_PATH)
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    module.GITHUB_RELEASE_ASSET_LIMIT_BYTES = 10
+    module.RELEASE_PART_SIZE_BYTES = 4
+
+    source_root = tmp_path / "downloaded"
+    output_root = tmp_path / "published"
+    source_root.mkdir()
+    split_target = next(target for target in module.runtime_pack_release_targets() if target.id == "linux-intel")
+    for target in module.runtime_pack_release_targets():
+        archive_path = source_root / target.id / target.archiveName
+        archive_path.parent.mkdir(parents=True)
+        archive_path.write_bytes(b"0123456789ABC" if target.id == split_target.id else b"small")
+    (source_root / "python-dist" / "shotsieve-0.4.4.tar.gz").parent.mkdir()
+    (source_root / "python-dist" / "shotsieve-0.4.4.tar.gz").write_bytes(b"sdist")
+
+    published = module.prepare_release_assets(source_root=source_root, output_root=output_root)
+
+    split_parts = sorted(output_root.rglob(f"{split_target.archiveName}.part-*"))
+    assert [part.read_bytes() for part in split_parts] == [b"0123", b"4567", b"89AB", b"C"]
+    assert not (source_root / split_target.id / split_target.archiveName).exists()
+    assert (output_root / "python-dist" / "shotsieve-0.4.4.tar.gz").read_bytes() == b"sdist"
+    assert set(published) == set(output_root.rglob("*")) - {path for path in output_root.rglob("*") if path.is_dir()}
 
 
 def test_bootstrap_pyinstaller_spec_has_been_removed() -> None:

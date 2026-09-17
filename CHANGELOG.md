@@ -46,6 +46,9 @@ All notable changes to this project will be documented in this file.
 - Made frontend startup retry transient local-server failures and report
   unrecoverable bootstrap errors instead of leaving the UI in a blank loading
   state.
+- Kept the Linux Intel/XPU and AMD/ROCm runtime packs publishable within
+  GitHub's per-asset limit by splitting only oversized archives and having the
+  bootstrap launcher reassemble and verify them before extraction.
 
 ## [0.4.3] - 2026-09-16
 

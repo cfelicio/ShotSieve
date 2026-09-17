@@ -37,15 +37,23 @@ def _battr(name: str, fallback: Any) -> Any:
 
 
 @dataclass(slots=True, frozen=True)
+class RuntimeAssetPart:
+    archive_name: str
+    url: str
+    sha256: str
+
+
+@dataclass(slots=True, frozen=True)
 class RuntimeAsset:
     id: str
     platform: str
     runtime: str
-    url: str
+    url: str | None
     archive_name: str
     executable_name: str
     variant_folder_name: str
     sha256: str | None = None
+    parts: tuple[RuntimeAssetPart, ...] = ()
 
 
 def default_runtime_root() -> Path:
@@ -147,7 +155,6 @@ def parse_runtime_asset(entry: dict[str, Any]) -> RuntimeAsset:
         "id",
         "platform",
         "runtime",
-        "url",
         "archive_name",
         "executable_name",
         "variant_folder_name",
@@ -158,15 +165,44 @@ def parse_runtime_asset(entry: dict[str, Any]) -> RuntimeAsset:
         raise SystemExit(f"Bootstrap manifest entry is missing keys: {', '.join(missing)}")
 
     digest = _validate_sha256(entry["sha256"], target_id=entry.get("id"))
+    raw_parts = entry.get("parts")
+    parts: list[RuntimeAssetPart] = []
+    if raw_parts is not None:
+        if not isinstance(raw_parts, list) or not raw_parts:
+            raise SystemExit(f"Bootstrap manifest entry for '{entry.get('id')}' has invalid split parts")
+        for part in raw_parts:
+            if not isinstance(part, dict):
+                raise SystemExit(f"Bootstrap manifest entry for '{entry.get('id')}' has an invalid split part")
+            part_name = part.get("archive_name")
+            part_url = part.get("url")
+            if not isinstance(part_name, str) or not part_name.strip() or Path(part_name).name != part_name:
+                raise SystemExit(f"Bootstrap manifest entry for '{entry.get('id')}' has an invalid split part name")
+            if not isinstance(part_url, str) or not part_url.strip():
+                raise SystemExit(f"Bootstrap manifest entry for '{entry.get('id')}' has an invalid split part URL")
+            parts.append(
+                RuntimeAssetPart(
+                    archive_name=part_name,
+                    url=part_url,
+                    sha256=_validate_sha256(part.get("sha256"), target_id=entry.get("id")),
+                )
+            )
+
+    raw_url = entry.get("url")
+    if raw_url is not None and (not isinstance(raw_url, str) or not raw_url.strip()):
+        raise SystemExit(f"Bootstrap manifest entry for '{entry.get('id')}' has an invalid URL")
+    if raw_url is None and not parts:
+        raise SystemExit(f"Bootstrap manifest entry for '{entry.get('id')}' is missing keys: url")
+
     return RuntimeAsset(
         id=str(entry["id"]),
         platform=str(entry["platform"]),
         runtime=str(entry["runtime"]),
-        url=str(entry["url"]),
+        url=str(raw_url) if raw_url is not None else None,
         archive_name=str(entry["archive_name"]),
         executable_name=str(entry["executable_name"]),
         variant_folder_name=str(entry["variant_folder_name"]),
         sha256=digest,
+        parts=tuple(parts),
     )
 
 
@@ -202,6 +238,14 @@ def _validate_manifest_digests(manifest: object) -> dict[str, Any]:
         if not isinstance(entry, dict):
             raise SystemExit("Bootstrap manifest contains a non-object asset entry")
         _validate_sha256(entry.get("sha256"), target_id=entry.get("id"))
+        raw_parts = entry.get("parts")
+        if raw_parts is not None:
+            if not isinstance(raw_parts, list) or not raw_parts:
+                raise SystemExit("Bootstrap manifest contains invalid split parts")
+            for part in raw_parts:
+                if not isinstance(part, dict):
+                    raise SystemExit("Bootstrap manifest contains an invalid split part")
+                _validate_sha256(part.get("sha256"), target_id=entry.get("id"))
 
     return manifest
 
@@ -513,11 +557,41 @@ def _frozen_colocated_runtime_executable(asset: RuntimeAsset) -> Path | None:
 def _download_archive_with_local_fallback(*, asset: RuntimeAsset, archive_path: Path) -> None:
     open_func = _battr("open_url", open_url)
     try:
-        with open_func(asset.url) as response:
+        if asset.parts:
             with archive_path.open("wb") as handle:
-                shutil.copyfileobj(response, handle)
+                for part in asset.parts:
+                    part_digest = hashlib.sha256()
+                    with open_func(part.url) as response:
+                        while True:
+                            chunk = response.read(1024 * 1024)
+                            if not chunk:
+                                break
+                            part_digest.update(chunk)
+                            handle.write(chunk)
+                    if part_digest.hexdigest() != part.sha256:
+                        raise SystemExit(
+                            f"Downloaded release part hash mismatch for target '{asset.id}' "
+                            f"and part '{part.archive_name}'."
+                        )
+        else:
+            if not asset.url:
+                raise SystemExit(f"Runtime asset '{asset.id}' has no archive URL or split parts.")
+            with open_func(asset.url) as response:
+                with archive_path.open("wb") as handle:
+                    shutil.copyfileobj(response, handle)
         return
+    except SystemExit:
+        if asset.parts:
+            try:
+                archive_path.unlink(missing_ok=True)
+            except OSError:
+                pass
+        raise
     except (urllib.error.HTTPError, urllib.error.URLError):
+        try:
+            archive_path.unlink(missing_ok=True)
+        except OSError:
+            pass
         find_local_func = _battr("find_local_runtime_archive", find_local_runtime_archive)
         local_archive = find_local_func(asset.archive_name)
         if local_archive is not None:
@@ -527,9 +601,10 @@ def _download_archive_with_local_fallback(*, asset: RuntimeAsset, archive_path: 
 
     candidates_func = _battr("local_runtime_archive_candidates", local_runtime_archive_candidates)
     local_candidates = ", ".join(str(path) for path in candidates_func(asset.archive_name))
+    source_url = asset.url or "multipart release assets"
     raise SystemExit(
         f"Failed to download runtime archive '{asset.archive_name}' for target '{asset.id}'. "
-        f"URL: {asset.url}. Also could not find a local fallback archive. "
+        f"URL: {source_url}. Also could not find a local fallback archive. "
         f"Local search paths: {local_candidates}. "
         "If this repository is private, set SHOTSIEVE_GITHUB_TOKEN or GITHUB_TOKEN with release-read access."
     )
@@ -575,6 +650,10 @@ def ensure_runtime_asset(asset: RuntimeAsset, *, runtime_root: Path, force_refre
     sha_func = _battr("sha256_file", sha256_file)
     downloaded_hash = sha_func(archive_path).strip().casefold()
     if downloaded_hash != expected_sha256:
+        try:
+            archive_path.unlink(missing_ok=True)
+        except OSError:
+            pass
         raise SystemExit(
             f"Downloaded archive hash mismatch for target '{asset.id}'. Expected {expected_sha256}, got {downloaded_hash}."
         )

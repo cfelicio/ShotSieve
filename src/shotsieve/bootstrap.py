@@ -20,6 +20,7 @@ from shotsieve.bootstrap_assets import (
     DEFAULT_RELEASE_REPO,
     PORTABLE_RUNTIME_DIRNAME,
     RuntimeAsset,
+    RuntimeAssetPart,
     _build_default_latest_manifest,
     _download_archive_with_local_fallback,
     _find_runtime_executable,
@@ -83,6 +84,7 @@ __all__ = [
     "PIP_UNEXPECTED_IMPORT_WARNING_PATTERN",
     "PORTABLE_RUNTIME_DIRNAME",
     "RuntimeAsset",
+    "RuntimeAssetPart",
     "_build_default_latest_manifest",
     "_coerce_pip_main_return_code",
     "_compose_pythonpath",
@@ -172,6 +174,14 @@ def build_plan(args: argparse.Namespace) -> dict[str, Any]:
             "platform": asset.platform,
             "runtime": asset.runtime,
             "url": asset.url,
+            "parts": [
+                {
+                    "archiveName": part.archive_name,
+                    "url": part.url,
+                    "sha256": part.sha256,
+                }
+                for part in asset.parts
+            ],
             "archiveName": asset.archive_name,
             "executableName": asset.executable_name,
             "variantFolderName": asset.variant_folder_name,
@@ -201,6 +211,14 @@ def main() -> None:
         executable_name=plan["asset"]["executableName"],
         variant_folder_name=plan["asset"]["variantFolderName"],
         sha256=plan["asset"]["sha256"],
+        parts=tuple(
+            RuntimeAssetPart(
+                archive_name=part["archiveName"],
+                url=part["url"],
+                sha256=part["sha256"],
+            )
+            for part in plan["asset"].get("parts", [])
+        ),
     )
 
     executable = ensure_runtime_asset(

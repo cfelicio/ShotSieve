@@ -271,16 +271,22 @@ jobs:
         with:
           path: release-assets
 
-      - name: Set up Python for manifest generation
+      - name: Set up Python for release asset preparation
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
 
+      - name: Prepare release assets within GitHub size limits
+        run: |
+          python scripts/prepare_release_assets.py \
+            --source-root release-assets \
+            --output-root release-publish
+
       - name: Generate checksummed bootstrap manifest
         run: |
           python scripts/generate_bootstrap_manifest.py \
-            --archive-root release-assets \
-            --output release-assets/bootstrap-manifest.json \
+            --archive-root release-publish \
+            --output release-publish/bootstrap-manifest.json \
             --release-tag "${GITHUB_REF_NAME}" \
             --repository "${GITHUB_REPOSITORY}"
 
@@ -288,10 +294,11 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            release-assets/bootstrap-manifest.json
-            release-assets/**/*.whl
-            release-assets/**/*.zip
-            release-assets/**/*.tar.gz
+            release-publish/bootstrap-manifest.json
+            release-publish/**/*.whl
+            release-publish/**/*.zip
+            release-publish/**/*.tar.gz
+            release-publish/**/*.part-*
           generate_release_notes: true
 
       - name: Delete workflow artifacts after publishing release

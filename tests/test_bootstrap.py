@@ -59,6 +59,31 @@ def test_select_manifest_asset_returns_target_entry() -> None:
     assert asset["archive_name"] == "ShotSieve-linux-nvidia-x64.tar.gz"
 
 
+def test_parse_runtime_asset_accepts_verified_split_parts() -> None:
+    entry = {
+        "id": "linux-amd",
+        "platform": "linux",
+        "runtime": "rocm",
+        "archive_name": "ShotSieve-linux-amd-x64.tar.gz",
+        "executable_name": "ShotSieve-AMD",
+        "variant_folder_name": "ShotSieve-linux-amd",
+        "sha256": "a" * 64,
+        "parts": [
+            {
+                "archive_name": "ShotSieve-linux-amd-x64.tar.gz.part-000",
+                "url": "https://example.invalid/part-000",
+                "sha256": "b" * 64,
+            }
+        ],
+    }
+
+    asset = bootstrap_module.parse_runtime_asset(entry)
+
+    assert asset.url is None
+    assert len(asset.parts) == 1
+    assert asset.parts[0].archive_name.endswith("part-000")
+
+
 def test_default_manifest_url_targets_latest_release_asset() -> None:
     assert bootstrap_module.DEFAULT_MANIFEST_URL.endswith("/releases/latest/download/bootstrap-manifest.json")
 

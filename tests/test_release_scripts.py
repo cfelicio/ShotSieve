@@ -126,6 +126,15 @@ def test_release_workflow_installs_chromium_before_required_browser_tests() -> N
     assert test_job.index("python -m playwright install --with-deps chromium") < test_job.index("python -m pytest -q")
 
 
+def test_release_workflow_stages_oversized_assets_as_verified_parts() -> None:
+    workflow = (PROJECT_ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
+
+    assert "scripts/prepare_release_assets.py" in workflow
+    assert "--output-root release-publish" in workflow
+    assert "--archive-root release-publish" in workflow
+    assert "release-publish/**/*.part-*" in workflow
+
+
 def test_release_install_paths_upgrade_packaging_for_runner_tools() -> None:
     workflow_text = (PROJECT_ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
     ci_text = (PROJECT_ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
