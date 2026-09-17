@@ -2,7 +2,7 @@
 pip<26
 setuptools<81
 pyinstaller>=6.19,<7
-packaging>=24,<26
+packaging>=26,<27
 pyiqa==0.1.16
 timm==1.0.29
 huggingface-hub==1.31.0

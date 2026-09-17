@@ -101,6 +101,7 @@ def test_release_constraints_file_exists_with_required_pins() -> None:
     assert "pip<26" in constraints_text
     assert "setuptools<81" in constraints_text
     assert "pyinstaller>=6.19,<7" in constraints_text
+    assert "packaging>=26,<27" in constraints_text
     assert "pyiqa==0.1.16" in constraints_text
     assert "timm==1.0.29" in constraints_text
     assert "huggingface-hub==1.31.0" in constraints_text
@@ -201,6 +202,15 @@ def test_pyinstaller_spec_hard_excludes_torch_when_skip_bundled_torch_enabled() 
     assert "datas = [entry for entry in datas if not _is_torch_related(entry)]" in spec_text
     assert "binaries = [entry for entry in binaries if not _is_torch_related(entry)]" in spec_text
     assert "excludes=analysis_excludes" in spec_text
+
+
+def test_pyinstaller_spec_excludes_pytorch_interpreter_test_asset() -> None:
+    spec_text = SPEC_PATH.read_text(encoding="utf-8")
+
+    assert "_is_torch_test_asset" in spec_text
+    assert "test_interpreter_async.pt" in spec_text
+    assert "datas = [entry for entry in datas if not _is_torch_test_asset(entry)]" in spec_text
+    assert "binaries = [entry for entry in binaries if not _is_torch_test_asset(entry)]" in spec_text
 
 
 def test_portable_bundle_builder_preserves_target_build_root_and_venv(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

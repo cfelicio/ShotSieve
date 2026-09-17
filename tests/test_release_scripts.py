@@ -126,6 +126,18 @@ def test_release_workflow_installs_chromium_before_required_browser_tests() -> N
     assert test_job.index("python -m playwright install --with-deps chromium") < test_job.index("python -m pytest -q")
 
 
+def test_release_install_paths_upgrade_packaging_for_runner_tools() -> None:
+    workflow_text = (PROJECT_ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
+    ci_text = (PROJECT_ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+    model_smoke_text = (PROJECT_ROOT / ".github/workflows/model-smoke.yml").read_text(encoding="utf-8")
+    windows_script_text = SCRIPT_PATH.read_text(encoding="utf-8")
+
+    assert "pip setuptools wheel packaging" in workflow_text
+    assert "pip setuptools wheel packaging" in ci_text
+    assert "pip setuptools wheel packaging" in model_smoke_text
+    assert "pip setuptools wheel packaging" in windows_script_text
+
+
 def test_integrated_release_script_installs_target_runtime_dependencies() -> None:
     script_text = SCRIPT_PATH.read_text(encoding="utf-8")
 

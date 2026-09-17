@@ -273,7 +273,7 @@ function Install-TargetDependencies {
     }
 
     Write-Host "Refreshing packaging tools for '$($Target.id)'..."
-    & $PythonCommand -m pip install --upgrade pip setuptools wheel -c $targetConstraintsFile -c $ConstraintsFile
+    & $PythonCommand -m pip install --upgrade pip setuptools wheel packaging -c $targetConstraintsFile -c $ConstraintsFile
     if ($LASTEXITCODE -ne 0) {
         throw "Failed to upgrade packaging tools for target '$($Target.id)'."
     }

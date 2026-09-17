@@ -45,7 +45,7 @@ jobs:
 
       - name: Install test dependencies
         run: |
-          python -m pip install --upgrade pip setuptools wheel
+          python -m pip install --upgrade pip setuptools wheel packaging
           python -m pip install -e .[test]
 
       - name: Check installed requirements
@@ -157,7 +157,7 @@ jobs:
 
       - name: Upgrade packaging tools
         run: |
-          python -m pip install --upgrade pip setuptools wheel -c ${{ env.RELEASE_CONSTRAINTS }} -c ${{ matrix.constraintsFile }}
+          python -m pip install --upgrade pip setuptools wheel packaging -c ${{ env.RELEASE_CONSTRAINTS }} -c ${{ matrix.constraintsFile }}
 
       - name: Install CPU Torch runtime
         if: matrix.torchVariant == 'cpu'

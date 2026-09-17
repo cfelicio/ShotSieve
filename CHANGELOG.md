@@ -39,6 +39,10 @@ All notable changes to this project will be documented in this file.
   cancellation retries remain correct regardless of database ID ordering.
 - Made filesystem discovery and parallel scan persistence deterministic across
   operating systems and worker completion order.
+- Fixed release dependency checks on hosted Windows runners by keeping
+  `packaging` compatible with the runner's installed pipx tooling.
+- Excluded PyTorch's interpreter test fixture from portable bundles so it is
+  not mistaken for an application model weight during bundle smoke tests.
 
 ## [0.4.3] - 2026-09-16
 

@@ -24,13 +24,17 @@ if importlib.util.find_spec("clip") is not None:
 skip_bundled_torch = os.environ.get("SHOTSIEVE_SKIP_BUNDLED_TORCH", "").strip().casefold() in {"1", "true", "yes", "on"}
 
 
-def _is_torch_related(entry):
+def _entry_text(entry):
     if isinstance(entry, tuple):
         combined = " ".join(str(part) for part in entry if part is not None)
     else:
         combined = str(entry)
 
-    normalized = combined.replace("\\", "/").casefold()
+    return combined.replace("\\", "/").casefold()
+
+
+def _is_torch_related(entry):
+    normalized = _entry_text(entry)
     return (
         "torchvision" in normalized
         or "torchaudio" in normalized
@@ -40,6 +44,11 @@ def _is_torch_related(entry):
         or " triton" in normalized
         or "/triton/" in normalized
     )
+
+
+def _is_torch_test_asset(entry):
+    """Exclude PyTorch's interpreter test fixture from production bundles."""
+    return _entry_text(entry).endswith("/torch/bin/test_interpreter_async.pt")
 
 # Collect difficult dependencies using collect_all
 difficult_packages = ["pyiqa", "numpy", "PIL", "fastapi", "uvicorn", "jinja2", "icecream", "setuptools", "pip"]
@@ -55,6 +64,12 @@ for pkg in difficult_packages:
             hiddenimports += tmp_hiddenimports
     except Exception as e:
         print(f"Warning: Failed to collect_all for {pkg}: {e}")
+
+# The Linux PyTorch wheel includes this interpreter test fixture. It is not
+# required at runtime and must not be mistaken for an application model file
+# by the portable-bundle smoke test.
+datas = [entry for entry in datas if not _is_torch_test_asset(entry)]
+binaries = [entry for entry in binaries if not _is_torch_test_asset(entry)]
 
 analysis_excludes = []
 if skip_bundled_torch:
