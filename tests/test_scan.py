@@ -59,10 +59,17 @@ def test_scan_root_passes_raw_preview_mode_to_preview_generation(monkeypatch, tm
 
     captured: dict[str, object] = {}
 
-    def fake_generate_preview(path: Path, generated_preview_dir: Path, *, raw_preview_mode: str = "auto"):
+    def fake_generate_preview(
+        path: Path,
+        generated_preview_dir: Path,
+        *,
+        raw_preview_mode: str = "auto",
+        max_decode_pixels: int = 64_000_000,
+    ):
         captured["path"] = path
         captured["preview_dir"] = generated_preview_dir
         captured["raw_preview_mode"] = raw_preview_mode
+        captured["max_decode_pixels"] = max_decode_pixels
         return PreviewResult(
             path=str((generated_preview_dir / "sample.jpg").resolve()),
             status="ready",
@@ -82,6 +89,7 @@ def test_scan_root_passes_raw_preview_mode_to_preview_generation(monkeypatch, tm
             extensions=(".nef",),
             preview_dir=preview_dir,
             raw_preview_mode="high-quality",
+            max_decode_pixels=48_000_000,
         )
 
     assert summary.files_seen == 1
@@ -89,6 +97,7 @@ def test_scan_root_passes_raw_preview_mode_to_preview_generation(monkeypatch, tm
         "path": raw_path,
         "preview_dir": preview_dir,
         "raw_preview_mode": "high-quality",
+        "max_decode_pixels": 48_000_000,
     }
 
 

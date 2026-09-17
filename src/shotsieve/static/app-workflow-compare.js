@@ -614,6 +614,7 @@
         models,
         device: runtimeTarget || null,
         batch_size: requestedBatchSize,
+        max_decode_megapixels: document.getElementById("max-decode-megapixels")?.value || null,
         resource_profile: currentResourceProfile(),
       }, { signal: state.abortController?.signal });
       const compareJobId = String(compareJobStart?.job_id || "");

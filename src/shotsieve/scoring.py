@@ -2,13 +2,14 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
+import inspect
 from pathlib import Path
 import time
 from typing import Callable, Protocol, Sequence, runtime_checkable
 
 from shotsieve.config import ALL_PREVIEWABLE_EXTENSIONS, DEFAULT_RAW_PREVIEW_MODE, PIL_ANALYSIS_EXTENSIONS, PREVIEW_PRIORITY_EXTENSIONS
 from shotsieve.db import roots_path_filter, set_preview_cache_root
-from shotsieve.image_conversion import IMAGE_CONVERSION_VERSION
+from shotsieve.image_conversion import DEFAULT_MAX_DECODE_PIXELS, IMAGE_CONVERSION_VERSION
 from shotsieve.performance import log_duration, monotonic_seconds
 from shotsieve.learned_iqa import DEFAULT_BATCH_SIZE, DEFAULT_MODEL_NAME, LearnedIqaBackend, LearnedScoreResult, build_learned_backend, release_learned_backend, recommended_batch_size, recommended_cpu_workers, detect_hardware_capabilities, resolve_learned_model_version, validate_model_name
 from shotsieve.model_assets import attach_model_diagnostic
@@ -20,6 +21,64 @@ log = logging.getLogger(__name__)
 
 
 COMPARE_MAX_ROWS = 10_000
+
+
+def _score_backend_paths(
+    backend: LearnedIqaBackend,
+    image_paths: Sequence[Path],
+    *,
+    batch_size: int,
+    resource_profile: str | None,
+    max_decode_pixels: int = DEFAULT_MAX_DECODE_PIXELS,
+) -> list[LearnedScoreResult]:
+    """Score paths while preserving compatibility with older integrations."""
+    score_paths = backend.score_paths
+    try:
+        parameters = inspect.signature(score_paths).parameters.values()
+        accepts_budget = any(
+            parameter.name == "max_decode_pixels"
+            or parameter.kind == inspect.Parameter.VAR_KEYWORD
+            for parameter in parameters
+        )
+    except (TypeError, ValueError):
+        accepts_budget = True
+
+    kwargs = {
+        "batch_size": batch_size,
+        "resource_profile": resource_profile,
+    }
+    if accepts_budget:
+        kwargs["max_decode_pixels"] = max_decode_pixels
+    return score_paths(image_paths, **kwargs)
+
+
+def _generate_previews_with_budget(
+    source_paths: Sequence[Path],
+    preview_dir: Path,
+    *,
+    max_workers: int,
+    progress_callback: Callable[[int, int], None] | None,
+    raw_preview_mode: str,
+    max_decode_pixels: int,
+) -> list[PreviewResult]:
+    """Generate previews while preserving the older callback signature."""
+    kwargs = {
+        "max_workers": max_workers,
+        "progress_callback": progress_callback,
+        "raw_preview_mode": raw_preview_mode,
+    }
+    try:
+        parameters = inspect.signature(generate_previews_parallel).parameters.values()
+        accepts_budget = any(
+            parameter.name == "max_decode_pixels"
+            or parameter.kind == inspect.Parameter.VAR_KEYWORD
+            for parameter in parameters
+        )
+    except (TypeError, ValueError):
+        accepts_budget = True
+    if accepts_budget:
+        kwargs["max_decode_pixels"] = max_decode_pixels
+    return generate_previews_parallel(source_paths, preview_dir, **kwargs)
 
 
 def _detect_vram_lazy() -> int | None:
@@ -372,6 +431,7 @@ def _run_score_batches(
     learned_batch_size: int,
     resource_profile: str | None,
     progress_callback: Callable[[AnalysisProgress], None] | None,
+    max_decode_pixels: int = DEFAULT_MAX_DECODE_PIXELS,
 ) -> _ScoreBatchOutcome:
     """Run inference batches and persist each learned score outcome."""
     outcome = _ScoreBatchOutcome()
@@ -393,10 +453,12 @@ def _run_score_batches(
     for chunk_start in range(0, files_total, progress_chunk_size):
         chunk_end = min(chunk_start + progress_chunk_size, files_total)
         chunk = pending_learned[chunk_start:chunk_end]
-        learned_results = backend.score_paths(
+        learned_results = _score_backend_paths(
+            backend,
             [analysis_path for _, analysis_path in chunk],
             batch_size=learned_batch_size,
             resource_profile=resource_profile,
+            max_decode_pixels=max_decode_pixels,
         )
 
         for (row, _), learned_result in zip(chunk, learned_results, strict=True):
@@ -452,6 +514,7 @@ def _prepare_analysis_candidates(
     resource_profile: str | None,
     preview_progress_callback: Callable[[int, int], None] | None,
     preview_start_callback: Callable[[int], None] | None = None,
+    max_decode_pixels: int = DEFAULT_MAX_DECODE_PIXELS,
 ) -> PreparedAnalysisBatch:
     prepared = PreparedAnalysisBatch()
     preview_candidates: list[tuple[object, Path]] = []
@@ -505,12 +568,13 @@ def _prepare_analysis_candidates(
         preview_start_callback(len(pc_paths))
 
     effective_workers = preview_workers or _default_preview_workers(resource_profile)
-    preview_results = generate_previews_parallel(
+    preview_results = _generate_previews_with_budget(
         pc_paths,
         preview_dir,
         max_workers=effective_workers,
         progress_callback=preview_progress_callback,
         raw_preview_mode=raw_preview_mode,
+        max_decode_pixels=max_decode_pixels,
     )
 
     for row, preview_result in zip(pc_rows, preview_results, strict=True):
@@ -556,6 +620,7 @@ def score_files(
     learned_model_version_resolver: Callable[[str], str | None] | None = None,
     progress_callback: Callable[[AnalysisProgress], None] | None = None,
     resource_profile: str | None = None,
+    max_decode_pixels: int = DEFAULT_MAX_DECODE_PIXELS,
 ) -> ScoreSummary:
     """Score catalog rows while preserving the public progress/lifecycle contract."""
     summary = ScoreSummary()
@@ -628,6 +693,7 @@ def score_files(
         resource_profile=resource_profile,
         preview_progress_callback=_score_preview_progress,
         preview_start_callback=_score_preview_start,
+        max_decode_pixels=max_decode_pixels,
     )
 
     pending_learned = [
@@ -669,6 +735,7 @@ def score_files(
             learned_batch_size=learned_batch_size,
             resource_profile=resource_profile,
             progress_callback=progress_callback,
+            max_decode_pixels=max_decode_pixels,
         )
         summary.files_scored += outcome.files_scored
         summary.learned_scored += outcome.learned_scored
@@ -775,6 +842,7 @@ def _run_comparison_model(
     release_backends: bool,
     resource_profile: str | None,
     failed_file_ids: set[int],
+    max_decode_pixels: int = DEFAULT_MAX_DECODE_PIXELS,
 ) -> None:
     """Load, run, and release one comparison model."""
     if progress_callback is not None:
@@ -826,10 +894,12 @@ def _run_comparison_model(
 
         for chunk_start in range(0, len(candidate_rows), effective_compare_chunk_size):
             chunk_end = min(chunk_start + effective_compare_chunk_size, len(candidate_rows))
-            learned_results = backend.score_paths(
+            learned_results = _score_backend_paths(
+                backend,
                 analysis_paths[chunk_start:chunk_end],
                 batch_size=effective_batch_size,
                 resource_profile=resource_profile,
+                max_decode_pixels=max_decode_pixels,
             )
             for row, learned_result in zip(
                 candidate_rows[chunk_start:chunk_end],
@@ -887,6 +957,7 @@ def _run_comparison_models(
     release_backends: bool,
     resource_profile: str | None,
     failed_file_ids: set[int],
+    max_decode_pixels: int = DEFAULT_MAX_DECODE_PIXELS,
 ) -> None:
     """Execute the comparison model loop against shared prepared inputs."""
     model_count = len(summary.model_names)
@@ -906,6 +977,7 @@ def _run_comparison_models(
             release_backends=release_backends,
             resource_profile=resource_profile,
             failed_file_ids=failed_file_ids,
+            max_decode_pixels=max_decode_pixels,
         )
 
 
@@ -927,6 +999,7 @@ def compare_learned_models(
     preview_workers: int | None = None,
     raw_preview_mode: str = DEFAULT_RAW_PREVIEW_MODE,
     resource_profile: str | None = None,
+    max_decode_pixels: int = DEFAULT_MAX_DECODE_PIXELS,
 ) -> ModelComparisonSummary:
     started_at = time.perf_counter()
     normalized_models = [
@@ -987,6 +1060,7 @@ def compare_learned_models(
         resource_profile=resource_profile,
         preview_progress_callback=_compare_preview_progress,
         preview_start_callback=_compare_preview_start,
+        max_decode_pixels=max_decode_pixels,
     )
 
     for candidate in prepared.analysis_candidates:
@@ -1034,6 +1108,7 @@ def compare_learned_models(
         release_backends=release_backends,
         resource_profile=resource_profile,
         failed_file_ids=failed_file_ids,
+        max_decode_pixels=max_decode_pixels,
     )
 
     summary.rows = candidate_rows

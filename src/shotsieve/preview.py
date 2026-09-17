@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import inspect
 import os
 import sys
 import tempfile
@@ -21,6 +22,7 @@ from shotsieve.config import (
 )
 from shotsieve.db import normalize_resolved_path
 from shotsieve.image_conversion import (
+    DEFAULT_MAX_DECODE_PIXELS,
     enforce_decode_budget,
     open_image_with_warnings,
     prepare_image_for_rgb,
@@ -158,6 +160,7 @@ def generate_preview(
     preview_dir: Path,
     *,
     raw_preview_mode: str = DEFAULT_RAW_PREVIEW_MODE,
+    max_decode_pixels: int = DEFAULT_MAX_DECODE_PIXELS,
 ) -> PreviewResult:
     suffix = source_path.suffix.casefold()
     if suffix not in ALL_PREVIEWABLE_EXTENSIONS:
@@ -170,7 +173,12 @@ def generate_preview(
         )
 
     if suffix in RAW_CAMERA_EXTENSIONS:
-        return generate_raw_preview(source_path, preview_dir, raw_preview_mode=raw_preview_mode)
+        return generate_raw_preview(
+            source_path,
+            preview_dir,
+            raw_preview_mode=raw_preview_mode,
+            max_decode_pixels=max_decode_pixels,
+        )
 
     preview_dir.mkdir(parents=True, exist_ok=True)
     preview_path, stale_preview_paths = preview_output_paths(source_path, preview_dir)
@@ -179,9 +187,17 @@ def generate_preview(
     header_warning: str | None = None
     try:
         with _captured_stderr(stderr_buffer):
-            with open_image_with_warnings(source_path) as (image, header_warning):
+            with open_image_with_warnings(
+                source_path,
+                max_pixels=max_decode_pixels,
+            ) as (image, header_warning):
                 source_width, source_height = image.size
-                enforce_decode_budget(source_path, source_width, source_height)
+                enforce_decode_budget(
+                    source_path,
+                    source_width,
+                    source_height,
+                    max_pixels=max_decode_pixels,
+                )
                 image = ImageOps.exif_transpose(image)
                 capture_time = extract_capture_time(image)
                 width, height = image.size
@@ -229,6 +245,7 @@ def generate_raw_preview(
     preview_dir: Path,
     *,
     raw_preview_mode: str = DEFAULT_RAW_PREVIEW_MODE,
+    max_decode_pixels: int = DEFAULT_MAX_DECODE_PIXELS,
 ) -> PreviewResult:
     if rawpy is None:
         return PreviewResult(
@@ -264,6 +281,7 @@ def generate_raw_preview(
                     raw_width=raw_width,
                     raw_height=raw_height,
                     source_path=source_path,
+                    max_decode_pixels=max_decode_pixels,
                 )
                 if result is not None:
                     cleanup_stale_preview_paths(stale_preview_paths)
@@ -275,7 +293,12 @@ def generate_raw_preview(
                     return result
 
                 if raw_width and raw_height:
-                    enforce_decode_budget(source_path, int(raw_width), int(raw_height))
+                    enforce_decode_budget(
+                        source_path,
+                        int(raw_width),
+                        int(raw_height),
+                        max_pixels=max_decode_pixels,
+                    )
 
                 # Slow fallback: full Bayer demosaicing for RAW files without thumbnails.
                 # Keep rawpy's auto-brightening disabled so monochrome / high-key RAWs
@@ -295,7 +318,7 @@ def generate_raw_preview(
 
     try:
         decoded_image = Image.fromarray(rgb)
-        enforce_decode_budget(source_path, *decoded_image.size)
+        enforce_decode_budget(source_path, *decoded_image.size, max_pixels=max_decode_pixels)
         image = prepare_image_for_rgb(decoded_image, apply_exif_orientation=False)
     except (OSError, ValueError, RuntimeError) as exc:
         issue_text = _format_decoder_issues(source_path, stderr_buffer.getvalue())
@@ -335,6 +358,7 @@ def _try_extract_raw_thumbnail(
     raw_width: int | None = None,
     raw_height: int | None = None,
     source_path: Path | None = None,
+    max_decode_pixels: int = DEFAULT_MAX_DECODE_PIXELS,
 ) -> PreviewResult | None:
     """Try to extract the embedded JPEG thumbnail from a RAW file.
 
@@ -359,6 +383,7 @@ def _try_extract_raw_thumbnail(
             with open_image_with_warnings(
                 io.BytesIO(thumb.data),
                 diagnostic_path=source_path,
+                max_pixels=max_decode_pixels,
             ) as (image, header_warning):
                 width, height = image.size
                 if not _raw_thumbnail_is_acceptable(width, height, raw_preview_mode=raw_preview_mode):
@@ -366,7 +391,12 @@ def _try_extract_raw_thumbnail(
                 capture_time = extract_capture_time(image)
                 # Resize if the embedded thumbnail exceeds our preview size.
                 if width > MAX_PREVIEW_SIZE[0] or height > MAX_PREVIEW_SIZE[1]:
-                    enforce_decode_budget(source_path or Path("<RAW thumbnail>"), width, height)
+                    enforce_decode_budget(
+                        source_path or Path("<RAW thumbnail>"),
+                        width,
+                        height,
+                        max_pixels=max_decode_pixels,
+                    )
                     image = prepare_image_for_rgb(image)
                     image.thumbnail(MAX_PREVIEW_SIZE, Image.Resampling.LANCZOS)
                     image.save(preview_path, format="JPEG", quality=85, optimize=False)
@@ -392,7 +422,12 @@ def _try_extract_raw_thumbnail(
         try:
             image = Image.fromarray(thumb.data)
             width, height = image.size
-            enforce_decode_budget(source_path or Path("<RAW thumbnail>"), width, height)
+            enforce_decode_budget(
+                source_path or Path("<RAW thumbnail>"),
+                width,
+                height,
+                max_pixels=max_decode_pixels,
+            )
             image = prepare_image_for_rgb(image, apply_exif_orientation=False)
         except (OSError, TypeError, ValueError):
             # Malformed bitmap thumbnails should not prevent rawpy's full
@@ -610,6 +645,7 @@ def generate_previews_parallel(
     max_workers: int | None = None,
     progress_callback: Callable[[int, int], None] | None = None,
     raw_preview_mode: str = DEFAULT_RAW_PREVIEW_MODE,
+    max_decode_pixels: int = DEFAULT_MAX_DECODE_PIXELS,
 ) -> list[PreviewResult]:
     """Generate previews in parallel, optionally reporting progress via *progress_callback(completed, total)*.
 
@@ -624,7 +660,19 @@ def generate_previews_parallel(
         return []
 
     if total == 1:
-        result = generate_preview(source_paths[0], preview_dir, raw_preview_mode=raw_preview_mode)
+        kwargs = {"raw_preview_mode": raw_preview_mode}
+        try:
+            parameters = inspect.signature(generate_preview).parameters.values()
+            accepts_budget = any(
+                parameter.name == "max_decode_pixels"
+                or parameter.kind == inspect.Parameter.VAR_KEYWORD
+                for parameter in parameters
+            )
+        except (TypeError, ValueError):
+            accepts_budget = True
+        if accepts_budget:
+            kwargs["max_decode_pixels"] = max_decode_pixels
+        result = generate_preview(source_paths[0], preview_dir, **kwargs)
         if progress_callback is not None:
             progress_callback(1, 1)
         return [result]
@@ -637,7 +685,13 @@ def generate_previews_parallel(
 
     with ProcessPoolExecutor(max_workers=workers) as executor:
         future_to_index = {
-            executor.submit(generate_preview, path, preview_dir, raw_preview_mode=raw_preview_mode): idx
+            executor.submit(
+                generate_preview,
+                path,
+                preview_dir,
+                raw_preview_mode=raw_preview_mode,
+                max_decode_pixels=max_decode_pixels,
+            ): idx
             for idx, path in enumerate(source_paths)
         }
         completed = 0

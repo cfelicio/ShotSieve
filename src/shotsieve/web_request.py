@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 import select
 import socket
 import time
@@ -10,6 +11,11 @@ from pathlib import Path
 from typing import Any, TypedDict
 
 from shotsieve.config import normalize_raw_preview_mode
+from shotsieve.image_conversion import (
+    DEFAULT_MAX_DECODE_PIXELS,
+    MAX_MAX_DECODE_PIXELS,
+    MIN_MAX_DECODE_PIXELS,
+)
 from shotsieve.learned_iqa_catalog import validate_model_name
 
 
@@ -26,6 +32,7 @@ class ScanRequest(TypedDict):
     files_total_hint: int
     resource_profile: str | None
     ignore_rules: list[str]
+    max_decode_pixels: int
 
 
 class CompareRequest(TypedDict):
@@ -37,6 +44,7 @@ class CompareRequest(TypedDict):
     batch_size: int
     compare_chunk_size: int | None
     resource_profile: str | None
+    max_decode_pixels: int
 
 
 class RequestBodyTimeoutError(TimeoutError):
@@ -236,6 +244,26 @@ def optional_int(value: object, minimum: int = 0) -> int | None:
     if value is None or value == "":
         return None
     return required_int(value, name="value", minimum=minimum)
+
+
+def parse_max_decode_pixels(value: object) -> int:
+    """Parse the UI's megapixel setting into a bounded pixel budget."""
+    if value is None or value == "":
+        return DEFAULT_MAX_DECODE_PIXELS
+    if isinstance(value, bool):
+        raise ValueError("max_decode_megapixels must be a number")
+    try:
+        megapixels = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("max_decode_megapixels must be a number") from exc
+
+    min_megapixels = MIN_MAX_DECODE_PIXELS / 1_000_000
+    max_megapixels = MAX_MAX_DECODE_PIXELS / 1_000_000
+    if not math.isfinite(megapixels) or not min_megapixels <= megapixels <= max_megapixels:
+        raise ValueError(
+            f"max_decode_megapixels must be between {min_megapixels:g} and {max_megapixels:g}"
+        )
+    return max(MIN_MAX_DECODE_PIXELS, min(MAX_MAX_DECODE_PIXELS, int(megapixels * 1_000_000)))
 
 
 def int_or_default(
@@ -444,6 +472,7 @@ def parse_scan_request(payload: dict[str, object]) -> ScanRequest:
         "files_total_hint": optional_int(payload.get("files_total_hint"), minimum=0) or 0,
         "resource_profile": optional_string(payload.get("resource_profile")),
         "ignore_rules": required_string_list(payload.get("ignore_rules"), name="ignore_rules"),
+        "max_decode_pixels": parse_max_decode_pixels(payload.get("max_decode_megapixels")),
     }
 
 
@@ -472,4 +501,5 @@ def parse_compare_request(
         "batch_size": optional_int(payload.get("batch_size"), minimum=1) or default_batch_size,
         "compare_chunk_size": optional_int(payload.get("compare_chunk_size"), minimum=1),
         "resource_profile": optional_string(payload.get("resource_profile")),
+        "max_decode_pixels": parse_max_decode_pixels(payload.get("max_decode_megapixels")),
     }

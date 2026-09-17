@@ -54,30 +54,31 @@ def _run_retry_scenario(page, scenario: dict[str, object]) -> dict[str, object]:
                 retry_safe: retrySafe,
             }));
 
-            const workflowLibrary = {
-                runTrackedOperation: async ({ payload }) => {
-                    calls.push(JSON.parse(JSON.stringify(payload)));
-                    if (scenario.cancelAfterFirst && calls.length === 2) {
-                        const error = new Error("cancelled");
-                        error.name = "AbortError";
-                        throw error;
-                    }
-                    if (scenario.failSecond && calls.length === 2) {
-                        return {
-                            action: mode,
-                            outcome: "failed",
-                            job_status: "failed",
-                            fatal_error: "second chunk failed",
-                            items: resultItems(payload.file_ids, "failed", false),
-                        };
-                    }
+            const runTrackedOperation = async ({ payload }) => {
+                calls.push(JSON.parse(JSON.stringify(payload)));
+                if (scenario.cancelAfterFirst && calls.length === 2) {
+                    const error = new Error("cancelled");
+                    error.name = "AbortError";
+                    throw error;
+                }
+                if (scenario.failSecond && calls.length === 2) {
                     return {
                         action: mode,
-                        outcome: "success",
-                        items: resultItems(payload.file_ids, "success", false),
+                        outcome: "failed",
+                        job_status: "failed",
+                        fatal_error: "second chunk failed",
+                        items: resultItems(payload.file_ids, "failed", false),
                     };
-                },
+                }
+                return {
+                    action: mode,
+                    outcome: "success",
+                    items: resultItems(payload.file_ids, "success", false),
+                };
             };
+            // Match production composition: the stable bridge is populated
+            // after the export workflow has been constructed.
+            const workflowLibrary = {};
 
             const busy = {
                 withBusy: async (_message, task, options) => {
@@ -113,6 +114,7 @@ def _run_retry_scenario(page, scenario: dict[str, object]) -> dict[str, object]:
                 ui: { openBrowser: () => {}, handleError: () => {} },
                 workflowLibrary,
             });
+            workflowLibrary.runTrackedOperation = runTrackedOperation;
 
             await workflow.retrySafeOperation();
             return {

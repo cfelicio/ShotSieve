@@ -28,6 +28,7 @@ from shotsieve.web_route_common import (
     send_json,
     send_json_error,
 )
+from shotsieve.web_request import parse_max_decode_pixels
 from shotsieve import web_route_scan as _scan_runner
 
 # Keep the historical private helper imports available to web_routes and
@@ -436,6 +437,7 @@ def start_score_job(handler: Any, context: WebRouteContext, payload: dict[str, o
     learned_device = deps.optional_string(payload.get("device"))
     resource_profile = deps.optional_string(payload.get("resource_profile"))
     raw_preview_mode = normalize_raw_preview_mode(deps.optional_string(payload.get("preview_mode")))
+    max_decode_pixels = parse_max_decode_pixels(payload.get("max_decode_megapixels"))
     requested_model = deps.optional_string(payload.get("learned_backend_name"))
     if requested_model:
         validate_model_name(requested_model)
@@ -470,6 +472,7 @@ def start_score_job(handler: Any, context: WebRouteContext, payload: dict[str, o
                     learned_batch_size=deps.optional_int(payload.get("batch_size"), minimum=1) or deps.default_batch_size(),
                     preview_dir=preview_dir,
                     raw_preview_mode=raw_preview_mode,
+                    max_decode_pixels=max_decode_pixels,
                     progress_callback=publish_progress,
                     resource_profile=resource_profile,
                 )
@@ -650,6 +653,7 @@ def start_compare_job(handler: Any, context: WebRouteContext, payload: dict[str,
                     progress_callback=publish_progress,
                     preview_dir=preview_dir,
                     raw_preview_mode=raw_preview_mode,
+                    max_decode_pixels=compare_request["max_decode_pixels"],
                     resource_profile=compare_request.get("resource_profile"),
                 )
 

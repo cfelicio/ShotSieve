@@ -97,6 +97,7 @@
         database: currentDatabaseMarker(),
         libraryRoot: documentRef.getElementById("library-root-input")?.value || "",
         extensions: documentRef.getElementById("extensions-input")?.value || "",
+        maxDecodeMegapixels: documentRef.getElementById("max-decode-megapixels")?.value || "64",
         recursive: documentRef.getElementById("recursive-toggle")?.checked ?? true,
         model: documentRef.getElementById("model-select")?.value || "",
         device: documentRef.getElementById("device-select")?.value || "auto",

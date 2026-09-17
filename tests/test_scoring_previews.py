@@ -47,11 +47,20 @@ def test_prepare_analysis_candidates_prefers_generated_preview_and_returns_persi
     preview_dir.mkdir(parents=True, exist_ok=True)
     create_image(ready_preview)
 
-    def fake_generate_previews_parallel(source_paths, generated_preview_dir: Path, *, max_workers=None, progress_callback=None, raw_preview_mode="auto"):
+    def fake_generate_previews_parallel(
+        source_paths,
+        generated_preview_dir: Path,
+        *,
+        max_workers=None,
+        progress_callback=None,
+        raw_preview_mode="auto",
+        max_decode_pixels=64_000_000,
+    ):
         assert source_paths == [tiff_path]
         assert generated_preview_dir == preview_dir
         assert max_workers == 7
         assert raw_preview_mode == "auto"
+        assert max_decode_pixels == 48_000_000
         return [
             preview_module.PreviewResult(
                 path=str(ready_preview),
@@ -79,6 +88,7 @@ def test_prepare_analysis_candidates_prefers_generated_preview_and_returns_persi
         raw_preview_mode="auto",
         resource_profile="normal",
         preview_progress_callback=None,
+        max_decode_pixels=48_000_000,
     )
 
     assert len(prepared.analysis_candidates) == 1

@@ -10,6 +10,7 @@ import numpy as np
 from PIL import Image
 
 from shotsieve.image_conversion import (
+    DEFAULT_MAX_DECODE_PIXELS,
     enforce_decode_budget,
     open_image_with_warnings,
     prepare_image_for_rgb,
@@ -30,13 +31,18 @@ def _is_cuda_tensor_device(tensor_device: object | None) -> bool:
     return str(tensor_device).strip().casefold().startswith("cuda")
 
 
-def _load_single_image(path: Path, image_size: int) -> np.ndarray:
+def _load_single_image(
+    path: Path,
+    image_size: int,
+    *,
+    max_decode_pixels: int = DEFAULT_MAX_DECODE_PIXELS,
+) -> np.ndarray:
     """Load and preprocess a single image for model inference."""
-    with open_image_with_warnings(path) as (image, header_warning):
+    with open_image_with_warnings(path, max_pixels=max_decode_pixels) as (image, header_warning):
         width, height = image.size
         if header_warning:
             log.warning("Image decoder warning for %s: %s", path, header_warning)
-        enforce_decode_budget(path, width, height)
+        enforce_decode_budget(path, width, height, max_pixels=max_decode_pixels)
         image = prepare_image_for_rgb(image)
         image = image.resize((image_size, image_size), Image.Resampling.BICUBIC)
         result = np.asarray(image, dtype=np.float32) / 255.0
@@ -80,10 +86,15 @@ def load_batch_tensor(
     tensor_device=None,
     executor=None,
     use_channels_last: bool = False,
+    max_decode_pixels: int = DEFAULT_MAX_DECODE_PIXELS,
 ):
     from concurrent.futures import ThreadPoolExecutor
 
-    loader = functools.partial(_load_single_image, image_size=image_size)
+    loader = functools.partial(
+        _load_single_image,
+        image_size=image_size,
+        max_decode_pixels=max_decode_pixels,
+    )
     if executor is not None:
         arrays = list(executor.map(loader, image_paths))
     else:

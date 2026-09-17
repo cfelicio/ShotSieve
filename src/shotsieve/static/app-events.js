@@ -115,6 +115,11 @@
         recursiveToggle.checked = true;
       }
 
+      const maxDecodeMegapixels = document.getElementById("max-decode-megapixels");
+      if (maxDecodeMegapixels) {
+        maxDecodeMegapixels.value = String(state.options?.default_max_decode_megapixels || 64);
+      }
+
       const modelSelect = document.getElementById("model-select");
       if (modelSelect) {
         const defaultModel = state.options?.default_scoring_mode || modelSelect.options?.[0]?.value || "";
@@ -404,6 +409,7 @@
       [
         "library-root-input",
         "extensions-input",
+        "max-decode-megapixels",
         "recursive-toggle",
         "model-select",
         "device-select",

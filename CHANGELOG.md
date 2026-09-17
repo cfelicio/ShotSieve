@@ -2,6 +2,22 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.4.4] - Unreleased
+
+### Changed
+
+- Added an adjustable maximum source decode budget to Settings. It
+  defaults to 64 MP, is applied consistently to scans, re-scoring, and model
+  comparison, and is bounded to prevent unsafe memory requests.
+
+### Fixed
+
+- Fixed the Export dialog's **Browse** action so it resolves the folder
+  browser through the completed library workflow bridge instead of an
+  undefined early-captured handler.
+- Fixed export-operation retries to resolve `runTrackedOperation` through the
+  same late-bound workflow bridge.
+
 ## [0.4.3] - 2026-09-16
 
 ### Added

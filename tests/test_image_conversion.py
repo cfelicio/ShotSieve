@@ -14,6 +14,8 @@ from shotsieve import scanner as scanner_module
 from shotsieve import learned_iqa_preprocessing as preprocessing_module
 from shotsieve.db import connect, initialize_database
 from shotsieve.image_conversion import (
+    DEFAULT_MAX_DECODE_PIXELS,
+    enforce_decode_budget,
     IMAGE_CONVERSION_VERSION,
     ImageDecodeLimitError,
     MAX_DECODE_PIXELS,
@@ -44,6 +46,14 @@ def test_rgba_and_palette_transparency_are_composited_on_the_same_white_matte() 
     assert rgba_converted.getpixel((1, 0)) == expected[1]
     assert palette_converted.getpixel((0, 0)) == expected[0]
     assert palette_converted.getpixel((1, 0)) == expected[1]
+
+
+def test_decode_budget_defaults_to_64_megapixels_and_can_be_lowered_per_call() -> None:
+    assert DEFAULT_MAX_DECODE_PIXELS == 64_000_000
+    enforce_decode_budget(Path("phone.jpg"), 6_048, 8_064)
+
+    with pytest.raises(ImageDecodeLimitError, match="safe decode budget"):
+        enforce_decode_budget(Path("phone.jpg"), 6_048, 8_064, max_pixels=40_000_000)
 
 
 def test_scoring_preprocessing_matches_shared_conversion_for_transparent_png(tmp_path: Path) -> None:

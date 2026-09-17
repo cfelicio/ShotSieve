@@ -21,12 +21,18 @@ TRANSPARENCY_MATTE = (255, 255, 255)
 # version whenever the resulting RGB pixels can change.
 IMAGE_CONVERSION_VERSION = "rgba-white-matte-v1"
 
-# A source image is decoded before Pillow can resize it.  Keep this limit
-# below Pillow's default decompression-bomb threshold so normal preview and
-# model-input conversion cannot allocate hundreds of megabytes for one file.
-# Existing generated previews are already bounded and are selected before a
-# source decode, so this only applies to exceptional fallback inputs.
-MAX_DECODE_PIXELS = 40_000_000
+# A source image is decoded before Pillow can resize it.  Existing generated
+# previews are already bounded and are selected before a source decode, so
+# this only applies to exceptional fallback inputs.  The UI exposes this as
+# an adjustable megapixel setting; 64 MP covers current 48/50 MP phone
+# captures while remaining a reasonable default for machines with modest RAM.
+DEFAULT_MAX_DECODE_PIXELS = 64_000_000
+MIN_MAX_DECODE_PIXELS = 1_000_000
+MAX_MAX_DECODE_PIXELS = 256_000_000
+
+# Compatibility name retained for integrations that imported the old
+# constant directly.
+MAX_DECODE_PIXELS = DEFAULT_MAX_DECODE_PIXELS
 
 _IMAGE_HEADER_WARNING_LOCK = threading.Lock()
 
@@ -34,7 +40,7 @@ _HIGH_BIT_GRAYSCALE_MODES = {"I;16", "I;16L", "I;16B", "I;16N"}
 
 
 class ImageDecodeLimitError(ValueError):
-    """Raised when decoding a source would exceed the fixed pixel budget."""
+    """Raised when decoding a source would exceed the configured pixel budget."""
 
     def __init__(
         self,
@@ -98,6 +104,7 @@ def open_image_with_warnings(
     path: object,
     *,
     diagnostic_path: str | Path | None = None,
+    max_pixels: int | None = None,
 ) -> Iterator[tuple[Image.Image, str | None]]:
     """Open an image and return warnings emitted during header inspection.
 
@@ -114,6 +121,12 @@ def open_image_with_warnings(
     with _IMAGE_HEADER_WARNING_LOCK:
         with warnings.catch_warnings(record=True) as recorded:
             warnings.simplefilter("always")
+            previous_max_image_pixels = Image.MAX_IMAGE_PIXELS
+            if max_pixels is not None:
+                # Pillow's default threshold is independent of ShotSieve's
+                # budget and would otherwise reject valid, explicitly
+                # selected 128–200 MP sources before our own header check.
+                Image.MAX_IMAGE_PIXELS = max(1, int(max_pixels))
             try:
                 image_context = Image.open(path)
                 enter_method = getattr(image_context, "__enter__", None)
@@ -123,6 +136,8 @@ def open_image_with_warnings(
                     diagnostic_path or str(path),
                     detail=str(exc),
                 ) from exc
+            finally:
+                Image.MAX_IMAGE_PIXELS = previous_max_image_pixels
             captured = recorded
 
     warning_text = _format_captured_warnings(captured)
@@ -176,8 +191,11 @@ def prepare_image_for_rgb(
 
 __all__ = [
     "ImageDecodeLimitError",
+    "DEFAULT_MAX_DECODE_PIXELS",
     "IMAGE_CONVERSION_VERSION",
+    "MAX_MAX_DECODE_PIXELS",
     "MAX_DECODE_PIXELS",
+    "MIN_MAX_DECODE_PIXELS",
     "TRANSPARENCY_MATTE",
     "enforce_decode_budget",
     "open_image_with_warnings",

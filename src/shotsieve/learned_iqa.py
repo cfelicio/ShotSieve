@@ -329,7 +329,14 @@ class PyiqaBackend:
     def close(self) -> None:
         backend_core.close_backend(self)
 
-    def score_paths(self, image_paths: Sequence[Path], *, batch_size: int = DEFAULT_BATCH_SIZE, resource_profile: str | None = None) -> list[LearnedScoreResult]:
+    def score_paths(
+        self,
+        image_paths: Sequence[Path],
+        *,
+        batch_size: int = DEFAULT_BATCH_SIZE,
+        resource_profile: str | None = None,
+        max_decode_pixels: int | None = None,
+    ) -> list[LearnedScoreResult]:
         return backend_core.score_paths(
             self,
             image_paths,
@@ -342,6 +349,7 @@ class PyiqaBackend:
             load_single_image_fn=_load_single_image,
             result_cls=LearnedScoreResult,
             log_module=log,
+            max_decode_pixels=max_decode_pixels,
         )
 
     def _score_tensor_batch(self, batch_tensor):

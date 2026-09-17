@@ -365,7 +365,9 @@
         state,
         withBusy,
         fetchSelectionRevision,
-        runTrackedOperation: workflowLibrary.runTrackedOperation,
+        // The library workflow is populated after export construction. Keep
+        // this callback late-bound so retries use the completed bridge.
+        runTrackedOperation: (...args) => workflowLibrary.runTrackedOperation(...args),
         refreshWorkspace,
         presentResult: presentOperationResult,
         showToast,

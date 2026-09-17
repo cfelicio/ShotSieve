@@ -3,6 +3,7 @@ from __future__ import annotations
 from contextlib import AbstractContextManager, ExitStack, contextmanager, redirect_stderr, redirect_stdout
 from dataclasses import dataclass
 import gc
+import inspect
 import io
 import logging
 import os
@@ -54,7 +55,14 @@ class LearnedIqaBackend(Protocol):
     name: str
     model_version: str
 
-    def score_paths(self, image_paths: Sequence[Path], *, batch_size: int = DEFAULT_BATCH_SIZE, resource_profile: str | None = None) -> list[LearnedScoreResult]:
+    def score_paths(
+        self,
+        image_paths: Sequence[Path],
+        *,
+        batch_size: int = DEFAULT_BATCH_SIZE,
+        resource_profile: str | None = None,
+        max_decode_pixels: int | None = None,
+    ) -> list[LearnedScoreResult]:
         ...
 
 
@@ -292,7 +300,18 @@ def close_backend(backend, *, gc_module: _GcModuleLike = gc) -> None:
     gc_module.collect()
 
 
-def score_paths(backend, image_paths: Sequence[Path], *, batch_size: int = DEFAULT_BATCH_SIZE, resource_profile: str | None = None, recommended_cpu_workers_fn, max_batch_sizes=None, load_batch_tensor_fn, arrays_to_tensor_fn, load_single_image_fn, result_cls=LearnedScoreResult, log_module=log) -> list[LearnedScoreResult]:
+def _supports_keyword(callable_obj, keyword: str) -> bool:
+    try:
+        parameters = inspect.signature(callable_obj).parameters.values()
+    except (TypeError, ValueError):
+        return True
+    return any(
+        parameter.name == keyword or parameter.kind == inspect.Parameter.VAR_KEYWORD
+        for parameter in parameters
+    )
+
+
+def score_paths(backend, image_paths: Sequence[Path], *, batch_size: int = DEFAULT_BATCH_SIZE, resource_profile: str | None = None, recommended_cpu_workers_fn, max_batch_sizes=None, load_batch_tensor_fn, arrays_to_tensor_fn, load_single_image_fn, result_cls=LearnedScoreResult, log_module=log, max_decode_pixels: int | None = None) -> list[LearnedScoreResult]:
     from concurrent.futures import Future, ThreadPoolExecutor
 
     batch_sizes = max_batch_sizes or MAX_BATCH_SIZES
@@ -303,6 +322,25 @@ def score_paths(backend, image_paths: Sequence[Path], *, batch_size: int = DEFAU
     runtime = getattr(backend, "runtime", None)
     use_channels_last = runtime in {"cpu", "cuda", "rocm"}
     allow_prefetch_overlap = runtime != "cpu"
+    load_batch_accepts_budget = _supports_keyword(load_batch_tensor_fn, "max_decode_pixels")
+    load_single_accepts_budget = _supports_keyword(load_single_image_fn, "max_decode_pixels")
+
+    def load_batch(paths):
+        kwargs = {
+            "image_size": backend.input_size,
+            "torch_module": backend._torch,
+            "tensor_device": backend.tensor_device,
+            "executor": load_pool,
+            "use_channels_last": use_channels_last,
+        }
+        if load_batch_accepts_budget and max_decode_pixels is not None:
+            kwargs["max_decode_pixels"] = max_decode_pixels
+        return load_batch_tensor_fn(paths, **kwargs)
+
+    def load_single(path):
+        if load_single_accepts_budget and max_decode_pixels is not None:
+            return load_single_image_fn(path, backend.input_size, max_decode_pixels=max_decode_pixels)
+        return load_single_image_fn(path, backend.input_size)
 
     with ThreadPoolExecutor(max_workers=pool_workers) as load_pool:
         prefetch_futures: list[Future] | None = None
@@ -321,20 +359,13 @@ def score_paths(backend, image_paths: Sequence[Path], *, batch_size: int = DEFAU
                     )
                     prefetch_futures = None
                 else:
-                    batch_tensor = load_batch_tensor_fn(
-                        batch_paths,
-                        image_size=backend.input_size,
-                        torch_module=backend._torch,
-                        tensor_device=backend.tensor_device,
-                        executor=load_pool,
-                        use_channels_last=use_channels_last,
-                    )
+                    batch_tensor = load_batch(batch_paths)
 
                 next_start = start + effective_batch_size
                 if allow_prefetch_overlap and next_start < total:
                     next_paths = list(image_paths[next_start : next_start + effective_batch_size])
                     prefetch_futures = [
-                        load_pool.submit(load_single_image_fn, path, backend.input_size)
+                        load_pool.submit(load_single, path)
                         for path in next_paths
                     ]
 
@@ -344,14 +375,7 @@ def score_paths(backend, image_paths: Sequence[Path], *, batch_size: int = DEFAU
                 prefetch_futures = None
                 for single_path in batch_paths:
                     try:
-                        single_tensor = load_batch_tensor_fn(
-                            [single_path],
-                            image_size=backend.input_size,
-                            torch_module=backend._torch,
-                            tensor_device=backend.tensor_device,
-                            executor=load_pool,
-                            use_channels_last=use_channels_last,
-                        )
+                        single_tensor = load_batch([single_path])
                         results.extend(backend._score_tensor_batch(single_tensor))
                     except Exception as inner_exc:
                         log_module.error("Failed to score image %s: %s", single_path, inner_exc)

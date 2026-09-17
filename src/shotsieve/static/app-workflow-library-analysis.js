@@ -86,6 +86,7 @@
       const scanPayload = {
         roots: root.split("|").map((r) => r.trim()).filter(Boolean),
         extensions: document.getElementById("extensions-input").value.trim() || null,
+        max_decode_megapixels: document.getElementById("max-decode-megapixels")?.value || null,
         ignore_rules: (document.getElementById("ignore-rules-input")?.value || "")
           .split("\n")
           .map((rule) => rule.trim())
@@ -170,6 +171,7 @@
         learned_backend_name: learnedBackend,
         device: runtimeTarget || null,
         batch_size: requestedBatchSize,
+        max_decode_megapixels: document.getElementById("max-decode-megapixels")?.value || null,
         force: false,
         resource_profile: currentResourceProfile(),
       };

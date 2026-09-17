@@ -164,6 +164,14 @@ def test_runtime_warning_filter_suppresses_known_noisy_messages() -> None:
             UserWarning,
         )
         warnings.warn(
+            "`torch.jit.load` is deprecated. Please switch to `torch.export`.",
+            FutureWarning,
+        )
+        warnings.warn(
+            "`torch.jit.load` is not supported in Python 3.14+ and may break. Please switch to `torch.compile` or `torch.export`.",
+            FutureWarning,
+        )
+        warnings.warn(
             "The following generation flags are not valid and may be ignored: ['temperature', 'top_p']",
             UserWarning,
         )
@@ -174,12 +182,11 @@ def test_runtime_warning_filter_suppresses_known_noisy_messages() -> None:
         )
         warnings.warn("unrelated warning should still be visible", UserWarning)
 
-    visible_messages = [
-        str(entry.message)
-        for entry in captured
-        if issubclass(entry.category, UserWarning)
+    visible_messages = [str(entry.message) for entry in captured]
+    assert visible_messages == [
+        "`torch.jit.load` is not supported in Python 3.14+ and may break. Please switch to `torch.compile` or `torch.export`.",
+        "unrelated warning should still be visible",
     ]
-    assert visible_messages == ["unrelated warning should still be visible"]
 
 
 def test_pkg_resources_packaging_compat_shim_sets_attribute_when_missing_without_warning() -> None:

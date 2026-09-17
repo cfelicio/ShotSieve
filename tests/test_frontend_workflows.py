@@ -160,6 +160,22 @@ def test_export_dialog_close_restores_focus_to_batch_move_trigger(chromium_page)
     assert active_id == "batch-move"
 
 
+def test_export_dialog_browse_opens_folder_browser(chromium_page) -> None:
+    chromium_page, _ = chromium_page
+
+    _open_export_dialog(chromium_page)
+    chromium_page.locator("#browse-export-dir").click()
+    chromium_page.wait_for_function(
+        """
+        () => document.getElementById('folder-browser')?.open === true
+            && Boolean(document.getElementById('browser-path')?.value)
+            && Boolean(document.getElementById('browser-list')?.textContent?.trim())
+        """
+    )
+
+    assert chromium_page.locator("#export-dialog").is_visible()
+
+
 def test_compare_failure_rendering_surfaces_warning_banner_and_failure_aware_summary(chromium_page) -> None:
     chromium_page, expect = chromium_page
     _open_compare_tab(chromium_page)

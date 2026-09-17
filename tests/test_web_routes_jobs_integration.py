@@ -187,6 +187,9 @@ class TestWebRoutesJobsIntegration:
         assert "supports_technical_only" not in payload
         assert payload["default_scoring_mode"] == payload["learned"]["default_model"]
         assert payload["default_preview_mode"] == "auto"
+        assert payload["default_max_decode_megapixels"] == 64
+        assert payload["min_max_decode_megapixels"] == 1
+        assert payload["max_max_decode_megapixels"] == 256
         assert payload["preview_modes"] == ["fast", "auto", "high-quality"]
         assert payload["raw_preview_auto_min_long_edge"] == 1024
         assert "technical-only" not in payload["learned_models"]

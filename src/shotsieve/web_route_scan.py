@@ -36,6 +36,7 @@ class _ScanJobRequest:
     files_total_hint: int
     resource_profile: str | None
     ignore_rules: tuple[str, ...]
+    max_decode_pixels: int
 
     @classmethod
     def from_scan_request(cls, scan_request: ScanRequest) -> _ScanJobRequest:
@@ -53,6 +54,7 @@ class _ScanJobRequest:
             files_total_hint=max(0, scan_request["files_total_hint"]),
             resource_profile=scan_request["resource_profile"],
             ignore_rules=tuple(scan_request["ignore_rules"]),
+            max_decode_pixels=scan_request["max_decode_pixels"],
         )
 
 
@@ -238,6 +240,7 @@ def _scan_one_root(
                     rescan_all=request.rescan_all,
                     generate_previews=request.generate_previews,
                     raw_preview_mode=config.raw_preview_mode,
+                    max_decode_pixels=request.max_decode_pixels,
                     resource_profile=request.resource_profile,
                     progress_callback=_ScanProgressPublisher(
                         registry=registry,

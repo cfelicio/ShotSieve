@@ -26,6 +26,11 @@ from shotsieve.config import (
 )
 from shotsieve.db import database, get_preview_cache_root, initialize_database
 from shotsieve.export import export_files
+from shotsieve.image_conversion import (
+    DEFAULT_MAX_DECODE_PIXELS,
+    MAX_MAX_DECODE_PIXELS,
+    MIN_MAX_DECODE_PIXELS,
+)
 from shotsieve.job_registry import JobRegistry
 from shotsieve.model_assets import prepare_model, read_preparation_record
 from shotsieve.learned_iqa import (
@@ -572,6 +577,9 @@ def build_options_payload(
         "preview_dir": str(preview_dir),
         "default_extensions": list(DEFAULT_SUPPORTED_EXTENSIONS),
         "default_preview_mode": DEFAULT_RAW_PREVIEW_MODE,
+        "default_max_decode_megapixels": DEFAULT_MAX_DECODE_PIXELS // 1_000_000,
+        "min_max_decode_megapixels": MIN_MAX_DECODE_PIXELS // 1_000_000,
+        "max_max_decode_megapixels": MAX_MAX_DECODE_PIXELS // 1_000_000,
         "preview_modes": list(RAW_PREVIEW_MODES),
         "raw_preview_auto_min_long_edge": MIN_RAW_THUMBNAIL_LONG_EDGE,
         "learned": learned,

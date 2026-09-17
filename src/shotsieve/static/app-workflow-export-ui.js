@@ -15,7 +15,12 @@
     const { setBusyMessage, setBusyPhaseProgress, withBusy } = busy;
     const { addLogEntry, showToast } = notifications;
     const { refreshWorkspace } = deps.review;
-    const { openBrowser, handleError } = ui;
+    const { handleError } = ui;
+    // The export and library workflows are composed in dependency order, so
+    // the browser function is added to the stable library bridge afterwards.
+    // Resolve it when the button is used instead of capturing an undefined
+    // value during export workflow construction.
+    const openBrowser = ui.openBrowser || ((...args) => workflowLibrary.openBrowser(...args));
     const { operationTone, operationDetailsText } = operationResults;
 
     function buildSelectedExportRequest(mode) {

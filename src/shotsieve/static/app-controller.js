@@ -447,6 +447,7 @@
       deviceSelect.value = previousDevice || persisted.device || "auto";
 
       document.getElementById("extensions-input").value = persisted.extensions || options.default_extensions.join(",");
+      document.getElementById("max-decode-megapixels").value = persisted.maxDecodeMegapixels || String(options.default_max_decode_megapixels || 64);
       document.getElementById("recursive-toggle").checked = persisted.recursive ?? true;
       document.getElementById("ignore-rules-input").value = persisted.ignoreRules || "";
       if (!currentLibraryRoot() && persisted.libraryRoot) {

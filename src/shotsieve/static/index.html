@@ -485,6 +485,11 @@
                 </select>
                 <span id="resource-profile-detail" class="field-hint">Current scaling will appear here after hardware detection.</span>
               </label>
+              <label>
+                <span>Maximum Source Decode (MP)</span>
+                <input id="max-decode-megapixels" type="number" min="1" max="256" step="1" value="64" inputmode="decimal">
+                <span class="field-hint">64 MP covers most current phone originals. Higher values use more memory; bounded previews are preferred when available.</span>
+              </label>
             </div>
           </section>
 

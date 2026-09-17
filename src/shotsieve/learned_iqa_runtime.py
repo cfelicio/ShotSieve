@@ -28,6 +28,7 @@ from .learned_iqa_catalog import (
 TIMM_LAYERS_DEPRECATION_PATTERN = r"Importing from timm\.models\.layers is deprecated, please import via timm\.layers"
 PKG_RESOURCES_DEPRECATION_PATTERN = r"pkg_resources is deprecated as an API"
 TORCHSCRIPT_ARCHIVE_WARNING_PATTERN = r"'torch\.load' received a zip file that looks like a TorchScript archive"
+TORCH_JIT_LOAD_DEPRECATION_PATTERN = r"`torch\.jit\.load` is deprecated\. Please switch to `torch\.export`\."
 TRANSFORMERS_GENERATION_FLAGS_WARNING_PATTERN = r"The following generation flags are not valid and may be ignored"
 TRANSFORMERS_RETURN_DICT_DEPRECATION_PATTERN = r"`use_return_dict` is deprecated! Use `return_dict` instead!"
 HF_UNAUTHENTICATED_REQUEST_WARNING_PATTERN = r"Warning: You are sending unauthenticated requests to the HF Hub"
@@ -690,6 +691,7 @@ def ensure_pkg_resources_packaging_compat(*, import_module=importlib.import_modu
 
 def install_runtime_warning_filters() -> None:
     warnings.filterwarnings("ignore", message=TIMM_LAYERS_DEPRECATION_PATTERN, category=FutureWarning)
+    warnings.filterwarnings("ignore", message=TORCH_JIT_LOAD_DEPRECATION_PATTERN, category=FutureWarning)
     warnings.filterwarnings("ignore", message=PKG_RESOURCES_DEPRECATION_PATTERN, category=UserWarning)
     warnings.filterwarnings("ignore", message=TORCHSCRIPT_ARCHIVE_WARNING_PATTERN, category=UserWarning)
     warnings.filterwarnings("ignore", message=TRANSFORMERS_GENERATION_FLAGS_WARNING_PATTERN, category=UserWarning)
@@ -718,6 +720,7 @@ __all__ = [
     "RUNTIME_STATUS_ORDER",
     "ResolvedDevice",
     "TIMM_LAYERS_DEPRECATION_PATTERN",
+    "TORCH_JIT_LOAD_DEPRECATION_PATTERN",
     "TORCHSCRIPT_ARCHIVE_WARNING_PATTERN",
     "TRANSFORMERS_GENERATION_FLAGS_WARNING_PATTERN",
     "TRANSFORMERS_RETURN_DICT_DEPRECATION_PATTERN",

@@ -60,8 +60,20 @@ def test_route_shape_helpers_normalize_scan_compare_and_selection_payloads(tmp_p
     assert route_module._scan_request_offset(scan_request) == 2
     assert route_module._scan_request_total_hint(scan_request) == 7
     assert scan_request["preview_mode"] == "high-quality"
+    assert scan_request["max_decode_pixels"] == 64_000_000
     assert route_module._compare_request_models(compare_request) == ["topiq_nr", "clipiqa"]
+    assert compare_request["max_decode_pixels"] == 64_000_000
     assert route_module._selection_excluded_ids({"exclude_file_ids": [1, 2]}) == {1, 2}
+
+
+def test_decode_budget_request_accepts_custom_megapixels_and_rejects_unsafe_values() -> None:
+    from shotsieve.web_request import parse_max_decode_pixels
+
+    assert parse_max_decode_pixels("48") == 48_000_000
+    assert parse_max_decode_pixels(128) == 128_000_000
+
+    with pytest.raises(ValueError, match="between 1 and 256"):
+        parse_max_decode_pixels(257)
 
 
 def test_compare_request_rejects_unknown_model_names() -> None:
