@@ -317,6 +317,13 @@ The target matrix lives in `src/shotsieve/release_targets.py` and is emitted by 
 
 After all runtime-pack build jobs finish, the release workflow runs `scripts/generate_bootstrap_manifest.py` over the downloaded archives and publishes `bootstrap-manifest.json` alongside them. For a local fixture or release rehearsal, use the same generator with `--archive-root`, `--output`, and `--release-tag`; it fails if any target archive is missing or ambiguous.
 
+If a release build succeeds but publishing is interrupted, open the `ci-release`
+workflow under Actions, choose **Run workflow** on `main`, and enter the
+existing tag in `release_tag` (for example, `v0.4.5`). This recovery path
+rebuilds the artifacts and updates the release for that tag. The publish step
+uses the Node 24-compatible `softprops/action-gh-release` runtime and can be
+rerun without changing the tag.
+
 Prepare release references first, then publish the tag. The prep helper updates the package version files and ensures the changelog has an entry for the release:
 
 ```powershell

@@ -135,6 +135,33 @@ def test_release_workflow_stages_oversized_assets_as_verified_parts() -> None:
     assert "release-publish/**/*.part-*" in workflow
 
 
+def test_release_workflow_uses_node24_actions_and_supports_manual_recovery() -> None:
+    workflow_paths = (
+        PROJECT_ROOT / ".github/workflows/release.yml",
+        PROJECT_ROOT / ".github/workflows/ci.yml",
+        PROJECT_ROOT / ".github/workflows/model-smoke.yml",
+    )
+    workflow = workflow_paths[0].read_text(encoding="utf-8")
+    all_workflows = "\n".join(path.read_text(encoding="utf-8") for path in workflow_paths)
+
+    assert "workflow_dispatch:" in workflow
+    assert "release_tag:" in workflow
+    assert "actions/checkout@v5" in all_workflows
+    assert "actions/setup-python@v6" in all_workflows
+    assert "actions/upload-artifact@v6" in all_workflows
+    assert "actions/download-artifact@v7" in workflow
+    assert "softprops/action-gh-release@v3.0.3" in workflow
+    assert "actions/github-script@v8" in workflow
+    assert "tag_name: ${{ inputs.release_tag || github.ref_name }}" in workflow
+    assert "--release-tag \"${RELEASE_TAG}\"" in workflow
+    assert "action-gh-release@v2" not in all_workflows
+    assert "actions/checkout@v4" not in all_workflows
+    assert "actions/setup-python@v5" not in all_workflows
+    assert "actions/upload-artifact@v4" not in all_workflows
+    assert "actions/download-artifact@v4" not in all_workflows
+    assert "actions/github-script@v7" not in all_workflows
+
+
 def test_release_install_paths_upgrade_packaging_for_runner_tools() -> None:
     workflow_text = (PROJECT_ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
     ci_text = (PROJECT_ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
