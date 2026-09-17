@@ -60,6 +60,35 @@ def test_discover_files_pruning(tmp_path: Path) -> None:
     assert "c.jpg" not in paths
 
 
+def test_discover_files_uses_stable_cross_platform_order(tmp_path: Path) -> None:
+    root = tmp_path / "photos"
+    root.mkdir()
+    for relative_path in (
+        Path("z-root.jpg"),
+        Path("a-root.jpg"),
+        Path("z-folder") / "z-child.jpg",
+        Path("a-folder") / "a-child.jpg",
+    ):
+        path = root / relative_path
+        path.parent.mkdir(exist_ok=True)
+        create_image(path)
+
+    files = list(
+        discover_files(
+            root,
+            recursive=True,
+            extensions=(".jpg",),
+        )
+    )
+
+    assert [path.relative_to(root).as_posix() for path in files] == [
+        "a-root.jpg",
+        "z-root.jpg",
+        "a-folder/a-child.jpg",
+        "z-folder/z-child.jpg",
+    ]
+
+
 def test_discover_files_reports_missing_root(tmp_path: Path) -> None:
     with pytest.raises(FileDiscoveryError, match="Unable to enumerate"):
         list(

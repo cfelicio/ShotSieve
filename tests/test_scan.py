@@ -874,3 +874,77 @@ def test_scan_batch_execution_strategies_share_accounting(
     )
 
 
+def test_parallel_scan_persists_results_in_input_order(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Worker completion order must not change catalog insertion order."""
+    from concurrent.futures import Future
+    import shotsieve.scanner as scanner_module
+
+    db_path = tmp_path / "data" / "shotsieve.db"
+    preview_dir = tmp_path / "previews"
+    photo_dir = tmp_path / "photos"
+    photo_dir.mkdir()
+    paths = [photo_dir / f"sample-{index}.jpg" for index in range(4)]
+    initialize_database(db_path)
+
+    def fake_gather_file_metadata(path: Path, **_kwargs) -> dict:
+        return {
+            "path": str(path),
+            "path_key": scanner_module.canonical_path_key(path),
+            "size_bytes": 6,
+            "modified_time": 1.0,
+            "format": "jpg",
+            "last_scan_time": "scan-time",
+            "width": 120,
+            "height": 80,
+            "capture_time": None,
+            "preview_path": None,
+            "preview_status": "ready",
+            "preview_conversion_version": "test",
+            "last_error": None,
+            "scan_status": "new",
+            "analysis_status": None,
+            "analysis_error": None,
+            "last_analysis_time": None,
+            "preserve_metadata": False,
+        }
+
+    class ImmediatePool:
+        def submit(self, function, *args, **kwargs):
+            future = Future()
+            try:
+                future.set_result(function(*args, **kwargs))
+            except BaseException as exc:
+                future.set_exception(exc)
+            return future
+
+    def reverse_wait(futures, *, return_when):
+        _ = return_when
+        return list(reversed(list(futures))), []
+
+    monkeypatch.setattr(scanner_module, "gather_file_metadata", fake_gather_file_metadata)
+    monkeypatch.setattr(scanner_module, "_POOL_THRESHOLD", 0)
+    monkeypatch.setattr(scanner_module.concurrent.futures, "wait", reverse_wait)
+
+    with connect(db_path) as connection:
+        summary = ScanSummary()
+        _process_scan_batch(
+            paths,
+            connection,
+            summary,
+            2,
+            preview_dir=preview_dir,
+            rescan_all=False,
+            generate_previews=True,
+            executor=ImmediatePool(),
+        )
+        stored_paths = [
+            row["path"] for row in connection.execute("SELECT path FROM files ORDER BY id").fetchall()
+        ]
+
+    assert summary.files_added == len(paths)
+    assert stored_paths == [str(path) for path in paths]
+
+

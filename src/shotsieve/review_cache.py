@@ -73,7 +73,10 @@ def _rattr(name: str, fallback: Any) -> Any:
 
 
 def normalize_file_ids(file_ids: Iterable[int]) -> list[int]:
-    normalized = sorted({int(file_id) for file_id in file_ids})
+    # Preserve the caller's selection order. Operation summaries use this
+    # order to identify which rows are safe to retry after cancellation; a
+    # database-ID sort can disagree with the order selected by the user.
+    normalized = list(dict.fromkeys(int(file_id) for file_id in file_ids))
     if not normalized:
         raise ValueError("At least one file_id is required")
     if any(file_id <= 0 for file_id in normalized):
@@ -183,10 +186,12 @@ def remove_files_from_cache(
 ) -> int:
     normalized_ids = normalize_file_ids(file_ids)
     allow_preview_path_fallback = _allow_legacy_preview_path_fallback(connection, preview_cache_root)
-    rows = connection.execute(
-        f"SELECT path, preview_path FROM files WHERE id IN ({','.join('?' for _ in normalized_ids)})",
+    selected_rows = connection.execute(
+        f"SELECT id, path, preview_path FROM files WHERE id IN ({','.join('?' for _ in normalized_ids)})",
         tuple(normalized_ids),
     ).fetchall()
+    rows_by_id = {row["id"]: row for row in selected_rows}
+    rows = [rows_by_id[file_id] for file_id in normalized_ids if file_id in rows_by_id]
 
     for row in rows:
         delete_managed_preview_file(
@@ -612,10 +617,12 @@ def delete_files(
     normalized_ids = normalize_file_ids(file_ids)
     allow_preview_path_fallback = _allow_legacy_preview_path_fallback(connection, preview_cache_root)
     trusted_roots = _trusted_delete_roots(connection) if delete_from_disk else ()
-    rows = connection.execute(
-        f"SELECT id, path, path_key, preview_path FROM files WHERE id IN ({','.join('?' for _ in normalized_ids)}) ORDER BY id",
+    selected_rows = connection.execute(
+        f"SELECT id, path, path_key, preview_path FROM files WHERE id IN ({','.join('?' for _ in normalized_ids)})",
         tuple(normalized_ids),
     ).fetchall()
+    rows_by_id = {row["id"]: row for row in selected_rows}
+    rows = [rows_by_id[file_id] for file_id in normalized_ids if file_id in rows_by_id]
 
     if len(rows) != len(normalized_ids):
         raise ValueError("One or more file_ids do not exist in the cache")

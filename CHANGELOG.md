@@ -35,6 +35,10 @@ All notable changes to this project will be documented in this file.
   same late-bound workflow bridge.
 - Preserved caller selection order during export so cancellation retry IDs
   remain correct across platform-dependent scan insertion orders.
+- Preserved caller selection order for delete and cache operations so
+  cancellation retries remain correct regardless of database ID ordering.
+- Made filesystem discovery and parallel scan persistence deterministic across
+  operating systems and worker completion order.
 
 ## [0.4.3] - 2026-09-16
 

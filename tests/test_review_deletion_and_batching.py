@@ -463,6 +463,7 @@ def test_delete_cancellation_commits_completed_rows_and_retains_unprocessed_rows
     with connect(db_path) as connection:
         scan_root(connection, root=photo_dir, recursive=True, extensions=(".jpg",), preview_dir=tmp_path / "previews")
         file_ids = [row["id"] for row in connection.execute("SELECT id FROM files ORDER BY id").fetchall()]
+        requested_ids = [file_ids[1], file_ids[0]]
         calls = 0
 
         def cancel_after_first_file() -> None:
@@ -474,7 +475,7 @@ def test_delete_cancellation_commits_completed_rows_and_retains_unprocessed_rows
         with pytest.raises(InterruptedError) as exc_info:
             delete_files(
                 connection,
-                file_ids=file_ids,
+                file_ids=requested_ids,
                 delete_from_disk=False,
                 cancel_check=cancel_after_first_file,
             )
@@ -483,11 +484,11 @@ def test_delete_cancellation_commits_completed_rows_and_retains_unprocessed_rows
     assert summary["outcome"] == "cancelled"
     assert summary["completed_count"] == 1
     assert summary["unprocessed_count"] == 1
-    assert summary["safe_retry_ids"] == [file_ids[1]]
+    assert summary["safe_retry_ids"] == [requested_ids[1]]
 
     with connect(db_path) as connection:
         remaining_ids = [row["id"] for row in connection.execute("SELECT id FROM files ORDER BY id").fetchall()]
-    assert remaining_ids == [file_ids[1]]
+    assert remaining_ids == [requested_ids[1]]
 
 
 

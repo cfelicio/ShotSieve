@@ -49,6 +49,11 @@ def canonical_path_key(path: Path) -> str:
     return normalize_resolved_path(path)
 
 
+def _filesystem_name_sort_key(name: str) -> tuple[str, str]:
+    """Return a stable cross-platform ordering for one filesystem name."""
+    return name.casefold(), name
+
+
 class IgnoreMatcher:
     def __init__(self, root: Path, rules: Sequence[str]) -> None:
         self.root = root.expanduser().resolve()
@@ -172,7 +177,7 @@ def discover_files(
     if not recursive:
         try:
             with os.scandir(root_resolved) as entries:
-                for entry in entries:
+                for entry in sorted(entries, key=lambda item: _filesystem_name_sort_key(item.name)):
                     if entry.is_file():
                         path = Path(entry.path)
                         resolved_path = path.resolve()
@@ -195,6 +200,8 @@ def discover_files(
 
     for dirpath, dirnames, filenames in os.walk(root_resolved, topdown=True, onerror=on_walk_error):
         current_dir = Path(dirpath)
+        dirnames.sort(key=_filesystem_name_sort_key)
+        filenames.sort(key=_filesystem_name_sort_key)
         
         for dname in list(dirnames):
             dpath = current_dir / dname
@@ -745,28 +752,32 @@ def _process_parallel_batch(
     assert pool is not None
 
     outcome = _BatchProcessingOutcome()
-    futures: set[concurrent.futures.Future] = set()
+    futures: dict[concurrent.futures.Future, int] = {}
+    result_by_index: dict[int, dict] = {}
+    failure_by_index: dict[int, str] = {}
+    next_path_index = 0
     path_iter = iter(paths)
 
     def submit_until_full() -> None:
+        nonlocal next_path_index
         while outcome.cancel_error is None and len(futures) < max_workers:
             _run_cancel_check(cancel_check)
             try:
                 path = next(path_iter)
             except StopIteration:
                 return
-            futures.add(
-                pool.submit(
-                    gather_file_metadata,
-                    path,
-                    preview_dir=preview_dir,
-                    rescan_all=rescan_all,
-                    generate_previews=generate_previews,
-                    raw_preview_mode=raw_preview_mode,
-                    max_decode_pixels=max_decode_pixels,
-                    existing_metadata=existing_rows.get(canonical_path_key(path)),
-                )
+            future = pool.submit(
+                gather_file_metadata,
+                path,
+                preview_dir=preview_dir,
+                rescan_all=rescan_all,
+                generate_previews=generate_previews,
+                raw_preview_mode=raw_preview_mode,
+                max_decode_pixels=max_decode_pixels,
+                existing_metadata=existing_rows.get(canonical_path_key(path)),
             )
+            futures[future] = next_path_index
+            next_path_index += 1
 
     try:
         try:
@@ -779,7 +790,8 @@ def _process_parallel_batch(
                 futures,
                 return_when=concurrent.futures.FIRST_COMPLETED,
             )
-            futures = set(still_pending)
+            done_indices = {future: futures[future] for future in done}
+            futures = {future: futures[future] for future in still_pending}
 
             if outcome.cancel_error is None:
                 try:
@@ -793,13 +805,14 @@ def _process_parallel_batch(
                 if future.cancelled():
                     continue
 
+                path_index = done_indices[future]
                 outcome.attempted_count += 1
                 try:
-                    outcome.results.append(future.result())
+                    result_by_index[path_index] = future.result()
                 except concurrent.futures.CancelledError:
                     continue
                 except Exception as exc:
-                    outcome.failures.append(str(exc))
+                    failure_by_index[path_index] = str(exc)
 
             if outcome.cancel_error is None:
                 try:
@@ -811,6 +824,9 @@ def _process_parallel_batch(
     finally:
         if owns_pool:
             pool.shutdown(wait=True)
+
+    outcome.results.extend(result_by_index[index] for index in sorted(result_by_index))
+    outcome.failures.extend(failure_by_index[index] for index in sorted(failure_by_index))
 
     return outcome
 
