@@ -27,6 +27,36 @@ def test_ui_state_is_scoped_to_database_marker(frontend_server: str) -> None:
     assert "document.body.dataset.databasePath = options.database || \"\";" in controller_body
 
 
+def test_frontend_boot_retries_a_transient_options_failure(chromium_page) -> None:
+    page, _ = chromium_page
+    attempts = 0
+
+    def fail_first_options_request(route) -> None:
+        nonlocal attempts
+        if "/api/options" in route.request.url and attempts == 0:
+            attempts += 1
+            route.fulfill(
+                status=503,
+                headers={"Content-Type": "application/json"},
+                body='{"error":"transient test failure"}',
+            )
+            return
+        route.continue_()
+
+    page.route("**/api/options*", fail_first_options_request)
+    try:
+        page.reload()
+        page.wait_for_function(
+            "() => document.body?.dataset?.appReady === 'true'",
+            timeout=10000,
+        )
+        assert attempts == 1
+        assert page.locator("#model-select option").count() >= 1
+        assert page.locator("#device-select option").count() >= 1
+    finally:
+        page.unroute("**/api/options*", fail_first_options_request)
+
+
 def test_public_workflow_facade_preserves_library_and_review_behavior(chromium_page) -> None:
     page, _ = chromium_page
     result = page.evaluate(

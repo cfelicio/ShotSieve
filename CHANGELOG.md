@@ -43,6 +43,9 @@ All notable changes to this project will be documented in this file.
   `packaging` compatible with the runner's installed pipx tooling.
 - Excluded PyTorch's interpreter test fixture from portable bundles so it is
   not mistaken for an application model weight during bundle smoke tests.
+- Made frontend startup retry transient local-server failures and report
+  unrecoverable bootstrap errors instead of leaving the UI in a blank loading
+  state.
 
 ## [0.4.3] - 2026-09-16
 

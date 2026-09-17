@@ -210,15 +210,15 @@ def _wait_for_shell_ready(page, timeout: float = 60000) -> None:
         () => {
           const modelOptions = document.querySelectorAll('#model-select option').length;
           const deviceOptions = document.querySelectorAll('#device-select option').length;
-          return modelOptions >= 1 && deviceOptions >= 1;
+          const appReady = document.body?.dataset?.appReady;
+          return (modelOptions >= 1 && deviceOptions >= 1 && appReady === 'true') || appReady === 'error';
         }
         """,
         timeout=timeout,
     )
-    page.wait_for_function(
-        "() => document.body?.dataset?.appReady === 'true'",
-        timeout=timeout,
-    )
+    app_error = page.locator("body").get_attribute("data-app-error")
+    if app_error:
+        raise AssertionError(f"Frontend bootstrap failed: {app_error}")
 
 
 @pytest.fixture()

@@ -317,9 +317,29 @@ async function boot() {
   installEvents();
   renderBusyState();
 
-  await controller.refreshWorkspace();
-  renderComparisonResults();
-  document.body.dataset.appReady = "true";
+  let lastError;
+  const retryDelays = [0, 250, 1000];
+  for (let attempt = 0; attempt < retryDelays.length; attempt += 1) {
+    if (retryDelays[attempt] > 0) {
+      document.body.dataset.appReady = "retrying";
+      await new Promise((resolve) => window.setTimeout(resolve, retryDelays[attempt]));
+    }
+
+    try {
+      await controller.refreshWorkspace();
+      renderComparisonResults();
+      document.body.dataset.appReady = "true";
+      return;
+    } catch (error) {
+      lastError = error;
+    }
+  }
+
+  throw lastError;
 }
 
-boot().catch(handleError);
+boot().catch((error) => {
+  document.body.dataset.appReady = "error";
+  document.body.dataset.appError = error?.message || String(error);
+  handleError(error);
+});
