@@ -13,6 +13,7 @@ from pathlib import Path
 from shotsieve import runtime_support
 from shotsieve.bootstrap import install_learned_iqa_sidecar, install_torch_sidecar, sidecar_site_packages_dir
 from shotsieve.learned_iqa import invalidate_hw_cache
+from shotsieve.learned_iqa_runtime import cuda_runtime_is_usable
 from shotsieve.model_assets import apply_model_cache_dir, recover_orphaned_preparation
 from shotsieve.web import serve_review_ui
 
@@ -154,14 +155,7 @@ def runtime_bundle_has_usable_cuda_torch(*, force_reload: bool = False) -> bool:
     except Exception:
         return False
 
-    cuda = getattr(torch_module, "cuda", None)
-    if cuda is None or not hasattr(cuda, "is_available"):
-        return False
-
-    try:
-        return bool(cuda.is_available())
-    except Exception:
-        return False
+    return cuda_runtime_is_usable(torch_module)
 
 
 _runtime_support = runtime_support.shared_runtime_support

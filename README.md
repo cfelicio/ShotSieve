@@ -40,11 +40,11 @@ If you are choosing between the packaged builds, pick the one that matches your 
 
 | Package | Best for | What it means |
 |---|---|---|
-| `CPU` | Any machine, safest fallback | Runs entirely on the processor. Slowest, but the most compatible. |
-| `NVIDIA / CUDA` | Windows or Linux machines with an NVIDIA GPU | Best choice when you have a supported NVIDIA card and want the fastest learned-IQA scoring. |
-| `Intel XPU` | Supported Intel accelerators with the matching PyTorch XPU runtime | Packaged Windows/Linux target; driver and device support still apply. |
-| `AMD ROCm` | AMD GPUs in the current ROCm/PyTorch support matrix | Packaged Windows/Linux target; Linux-first and hardware-specific. |
-| `Apple Silicon / MPS` | Recent Macs with Apple Silicon | Best choice on Apple Silicon when you want GPU acceleration without a separate CUDA stack. |
+| `CPU` | Most machines with a supported OS/Python or packaged target | Runs entirely on the processor. Slowest, but the broadest fallback; learned models still need enough RAM, disk, and compatible packages. |
+| `NVIDIA / CUDA` | NVIDIA GPUs covered by the pinned PyTorch CUDA build | Current cu130 x64 targets cover Turing (`sm_75`), Ampere (`sm_80`, `sm_86`), Hopper (`sm_90`), and Blackwell (`sm_100`, `sm_120`). Maxwell, Pascal, and Volta are not covered by this cu130 release path. |
+| `Intel XPU` | Intel GPU/device and OS combinations in the PyTorch XPU matrix | Current PyTorch 2.14 validation lists Arc A/B, selected Core Ultra Arc graphics, and Data Center GPU Max; driver, OS, and model support still apply. |
+| `AMD ROCm` | AMD hardware in the pinned ROCm/PyTorch matrix | ROCm 7.2.1 is Linux-first and lists selected Radeon RX 7000/9000, PRO/AI PRO, and Ryzen AI hardware; Windows is the narrower PyTorch-only path. |
+| `Apple Silicon / MPS` | Apple Silicon Macs with an MPS-enabled PyTorch build | Requires a supported macOS/device combination (current PyTorch guidance is macOS 14+); it does not cover Intel Macs or arbitrary Metal devices. |
 
 Practical rule of thumb:
 
@@ -57,6 +57,42 @@ Intel XPU and AMD ROCm are available both as packaged runtime downloads and
 source-install tracks. See [docs/intel-xpu.md](docs/intel-xpu.md) and
 [docs/amd-rocm.md](docs/amd-rocm.md) for the pinned install, driver boundary,
 and one-image evidence workflows.
+
+### Runtime support boundaries
+
+The package name is not a universal hardware guarantee. Local builds and
+GitHub release builds use the same target-specific dependency constraints, but
+GitHub runners build the archives on generic machines and cannot test every
+GPU generation. A runtime pack being available only proves that its software
+stack can be packaged; the device, operating system, driver, model, and VRAM
+requirements must still match the relevant vendor matrix.
+
+- **CUDA:** the release path uses PyTorch 2.14.0 from the cu130 index. On the
+  current x64 PyTorch matrix, that means Turing and newer through Blackwell
+  (`sm_75`, `sm_80`, `sm_86`, `sm_90`, `sm_100`, and `sm_120`). The app checks
+  the active GPU's compiled kernels at startup, so a stale cu126 environment
+  on an RTX 50-series card is rejected instead of being called compatible.
+- **Intel XPU:** use only Intel GPU and OS combinations listed by the pinned
+  PyTorch XPU release. The current guide names Arc A/B, Meteor Lake-H, Arrow
+  Lake-H, Lunar Lake, Panther Lake with narrower OS requirements, and Data
+  Center GPU Max. Other Intel graphics are not certified by the pack.
+- **AMD ROCm:** use only hardware in AMD's ROCm 7.2.1 matrix. The current
+  Radeon path is selected RX 7000/9000 plus listed PRO/AI PRO products, with
+  selected Ryzen AI APUs on the PyTorch path. Linux has the broader stack;
+  Windows is limited to the documented PyTorch combination. Older or
+  unlisted Radeon, Instinct, and APU devices are not implied to work.
+- **Apple MPS:** requires macOS with an MPS-enabled Apple device and matching
+  PyTorch build. Intel Macs, non-Apple GPUs, and unsupported macOS versions
+  use CPU instead.
+- **CPU:** is the fallback when an accelerator is missing, unsupported, out of
+  VRAM, or fails model initialization. CPU compatibility still depends on the
+  packaged/source platform and the selected model's memory requirements.
+
+Auto mode may fall back to CPU and reports the accelerator reason. An explicit
+`cuda`, `xpu`, `rocm`, or `mps` request remains an error when that runtime is
+not usable. The detailed pinned instructions and vendor links are in
+[docs/building.md](docs/building.md), [docs/intel-xpu.md](docs/intel-xpu.md),
+and [docs/amd-rocm.md](docs/amd-rocm.md).
 
 GitHub runtime-pack releases publish ten downloads: Windows and Linux CPU,
 NVIDIA/CUDA, Intel/XPU, and AMD/ROCm, plus macOS arm64 CPU and Apple/MPS.
@@ -167,6 +203,15 @@ Runtime names you may see in settings or developer docs:
 The Settings model list is populated from runtime discovery. If discovery or initialization is unavailable, the list stays empty instead of claiming that a model is ready. Auto mode may fall back to CPU and reports the failed accelerator reason; an explicitly requested unavailable runtime fails with recovery guidance.
 
 The release and sidecar paths use the tested learned-IQA package set `pyiqa==0.1.16`, `timm==1.0.29`, `huggingface-hub==1.31.0`, `transformers==5.17.0`, and `openai-clip==1.0.1`, `accelerate==1.15.0`, `sentencepiece==0.2.2`, and `einops==0.8.2`. CPU, CUDA, and Apple MPS targets use `torch==2.14.0` with `torchvision==0.29.0`; CUDA selects the cu130 index and CPU selects the PyTorch CPU index. XPU targets use the pinned `2.14.0+xpu` pair from the official XPU index. ROCm targets use AMD's exact ROCm 7.2.1 PyTorch wheels with separate Windows/Linux constraints. The matching target's driver and device support remain required.
+
+The CUDA startup probe checks the active GPU compute capability against the
+kernels compiled into the installed PyTorch wheel. This prevents a stale CUDA
+12.6 sidecar from being accepted on newer GPUs such as RTX 50-series
+`sm_120`; the current cu130 sidecar is selected for the supported PyTorch
+architecture set. NVIDIA hardware outside the kernels published by the
+selected PyTorch build is reported as unavailable and falls back to CPU, rather
+than being advertised as universally supported. A CUDA-compatible driver and
+enough VRAM for the selected model are still required.
 
 The manual/weekly model smoke workflow installs these constraints, runs `pip check`, prepares TOPIQ, CLIPIQA, and Q-ReAlign Mini in separate fresh caches, and repeats all checks offline in a new process. It records resolved versions and retains sanitized JSON diagnostics on failure; caches, weights, and generated images are not uploaded.
 

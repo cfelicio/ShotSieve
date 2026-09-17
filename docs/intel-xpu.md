@@ -8,15 +8,30 @@ The commands below pin the Torch pair used by this checkout and must be run in
 a fresh virtual environment. Do not mix the XPU wheels with the CPU, CUDA, or
 ROCm Torch wheels in an existing environment.
 
-## Prerequisites
+## Supported boundary and prerequisites
 
-- A supported Intel Arc GPU or Intel Core Ultra system with an Intel GPU
-  exposed to the operating system. A model name alone is not sufficient;
-  confirm the device is in Intel's current driver support list.
+This is a target-specific PyTorch XPU path, not a promise that every Intel
+GPU or integrated graphics device is supported. PyTorch's current 2.14 XPU
+guide lists these validated hardware families:
+
+- **Data Center GPU Max:** RHEL 9.2, SLES 15 SP5, or Ubuntu Server 22.04 with
+  the listed Intel GPU driver stack.
+- **Client GPUs:** Arc A-Series, Arc B-Series, Core Ultra with Arc graphics
+  (Meteor Lake-H), Core Ultra Series 2 with Arc graphics (Arrow Lake-H), and
+  Core Ultra Mobile Series 2 with Arc graphics (Lunar Lake), on the operating
+  systems listed by PyTorch.
+- **Panther Lake:** listed with narrower current OS requirements than the
+  other client families; do not infer support for every Core Ultra generation.
+
+See [PyTorch's 2.14 Intel GPU guide](https://docs.pytorch.org/docs/2.14/notes/get_start_xpu.html)
+for the exact OS/driver table. Older Intel GPUs, unsupported integrated
+graphics, an unsupported OS/driver combination, or a CPU-only Torch install
+must use CPU unless a new target-specific validation has been recorded.
+
 - Python 3.13 is the reproducible ShotSieve validation interpreter for this
-  track. The published Torch 2.14.0 XPU wheels currently include CPython 3.11,
-  3.12, 3.13, and 3.14 variants for Windows and Linux; each interpreter still
-  needs its own `pip check` and model smoke evidence.
+  track. The current Torch 2.14.0 XPU index publishes several CPython
+  variants, but this project targets 3.13; each interpreter still needs its
+  own `pip check` and model smoke evidence.
 - The current Intel graphics driver for Windows, or the Intel GPU/Level Zero
   driver stack for Linux. Use the driver installation instructions for the
   exact operating system and record the installed driver version.
@@ -50,6 +65,9 @@ py -3.13 -m venv .venv-xpu
 
 Record the Intel driver version from Device Manager or `dxdiag`. If more than
 one Intel adapter is present, record the adapter name alongside the version.
+The bundle's presence and a successful import do not establish XPU support;
+the native tensor check below is required. If the device or driver is outside
+the PyTorch matrix, select CPU.
 
 ## Install on Linux
 

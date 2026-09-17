@@ -9,9 +9,18 @@ All notable changes to this project will be documented in this file.
 - Added an adjustable maximum source decode budget to Settings. It
   defaults to 64 MP, is applied consistently to scans, re-scoring, and model
   comparison, and is bounded to prevent unsafe memory requests.
+- Expanded the runtime documentation to state the pinned CUDA, Intel XPU,
+  AMD ROCm, Apple MPS, and CPU support boundaries. Packaged local/GitHub
+  builds are documented as target-specific dependency bundles, not universal
+  GPU certification; unsupported accelerators fall back to CPU in Auto mode.
 
 ### Fixed
 
+- CUDA startup now validates the active GPU's compute capability against the
+  installed PyTorch kernels. Incompatible cached wheels, such as cu126 on an
+  `sm_120` GPU, no longer pass the `cuda.is_available()` check and fail later
+  during learned-IQA initialization; they are repaired when consent is given
+  or reported with a CPU fallback.
 - Fixed the Export dialog's **Browse** action so it resolves the folder
   browser through the completed library workflow bridge instead of an
   undefined early-captured handler.

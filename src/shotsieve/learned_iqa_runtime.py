@@ -129,11 +129,117 @@ def runtime_candidates(requested: str, *, system_name: str | None = None) -> tup
 
 
 def has_cuda(torch_module) -> bool:
+    usable, _ = cuda_runtime_status(torch_module, allow_hip=False)
+    return usable
+
+
+def _cuda_architecture_label(capability: object) -> str | None:
+    if not isinstance(capability, (tuple, list)) or len(capability) < 2:
+        return None
+    major, minor = capability[0], capability[1]
+    if isinstance(major, bool) or isinstance(minor, bool):
+        return None
+    if not isinstance(major, int) or not isinstance(minor, int):
+        return None
+    if major < 0 or minor < 0:
+        return None
+    return f"sm_{major}{minor}"
+
+
+_CUDA_ARCHITECTURE_EXCLUSIONS = {
+    50: frozenset({53}),
+    60: frozenset({62}),
+    61: frozenset({62}),
+    70: frozenset({72}),
+    80: frozenset({87}),
+    86: frozenset({87}),
+    100: frozenset({101}),
+}
+
+
+def _cuda_architecture_number(label: str) -> int | None:
+    match = re.fullmatch(r"sm_(\d+)[a-z]?", label.casefold())
+    if match is None:
+        return None
+    try:
+        return int(match.group(1))
+    except ValueError:
+        return None
+
+
+def _cuda_architecture_is_supported(device_arch: str, compiled_arches: set[str]) -> bool:
+    device_number = _cuda_architecture_number(device_arch)
+    if device_number is None:
+        return True
+
+    for compiled_arch in compiled_arches:
+        compiled_number = _cuda_architecture_number(compiled_arch)
+        if compiled_number is None:
+            continue
+        if device_number == compiled_number:
+            return True
+
+        compiled_major = compiled_number // 10
+        if device_number // 10 != compiled_major or device_number < compiled_number:
+            continue
+        if device_number in _CUDA_ARCHITECTURE_EXCLUSIONS.get(compiled_number, frozenset()):
+            continue
+        return True
+
+    return False
+
+
+def cuda_runtime_status(torch_module, *, allow_hip: bool = False) -> tuple[bool, str | None]:
+    """Return whether the installed Torch CUDA build can execute on the GPU.
+
+    ``torch.cuda.is_available()`` only verifies that the CUDA driver can see a
+    device.  It does not guarantee that the wheel contains kernels for that
+    device's compute capability.  Newer GPUs can therefore report available
+    CUDA and still fail on the first model operation with an unsupported-SM
+    warning.  PyTorch exposes both values needed to catch that mismatch before
+    learned-IQA selects the accelerator.
+    """
     try:
         cuda = getattr(torch_module, "cuda", None)
-        return bool(cuda and cuda.is_available())
-    except Exception:
-        return False
+        if cuda is None or not bool(cuda.is_available()):
+            return False, "CUDA is unavailable in the installed Torch runtime"
+
+        version = getattr(torch_module, "version", None)
+        if not allow_hip and getattr(version, "hip", None):
+            return False, "the installed Torch runtime is a HIP/ROCm build, not an NVIDIA CUDA build"
+
+        get_arch_list = getattr(cuda, "get_arch_list", None)
+        get_device_capability = getattr(cuda, "get_device_capability", None)
+        if callable(get_arch_list) and callable(get_device_capability):
+            compiled_arches = {
+                str(arch).strip().casefold()
+                for arch in (get_arch_list() or ())
+                if str(arch).strip()
+            }
+            device_arch = _cuda_architecture_label(get_device_capability())
+            if compiled_arches and device_arch and not _cuda_architecture_is_supported(device_arch, compiled_arches):
+                get_device_name = getattr(cuda, "get_device_name", None)
+                try:
+                    device_name = str(get_device_name()) if callable(get_device_name) else "the visible GPU"
+                except Exception:
+                    device_name = "the visible GPU"
+                torch_version = getattr(torch_module, "__version__", "the installed Torch build")
+                return False, (
+                    f"{device_name} ({device_arch}) is not supported by Torch {torch_version}; "
+                    "the installed wheel has no kernels for this GPU"
+                )
+    except Exception as exc:
+        # A driver/runtime probe can fail on a partially initialized CUDA
+        # installation.  Treat it as unavailable so Auto mode can use CPU and
+        # an explicitly requested CUDA runtime can report a controlled error.
+        return False, f"CUDA device compatibility probe failed: {_sanitize_runtime_cause(exc)}"
+
+    return True, None
+
+
+def cuda_runtime_is_usable(torch_module, *, allow_hip: bool = False) -> bool:
+    usable, _ = cuda_runtime_status(torch_module, allow_hip=allow_hip)
+    return usable
 
 
 def has_rocm(torch_module) -> bool:
@@ -141,7 +247,7 @@ def has_rocm(torch_module) -> bool:
     try:
         version = getattr(torch_module, "version", None)
         hip_version = getattr(version, "hip", None)
-        return bool(hip_version) and has_cuda(torch_module)
+        return bool(hip_version) and cuda_runtime_is_usable(torch_module, allow_hip=True)
     except Exception:
         return False
 
@@ -200,7 +306,11 @@ def resolve_device(device: str | None, *, torch_module, import_module=importlib.
                 except Exception as exc:
                     failures.append(f"CUDA device initialization failed: {_sanitize_runtime_cause(exc)}")
             else:
-                failures.append("CUDA is unavailable in the installed Torch runtime (a HIP/ROCm build must be selected as ROCm)")
+                _, reason = cuda_runtime_status(torch_module, allow_hip=False)
+                failures.append(
+                    reason
+                    or "CUDA is unavailable in the installed Torch runtime (a HIP/ROCm build must be selected as ROCm)"
+                )
             continue
 
         if runtime == "xpu":
@@ -737,6 +847,8 @@ __all__ = [
     "auto_runtime_order",
     "configure_runtime_noise_controls",
     "current_system_name",
+    "cuda_runtime_is_usable",
+    "cuda_runtime_status",
     "detect_gpu_vram_mb",
     "detect_hardware_capabilities",
     "detect_system_ram_mb",

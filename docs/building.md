@@ -37,6 +37,39 @@ limitation, runtime probe, and model-evidence commands are in
 [amd-rocm.md](./amd-rocm.md). Do not use the CPU/CUDA release constraints for
 ROCm; use the matching target constraints and AMD's current hardware matrix.
 
+## Runtime support boundaries
+
+The runtime-pack matrix describes what ShotSieve builds and ships; it is not a
+claim that every device from a vendor is supported. Local Windows builds and
+GitHub release jobs resolve the same pinned target constraints, while GitHub
+build runners do not provide hardware coverage for every accelerator. A
+successful `pip check` confirms package consistency, not GPU execution.
+
+- **CPU:** broadest fallback, subject to the packaged/source OS and Python
+  target, available RAM/disk, and the selected model's CPU support.
+- **NVIDIA CUDA:** the current x64 release uses PyTorch 2.14.0 from cu130.
+  The PyTorch CUDA matrix covers Turing (`sm_75`), Ampere (`sm_80`, `sm_86`),
+  Hopper (`sm_90`), and Blackwell (`sm_100`, `sm_120`). Maxwell, Pascal, and
+  Volta are outside this cu130 path. Startup also checks the active GPU
+  against the wheel's compiled kernels; a compatible driver and sufficient
+  model VRAM are separate requirements.
+- **Intel XPU:** the pinned `2.14.0+xpu` wheel is limited to the Intel GPU and
+  OS combinations in [PyTorch's 2.14 XPU guide](https://docs.pytorch.org/docs/2.14/notes/get_start_xpu.html),
+  including listed Arc A/B, selected Core Ultra Arc graphics, and Data Center
+  GPU Max systems. Other Intel graphics are not certified by this target.
+- **AMD ROCm:** the pinned ROCm 7.2.1 wheels require a product, OS, driver,
+  and framework combination in [AMD's Radeon/Ryzen matrix](https://rocm.docs.amd.com/projects/radeon-ryzen/en/latest/).
+  The supported Radeon list is selected rather than all AMD GPUs; Linux has
+  the broader stack, while Windows covers the documented PyTorch path only.
+- **Apple MPS:** requires an MPS-enabled Apple device and the supported macOS
+  version for the installed PyTorch build. The MPS pack is for Apple Silicon,
+  not Intel Macs or arbitrary Metal-capable hardware.
+
+Auto mode can report the accelerator as unavailable and continue on CPU. An
+explicit accelerator request must fail when its runtime is not usable. Model
+initialization, VRAM, and per-model smoke evidence remain separate from the
+vendor-level runtime check.
+
 ## Desktop entry point
 
 ShotSieve is desktop-first. For source installs and editable installs, the main entry point is:
@@ -110,7 +143,22 @@ Score and Compare job failures reuse the same diagnostic schema as Prepare. Thei
 
 The release and sidecar paths use the tested learned-IQA package set `pyiqa==0.1.16`, `timm==1.0.29`, `huggingface-hub==1.31.0`, `transformers==5.17.0`, and `openai-clip==1.0.1`, `accelerate==1.15.0`, `sentencepiece==0.2.2`, and `einops==0.8.2`. CPU, CUDA, and Apple MPS targets use `torch==2.14.0` with `torchvision==0.29.0`; the CUDA path selects the cu130 index, while CPU selects the PyTorch CPU index. Intel XPU targets use the pinned `2.14.0+xpu` pair from the official XPU index. AMD targets use AMD's separately validated ROCm 7.2.1 wheels from `repo.radeon.com`, with platform-specific target constraints in `scripts/source-constraints-rocm.txt` and `scripts/source-constraints-rocm-windows.txt`.
 
+CUDA startup validates the active GPU's compute capability against
+`torch.cuda.get_arch_list()` before learned-IQA selects CUDA. This catches old
+sidecars such as `torch==2.14.0+cu126` on an `sm_120` RTX 50-series GPU and
+allows the current cu130 wheel when its kernels include that architecture. A
+GPU whose architecture is not included by the selected PyTorch build is
+reported as unavailable and uses CPU fallback; this is the honest boundary
+instead of claiming that one wheel supports every NVIDIA GPU. Driver
+compatibility and model VRAM requirements still apply.
+
 Windows AMD hardware requires an exact match with AMD's supported ROCm/PyTorch matrix and the documented driver. Local Windows release builds and CI run `pip check` after resolving the target environment.
+
+The same limitation applies to XPU and MPS: the existence of a packaged
+archive is not hardware certification. Before expanding a release claim,
+record the device, OS, driver, Python/Torch pair, runtime version, and a real
+tensor plus model smoke on that target. The vendor matrices can change without
+changing the archive name, so re-check them when updating the pinned wheels.
 
 Pull requests run the offline test workflow in `.github/workflows/ci.yml`; it sets the learned-model offline flags so an accidental model download fails rather than silently reaching the Hub. The separate `.github/workflows/model-smoke.yml` workflow is manual/weekly and prepares TOPIQ, CLIPIQA, and Q-ReAlign Mini in fresh isolated caches, then repeats the CPU check in a new process with socket access disabled. The workflow does not upload caches or generated images.
 

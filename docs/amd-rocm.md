@@ -13,13 +13,21 @@ run is treated as evidence.
 
 ## Supported boundary and prerequisites
 
-- **Linux first:** use a Radeon GPU listed in AMD's current Linux matrix, such
-  as the supported RX 7000/9000 and Radeon PRO entries for the selected ROCm
-  release, on an AMD-supported Linux distribution and kernel.
+- **Linux first:** ROCm 7.2.1's Radeon PyTorch matrix currently lists selected
+  RX 7000/9000 products (including RX 7700/7800/7900 and RX 9060/9070 family
+  entries), plus the listed Radeon PRO and AI PRO products, on AMD-supported
+  Linux distributions and kernels. This is a selected list, not all Radeon
+  cards or all `gfx` architectures.
 - **Windows is optional and narrower:** the documented 7.2.1 PyTorch path is
-  for explicitly listed Radeon/Ryzen hardware, Python 3.12, and the required
-  AMD graphics driver. The full ROCm stack is not supported on Windows; only
-  the PyTorch path is covered here.
+-  for explicitly listed Radeon/Ryzen hardware, Python 3.12, and the required
+  AMD graphics driver. AMD documents PyTorch on Windows for this path, not the
+  complete Linux ROCm framework stack; do not infer Windows support for other
+  ROCm frameworks or arbitrary AMD GPUs.
+- **Ryzen is selective:** AMD's 7.2.1 PyTorch documentation includes selected
+  Ryzen AI Max 300, AI 400, and AI 300 products. A generic AMD APU, older
+  Radeon, Instinct/data-center card, or unlisted `gfx` target is not covered
+  by this ShotSieve pack unless it appears in the exact matrix and passes the
+  native and model checks below.
 - Keep enough system memory and local disk for the model caches. Put the
   disposable data and cache roots outside the repository when possible.
 - Record the GPU marketing name, `gfx` architecture, OS/kernel, Python,
@@ -30,6 +38,7 @@ Official references:
 
 - [AMD Radeon Linux compatibility matrix](https://rocm.docs.amd.com/projects/radeon-ryzen/en/latest/docs/compatibility/compatibilityrad/native_linux/native_linux_compatibility.html)
 - [AMD Radeon Windows compatibility matrix](https://rocm.docs.amd.com/projects/radeon-ryzen/en/latest/docs/compatibility/compatibilityrad/windows/windows_compatibility.html)
+- [AMD ROCm on Radeon and Ryzen overview](https://rocm.docs.amd.com/projects/radeon-ryzen/en/latest/)
 - [AMD Linux ROCm installation](https://rocm.docs.amd.com/projects/radeon-ryzen/en/latest/docs/install/installrad/native_linux/install-radeon.html)
 - [AMD Linux PyTorch wheels](https://rocm.docs.amd.com/projects/radeon-ryzen/en/latest/docs/install/installrad/native_linux/install-pytorch.html)
 - [AMD Windows PyTorch wheels](https://rocm.docs.amd.com/projects/radeon-ryzen/en/latest/docs/install/installrad/windows/install-pytorch.html)

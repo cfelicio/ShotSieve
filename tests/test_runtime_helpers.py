@@ -74,6 +74,62 @@ def test_learned_iqa_split_runtime_and_catalog_modules_preserve_facade_exports()
     assert callable(runtime_module.detect_hardware_capabilities)
 
 
+def test_cuda_runtime_rejects_a_torch_wheel_without_the_gpu_architecture() -> None:
+    from shotsieve import learned_iqa_runtime as runtime_module
+
+    fake_torch = types.SimpleNamespace(
+        __version__="2.14.0+cu126",
+        version=types.SimpleNamespace(hip=None),
+        cuda=types.SimpleNamespace(
+            is_available=lambda: True,
+            get_arch_list=lambda: ["sm_50", "sm_75", "sm_90"],
+            get_device_capability=lambda: (12, 0),
+            get_device_name=lambda: "NVIDIA GeForce RTX 5060 Ti",
+        ),
+    )
+
+    usable, reason = runtime_module.cuda_runtime_status(fake_torch)
+
+    assert usable is False
+    assert reason is not None
+    assert "sm_120" in reason
+    assert "no kernels" in reason
+    assert runtime_module.has_cuda(fake_torch) is False
+
+
+def test_cuda_runtime_accepts_a_wheel_with_the_gpu_architecture() -> None:
+    from shotsieve import learned_iqa_runtime as runtime_module
+
+    fake_torch = types.SimpleNamespace(
+        __version__="2.14.0+cu130",
+        version=types.SimpleNamespace(hip=None),
+        cuda=types.SimpleNamespace(
+            is_available=lambda: True,
+            get_arch_list=lambda: ["sm_90", "sm_120"],
+            get_device_capability=lambda: (12, 0),
+        ),
+    )
+
+    assert runtime_module.cuda_runtime_is_usable(fake_torch) is True
+    assert runtime_module.has_cuda(fake_torch) is True
+
+
+def test_cuda_runtime_accepts_ada_with_the_pytorch_sm86_compatibility_range() -> None:
+    from shotsieve import learned_iqa_runtime as runtime_module
+
+    fake_torch = types.SimpleNamespace(
+        __version__="2.14.0+cu130",
+        version=types.SimpleNamespace(hip=None),
+        cuda=types.SimpleNamespace(
+            is_available=lambda: True,
+            get_arch_list=lambda: ["sm_75", "sm_80", "sm_86", "sm_90", "sm_100", "sm_120"],
+            get_device_capability=lambda: (8, 9),
+        ),
+    )
+
+    assert runtime_module.cuda_runtime_is_usable(fake_torch) is True
+
+
 def test_learned_iqa_split_backend_and_preprocessing_modules_preserve_facade_exports() -> None:
     from shotsieve import learned_iqa_backend as backend_module
     from shotsieve import learned_iqa_preprocessing as preprocessing_module

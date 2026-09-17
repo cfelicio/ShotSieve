@@ -60,6 +60,8 @@ normalize_device_target = learned_iqa_runtime.normalize_device_target
 auto_runtime_order = learned_iqa_runtime.auto_runtime_order
 runtime_candidates = learned_iqa_runtime.runtime_candidates
 has_cuda = learned_iqa_runtime.has_cuda
+cuda_runtime_is_usable = learned_iqa_runtime.cuda_runtime_is_usable
+cuda_runtime_status = learned_iqa_runtime.cuda_runtime_status
 has_rocm = learned_iqa_runtime.has_rocm
 has_xpu = learned_iqa_runtime.has_xpu
 has_mps = learned_iqa_runtime.has_mps
@@ -434,6 +436,8 @@ __all__ = [
     "configure_runtime_noise_controls",
     "create_metric_safely",
     "current_system_name",
+    "cuda_runtime_is_usable",
+    "cuda_runtime_status",
     "detect_gpu_vram_mb",
     "detect_hardware_capabilities",
     "detect_system_ram_mb",
