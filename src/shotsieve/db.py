@@ -24,7 +24,8 @@ class _ShotSieveConnection(sqlite3.Connection):
 
     Most callers use :func:`database`, but scanner tests and library helpers
     also use ``with connect(...)`` directly.  Keeping the rollback hook on the
-    connection makes both transaction owners behave consistently.
+    connection makes both transaction owners behave consistently; the direct
+    context also closes the connection after the transaction ends.
     """
 
     def __exit__(self, exc_type, exc_value, traceback):
@@ -37,6 +38,8 @@ class _ShotSieveConnection(sqlite3.Connection):
         except BaseException:
             self.rollback()
             raise
+        finally:
+            self.close()
         return False
 
 

@@ -1,3 +1,4 @@
+import sqlite3
 import types
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -6,7 +7,7 @@ from typing import Any, cast
 import numpy as np
 import pytest
 import shotsieve.learned_iqa as learned_iqa_module
-from shotsieve.db import initialize_database
+from shotsieve.db import connect, initialize_database
 from shotsieve.config import parse_extensions
 from shotsieve.learned_iqa import (
     normalize_model_name,
@@ -658,6 +659,20 @@ def test_initialize_database_releases_file_handle_on_return() -> None:
         db_path.unlink()
 
         assert not db_path.exists()
+
+
+def test_connect_context_releases_file_handle_on_return(tmp_path: Path) -> None:
+    db_path = tmp_path / "shotsieve.db"
+    initialize_database(db_path)
+
+    with connect(db_path) as connection:
+        connection.execute("SELECT 1")
+
+    with pytest.raises(sqlite3.ProgrammingError, match="closed database"):
+        connection.execute("SELECT 1")
+
+    db_path.unlink()
+    assert not db_path.exists()
 
 
 def test_score_paths_returns_explicit_failure_instead_of_fake_midscore(monkeypatch, tmp_path: Path) -> None:
