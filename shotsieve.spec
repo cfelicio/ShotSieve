@@ -48,7 +48,7 @@ def _is_torch_related(entry):
 
 def _is_torch_test_asset(entry):
     """Exclude PyTorch's interpreter test fixture from production bundles."""
-    return _entry_text(entry).endswith("/torch/bin/test_interpreter_async.pt")
+    return "/torch/bin/test_interpreter_async.pt" in _entry_text(entry)
 
 # Collect difficult dependencies using collect_all
 difficult_packages = ["pyiqa", "numpy", "PIL", "fastapi", "uvicorn", "jinja2", "icecream", "setuptools", "pip"]
