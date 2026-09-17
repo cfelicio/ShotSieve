@@ -536,10 +536,10 @@ class TestMovePreviewCleanup:
             def __getattr__(self, name: str):
                 return getattr(self._inner, name)
 
-        # export_files processes rows ORDER BY id, so the file with the lower
-        # database ID is the "first" row (succeeds) and the higher ID is the
-        # "second" row (fails).  On Linux the scan insertion order is non-
-        # deterministic, so we must resolve the mapping at runtime.
+        # export_files preserves caller order, so pass the rows in database-ID
+        # order here to make the simulated second update failure deterministic.
+        # On Linux the scan insertion order is non-deterministic, so resolve
+        # the mapping at runtime.
         ordered_ids = sorted(ids_by_name.items(), key=lambda kv: kv[1])
         first_name, _ = ordered_ids[0]
         second_name, _ = ordered_ids[1]

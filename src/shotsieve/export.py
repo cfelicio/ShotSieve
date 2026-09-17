@@ -101,14 +101,19 @@ def export_files(
     if not file_ids:
         return ExportSummary()
 
-    # Deduplicate and normalize IDs.
-    unique_ids = sorted(set(file_ids))
+    # Deduplicate while preserving the caller's order.  Besides matching the
+    # requested selection order, this makes cancellation summaries identify
+    # the rows that were actually left unprocessed rather than relying on
+    # database ID ordering.
+    unique_ids = list(dict.fromkeys(file_ids))
 
     placeholders = ",".join("?" for _ in unique_ids)
-    rows = connection.execute(
-        f"SELECT id, path, preview_path FROM files WHERE id IN ({placeholders}) ORDER BY id",
+    selected_rows = connection.execute(
+        f"SELECT id, path, preview_path FROM files WHERE id IN ({placeholders})",
         unique_ids,
     ).fetchall()
+    rows_by_id = {row["id"]: row for row in selected_rows}
+    rows = [rows_by_id[file_id] for file_id in unique_ids if file_id in rows_by_id]
 
     # Validate: all requested IDs must exist in the database.
     found_ids = {row["id"] for row in rows}

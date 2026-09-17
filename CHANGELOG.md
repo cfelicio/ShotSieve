@@ -33,6 +33,8 @@ All notable changes to this project will be documented in this file.
   undefined early-captured handler.
 - Fixed export-operation retries to resolve `runTrackedOperation` through the
   same late-bound workflow bridge.
+- Preserved caller selection order during export so cancellation retry IDs
+  remain correct across platform-dependent scan insertion orders.
 
 ## [0.4.3] - 2026-09-16
 
