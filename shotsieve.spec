@@ -48,7 +48,11 @@ def _is_torch_related(entry):
 
 def _is_torch_test_asset(entry):
     """Exclude PyTorch's interpreter test fixture from production bundles."""
-    return "/torch/bin/test_interpreter_async.pt" in _entry_text(entry)
+    return "torch/bin/test_interpreter_async.pt" in _entry_text(entry)
+
+
+def _without_torch_test_assets(entries):
+    return [entry for entry in entries if not _is_torch_test_asset(entry)]
 
 # Collect difficult dependencies using collect_all
 difficult_packages = ["pyiqa", "numpy", "PIL", "fastapi", "uvicorn", "jinja2", "icecream", "setuptools", "pip"]
@@ -68,8 +72,8 @@ for pkg in difficult_packages:
 # The Linux PyTorch wheel includes this interpreter test fixture. It is not
 # required at runtime and must not be mistaken for an application model file
 # by the portable-bundle smoke test.
-datas = [entry for entry in datas if not _is_torch_test_asset(entry)]
-binaries = [entry for entry in binaries if not _is_torch_test_asset(entry)]
+datas = _without_torch_test_assets(datas)
+binaries = _without_torch_test_assets(binaries)
 
 analysis_excludes = []
 if skip_bundled_torch:
@@ -120,6 +124,11 @@ a = Analysis(
     excludes=analysis_excludes,
     noarchive=False,
 )
+# PyInstaller hooks can add package data after the explicit collect_all calls
+# above. Apply the production-bundle filter again to the final TOCs so Torch's
+# interpreter test fixture cannot leak into the staged bundle.
+a.datas = _without_torch_test_assets(a.datas)
+a.binaries = _without_torch_test_assets(a.binaries)
 pyz = PYZ(a.pure)
 
 exe = EXE(

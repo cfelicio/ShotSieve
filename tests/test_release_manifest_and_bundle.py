@@ -209,8 +209,11 @@ def test_pyinstaller_spec_excludes_pytorch_interpreter_test_asset() -> None:
 
     assert "_is_torch_test_asset" in spec_text
     assert "test_interpreter_async.pt" in spec_text
-    assert "datas = [entry for entry in datas if not _is_torch_test_asset(entry)]" in spec_text
-    assert "binaries = [entry for entry in binaries if not _is_torch_test_asset(entry)]" in spec_text
+    assert "def _without_torch_test_assets(entries):" in spec_text
+    assert "datas = _without_torch_test_assets(datas)" in spec_text
+    assert "binaries = _without_torch_test_assets(binaries)" in spec_text
+    assert "a.datas = _without_torch_test_assets(a.datas)" in spec_text
+    assert "a.binaries = _without_torch_test_assets(a.binaries)" in spec_text
 
 
 def test_portable_bundle_builder_preserves_target_build_root_and_venv(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
