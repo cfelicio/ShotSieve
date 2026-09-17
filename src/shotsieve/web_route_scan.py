@@ -360,6 +360,23 @@ def _finalize_scan_job(
         )
         return
 
+    # Cancellation can arrive after the final root has returned but before
+    # the aggregate finalizer publishes its last progress update.  Do not let
+    # that narrow window turn the job into a false success (or rely on a
+    # second exception path to publish the terminal state).
+    if registry.is_cancelled(job_id):
+        registry.fail(
+            job_id,
+            error="Scan job was cancelled by user.",
+            progress={
+                "phase": "failed",
+                "files_processed": aggregated["files_seen"],
+                "files_total": request.files_total_hint if request.files_total_hint > 0 else aggregated["files_seen"],
+            },
+            summary=_scan_job_summary(aggregated, root_results, overall_status="failed"),
+        )
+        return
+
     registry.update_progress(
         job_id,
         {

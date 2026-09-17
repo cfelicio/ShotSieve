@@ -16,6 +16,13 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- Fixed successful offline model preparation records being downgraded to
+  `not_checked` on the next options request when a required cache directory
+  had not yet been created.
+- Hardened native lightbox focus restoration across browser dialog timing
+  differences, including repeated open requests.
+- Hardened scan-job cancellation so a cancellation that arrives during final
+  aggregation cannot be reported as a completed scan.
 - CUDA startup now validates the active GPU's compute capability against the
   installed PyTorch kernels. Incompatible cached wheels, such as cu126 on an
   `sm_120` GPU, no longer pass the `cuda.is_available()` check and fail later

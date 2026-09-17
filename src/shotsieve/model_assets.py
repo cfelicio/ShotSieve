@@ -749,6 +749,19 @@ def _check_preparation_storage(
     if cancel_check is not None:
         cancel_check()
     data_dir.mkdir(parents=True, exist_ok=True)
+
+    # A successful backend check is durable only when the cache roots recorded
+    # with it can be reopened later.  Real backends normally create these
+    # directories while loading assets, but an offline/pre-populated cache (or
+    # a backend supplied by an integration) may not touch an otherwise valid
+    # root.  Materialize the required roots here so the readiness reader does
+    # not downgrade a successful preparation merely because a cache directory
+    # was still absent.
+    for cache_root_name in _model_spec(context.model_name).required_cache_roots:
+        raw_cache_root = context.cache_paths.get(cache_root_name)
+        if isinstance(raw_cache_root, str) and raw_cache_root.strip():
+            Path(raw_cache_root).mkdir(parents=True, exist_ok=True)
+
     usage = shutil.disk_usage(data_dir)
     record_store.save(
         storage_check={

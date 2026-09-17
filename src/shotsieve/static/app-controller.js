@@ -254,11 +254,16 @@
 
       bindOverlayLifecycle(overlay);
 
-      const activeElement = document.activeElement;
-      overlayFocusReturn.set(
-        overlayId,
-        activeElement instanceof HTMLElement && !overlay.contains(activeElement) ? activeElement : null,
-      );
+      // Keep the original opener when an already-open overlay is asked to
+      // open again.  Replacing it with the overlay's close button would make
+      // native-dialog focus restoration dependent on browser timing.
+      if (!overlayIsOpen(overlay)) {
+        const activeElement = document.activeElement;
+        overlayFocusReturn.set(
+          overlayId,
+          activeElement instanceof HTMLElement && !overlay.contains(activeElement) ? activeElement : null,
+        );
+      }
 
       overlay.classList.remove("overlay-closed");
 
@@ -284,6 +289,11 @@
 
       if (supportsNativeDialog(overlay)) {
         overlay.close();
+        // Chromium normally dispatches `close` synchronously, but native
+        // dialog focus cleanup is not identical across supported platforms.
+        // Re-run the idempotent restoration after close() so the opener wins
+        // over any user-agent focus fallback.
+        restoreOverlayState(overlayId);
         return;
       }
 

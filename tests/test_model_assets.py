@@ -85,6 +85,21 @@ def test_prepare_model_writes_atomic_success_record_and_releases_backend(tmp_pat
     assert stored["disk_estimate"]["status"] == "advisory"
 
 
+def test_prepared_record_reopens_when_required_cache_roots_start_missing(tmp_path: Path) -> None:
+    environment = {"XDG_CACHE_HOME": str(tmp_path / "fresh-cache")}
+
+    result = model_assets.prepare_model(
+        "topiq_nr",
+        data_dir=tmp_path / "data",
+        environ=environment,
+        backend_factory=lambda *_args, **_kwargs: _Backend([]),
+    )
+
+    assert result["state"] == "prepared"
+    reopened = model_assets.read_preparation_record(tmp_path / "data", environ=environment)
+    assert reopened["state"] == "prepared"
+
+
 def test_prepare_model_publishes_phases_in_state_machine_order(tmp_path: Path) -> None:
     progress: list[dict[str, object]] = []
 
