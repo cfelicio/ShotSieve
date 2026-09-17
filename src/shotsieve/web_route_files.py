@@ -409,15 +409,33 @@ def _execute_export_request(
                     _append_unprocessed_operation_rows(connection, stopped, file_ids, action=mode, error=exc)
                     attach_file_operation_summary(exc, stopped, cancelled=True)
                     raise
-            return deps.export_files(
-                connection,
-                file_ids=file_ids,
-                destination=destination,
-                mode=mode,
-                preview_cache_root=preview_cache_root,
-                progress_callback=_route(context, "_operation_progress_callback", _operation_progress_callback)(progress_callback, phase=phase, offset=0, total_hint=total),
-                cancel_check=cancel_check,
-            )
+            try:
+                return deps.export_files(
+                    connection,
+                    file_ids=file_ids,
+                    destination=destination,
+                    mode=mode,
+                    preview_cache_root=preview_cache_root,
+                    progress_callback=_route(context, "_operation_progress_callback", _operation_progress_callback)(progress_callback, phase=phase, offset=0, total_hint=total),
+                    cancel_check=cancel_check,
+                )
+            except Exception as exc:
+                # Destination validation happens before the export worker has
+                # a row-level summary.  Retain the frozen IDs anyway so an
+                # asynchronous failure is rendered as a result instead of
+                # disappearing behind a failed result request.
+                if operation_summary_from_exception(exc) is None:
+                    failed_summary = FileOperationSummary(action=mode)
+                    _append_unprocessed_operation_rows(
+                        connection,
+                        failed_summary,
+                        file_ids,
+                        action=mode,
+                        error=exc,
+                    )
+                    failed_summary.fatal_error = str(exc)
+                    attach_file_operation_summary(exc, failed_summary)
+                raise
 
         snapshot_active, batches = _begin_bulk_selection_snapshot(context, connection, deps, selection)
         operation_summary = FileOperationSummary(action="export")

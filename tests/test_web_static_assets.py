@@ -919,10 +919,13 @@ class TestStaticAssetHeaders:
         assert "Auto Mode Priority" in body
         assert "Auto mode picks the first available runtime" in body
 
-    def test_static_js_settings_omit_xpu_packaging_note(self, test_server):
+    def test_static_js_settings_use_explicit_accelerator_names(self, test_server):
         base_url, _, _ = test_server
         body = self._combined_js(base_url)
-        assert "Intel XPU" not in body
+        assert 'cuda: "NVIDIA CUDA"' in body
+        assert 'rocm: "AMD ROCm"' in body
+        assert 'xpu: "Intel XPU"' in body
+        assert 'mps: "Apple MPS"' in body
         assert "Intel XPU remains source-install only today" not in body
         assert "not one of the packaged runtime downloads" not in body
 

@@ -31,9 +31,9 @@ def test_ensure_runtime_asset_falls_back_to_local_archive_when_download_fails(
 ) -> None:
     build_root = tmp_path / "local-build"
     build_root.mkdir(parents=True)
-    archive_name = "ShotSieve-windows-nvidia-x64.zip"
-    executable_name = "ShotSieve-NVIDIA.exe"
-    variant_folder = "ShotSieve-windows-nvidia"
+    archive_name = "ShotSieve-windows-nvidia-cuda-x64.zip"
+    executable_name = "ShotSieve-NVIDIA-CUDA.exe"
+    variant_folder = "ShotSieve-windows-nvidia-cuda"
 
     local_archive = build_root / archive_name
     with zipfile.ZipFile(local_archive, "w", compression=zipfile.ZIP_DEFLATED) as archive:
@@ -51,10 +51,10 @@ def test_ensure_runtime_asset_falls_back_to_local_archive_when_download_fails(
     monkeypatch.setattr(bootstrap_module, "open_url", fake_open_url)
 
     asset = bootstrap_module.RuntimeAsset(
-        id="windows-nvidia",
+        id="windows-nvidia-cuda",
         platform="windows",
         runtime="cuda",
-        url="https://github.com/cfelicio/ShotSieve/releases/latest/download/ShotSieve-windows-nvidia-x64.zip",
+        url="https://github.com/cfelicio/ShotSieve/releases/latest/download/ShotSieve-windows-nvidia-cuda-x64.zip",
         archive_name=archive_name,
         executable_name=executable_name,
         variant_folder_name=variant_folder,
@@ -75,13 +75,13 @@ def test_download_archive_reassembles_verified_split_parts(
 ) -> None:
     part_bytes = (b"first-part-", b"second-part")
     asset = bootstrap_module.RuntimeAsset(
-        id="linux-amd",
+        id="linux-amd-rocm",
         platform="linux",
         runtime="rocm",
         url=None,
-        archive_name="ShotSieve-linux-amd-x64.tar.gz",
-        executable_name="ShotSieve-AMD",
-        variant_folder_name="ShotSieve-linux-amd",
+        archive_name="ShotSieve-linux-amd-rocm-x64.tar.gz",
+        executable_name="ShotSieve-AMD-ROCm",
+        variant_folder_name="ShotSieve-linux-amd-rocm",
         sha256=hashlib.sha256(b"".join(part_bytes)).hexdigest(),
         parts=tuple(
             bootstrap_module.RuntimeAssetPart(
@@ -137,8 +137,8 @@ def test_ensure_runtime_asset_does_not_reuse_old_empty_marker_without_verified_a
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     runtime_root = tmp_path / "runtime"
-    install_dir = runtime_root / "installs" / "windows-nvidia"
-    executable = install_dir / "ShotSieve-windows-nvidia" / "ShotSieve-NVIDIA.exe"
+    install_dir = runtime_root / "installs" / "windows-nvidia-cuda"
+    executable = install_dir / "ShotSieve-windows-nvidia-cuda" / "ShotSieve-NVIDIA-CUDA.exe"
     executable.parent.mkdir(parents=True, exist_ok=True)
     executable.write_bytes(b"fake-runtime")
     (install_dir / ".asset-sha256").write_text("", encoding="utf-8")
@@ -153,13 +153,13 @@ def test_ensure_runtime_asset_does_not_reuse_old_empty_marker_without_verified_a
     monkeypatch.setattr(bootstrap_module, "find_local_runtime_archive", lambda archive_name: None)
 
     asset = bootstrap_module.RuntimeAsset(
-        id="windows-nvidia",
+        id="windows-nvidia-cuda",
         platform="windows",
         runtime="cuda",
-        url="https://example.invalid/ShotSieve-windows-nvidia-x64.zip",
-        archive_name="ShotSieve-windows-nvidia-x64.zip",
-        executable_name="ShotSieve-NVIDIA.exe",
-        variant_folder_name="ShotSieve-windows-nvidia",
+        url="https://example.invalid/ShotSieve-windows-nvidia-cuda-x64.zip",
+        archive_name="ShotSieve-windows-nvidia-cuda-x64.zip",
+        executable_name="ShotSieve-NVIDIA-CUDA.exe",
+        variant_folder_name="ShotSieve-windows-nvidia-cuda",
         sha256="a" * 64,
     )
 
@@ -224,7 +224,7 @@ def test_ensure_runtime_asset_prefers_colocated_frozen_runtime_executable(
     launcher_exe = launcher_dir / "ShotSieve.exe"
     launcher_exe.write_bytes(b"bootstrap")
 
-    runtime_exe = launcher_dir / "ShotSieve-NVIDIA.exe"
+    runtime_exe = launcher_dir / "ShotSieve-NVIDIA-CUDA.exe"
     runtime_exe.write_bytes(b"runtime")
 
     monkeypatch.setattr(sys, "frozen", True, raising=False)
@@ -239,13 +239,13 @@ def test_ensure_runtime_asset_prefers_colocated_frozen_runtime_executable(
     monkeypatch.setattr(bootstrap_module, "open_url", fake_open_url)
 
     asset = bootstrap_module.RuntimeAsset(
-        id="windows-nvidia",
+        id="windows-nvidia-cuda",
         platform="windows",
         runtime="cuda",
-        url="https://example.invalid/ShotSieve-windows-nvidia-x64.zip",
-        archive_name="ShotSieve-windows-nvidia-x64.zip",
-        executable_name="ShotSieve-NVIDIA.exe",
-        variant_folder_name="ShotSieve-windows-nvidia",
+        url="https://example.invalid/ShotSieve-windows-nvidia-cuda-x64.zip",
+        archive_name="ShotSieve-windows-nvidia-cuda-x64.zip",
+        executable_name="ShotSieve-NVIDIA-CUDA.exe",
+        variant_folder_name="ShotSieve-windows-nvidia-cuda",
         sha256=None,
     )
 

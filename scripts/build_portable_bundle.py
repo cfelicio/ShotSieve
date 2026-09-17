@@ -18,6 +18,7 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 _release_targets = importlib.import_module("shotsieve.release_targets")
 ReleaseTarget = _release_targets.ReleaseTarget
 all_release_targets = _release_targets.all_release_targets
+canonical_release_target_id = _release_targets.canonical_release_target_id
 
 
 class BundlePlan(TypedDict):
@@ -31,7 +32,11 @@ class BundlePlan(TypedDict):
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Build a portable ShotSieve bundle for a Tier 1 release target")
-    parser.add_argument("--target", required=True, help="Tier 1 release target id, for example linux-nvidia")
+    parser.add_argument(
+        "--target",
+        required=True,
+        help="Tier 1 release target id, for example linux-nvidia-cuda (legacy IDs remain accepted)",
+    )
     parser.add_argument("--dist-root", default="dist", help="Root directory for staged bundles and archives")
     parser.add_argument("--build-root", default="build/release-targets", help="Root directory for PyInstaller work output")
     parser.add_argument("--plan", action="store_true", help="Print the resolved build plan as JSON and exit")
@@ -40,6 +45,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 def target_by_id(target_id: str) -> ReleaseTarget:
     targets = {target.id: target for target in all_release_targets()}
+    target_id = canonical_release_target_id(target_id)
     try:
         return targets[target_id]
     except KeyError as exc:

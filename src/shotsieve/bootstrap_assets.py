@@ -17,7 +17,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, NoReturn
 
-from shotsieve.release_targets import runtime_pack_release_targets
+from shotsieve.release_targets import (
+    release_target_id_aliases,
+    runtime_pack_release_targets,
+)
 from shotsieve import runtime_support
 
 
@@ -91,14 +94,14 @@ def select_runtime_target(*, system_name: str, machine_name: str, has_nvidia: bo
     machine = machine_name.casefold()
 
     if system == "windows":
-        return "windows-nvidia" if has_nvidia else "windows-cpu"
+        return "windows-nvidia-cuda" if has_nvidia else "windows-cpu"
 
     if system == "linux":
-        return "linux-nvidia" if has_nvidia else "linux-cpu"
+        return "linux-nvidia-cuda" if has_nvidia else "linux-cpu"
 
     if system == "darwin":
         if machine in {"arm64", "aarch64"}:
-            return "macos-mps"
+            return "macos-apple-mps"
         return "macos-cpu"
 
     raise SystemExit(f"Unsupported platform '{system_name}' for bootstrap launcher")
@@ -135,8 +138,15 @@ def select_manifest_asset(manifest: dict[str, Any], target_id: str) -> dict[str,
     if not isinstance(raw_assets, list):
         raise SystemExit("Bootstrap manifest is missing an 'assets' list")
 
-    for entry in raw_assets:
-        if isinstance(entry, dict) and entry.get("id") == target_id:
+    requested_ids = release_target_id_aliases(target_id)
+    entries_by_id = {
+        str(entry.get("id")).strip().casefold(): entry
+        for entry in raw_assets
+        if isinstance(entry, dict) and isinstance(entry.get("id"), str)
+    }
+    for candidate_id in requested_ids:
+        entry = entries_by_id.get(candidate_id)
+        if entry is not None:
             return entry
 
     known_ids: list[str] = []

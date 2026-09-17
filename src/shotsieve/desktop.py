@@ -60,14 +60,26 @@ def runtime_target_id_from_executable_name(*, system_name: str | None = None) ->
     else:
         return None
 
-    if "nvidia" in runtime_name or "cuda" in runtime_name:
+    if "nvidia-cuda" in runtime_name or ("nvidia" in runtime_name and "cuda" in runtime_name):
+        return f"{prefix}-nvidia-cuda"
+    if "cuda" in runtime_name:
+        return f"{prefix}-cuda"
+    if "nvidia" in runtime_name:
         return f"{prefix}-nvidia"
-    if "intel" in runtime_name or "xpu" in runtime_name:
+    if "intel-xpu" in runtime_name or ("intel" in runtime_name and "xpu" in runtime_name):
+        return f"{prefix}-intel-xpu"
+    if "xpu" in runtime_name:
+        return f"{prefix}-xpu"
+    if "intel" in runtime_name:
         return f"{prefix}-intel"
-    if "amd" in runtime_name or "rocm" in runtime_name:
+    if "amd-rocm" in runtime_name or ("amd" in runtime_name and "rocm" in runtime_name):
+        return f"{prefix}-amd-rocm"
+    if "rocm" in runtime_name:
+        return f"{prefix}-rocm"
+    if "amd" in runtime_name:
         return f"{prefix}-amd"
-    if prefix == "macos" and "mps" in runtime_name:
-        return "macos-mps"
+    if prefix == "macos" and ("apple-mps" in runtime_name or "mps" in runtime_name):
+        return "macos-apple-mps" if "apple-mps" in runtime_name else "macos-mps"
     if "cpu" in runtime_name:
         return f"{prefix}-cpu"
 
@@ -75,7 +87,8 @@ def runtime_target_id_from_executable_name(*, system_name: str | None = None) ->
 
 
 def target_is_cuda_runtime(target_id: str | None) -> bool:
-    return bool(target_id and target_id.endswith("-nvidia"))
+    normalized = (target_id or "").strip().casefold()
+    return normalized.endswith(("-nvidia-cuda", "-cuda", "-nvidia"))
 
 
 def _resolve_cuda_runtime_target_id(target_id: str | None) -> str | None:
@@ -203,15 +216,15 @@ def _runtime_has_learned_iqa() -> bool:
 
 def _runtime_name_from_target_id(target_id: str | None) -> str:
     normalized = (target_id or "").strip().casefold()
-    if normalized.endswith("-nvidia"):
+    if normalized.endswith(("-nvidia-cuda", "-cuda", "-nvidia")):
         return "cuda"
-    if normalized.endswith("-intel"):
+    if normalized.endswith(("-intel-xpu", "-xpu", "-intel")):
         return "xpu"
-    if normalized.endswith("-amd"):
+    if normalized.endswith(("-amd-rocm", "-rocm", "-amd")):
         return "rocm"
     if normalized.endswith("-cpu"):
         return "cpu"
-    if normalized.endswith("-mps"):
+    if normalized.endswith(("-apple-mps", "-mps")):
         return "mps"
     return "default"
 

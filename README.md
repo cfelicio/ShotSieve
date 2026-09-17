@@ -41,16 +41,20 @@ If you are choosing between the packaged builds, pick the one that matches your 
 | Package | Best for | What it means |
 |---|---|---|
 | `CPU` | Most machines with a supported OS/Python or packaged target | Runs entirely on the processor. Slowest, but the broadest fallback; learned models still need enough RAM, disk, and compatible packages. |
-| `NVIDIA / CUDA` | NVIDIA GPUs covered by the pinned PyTorch CUDA build | Current cu130 x64 targets cover Turing (`sm_75`), Ampere (`sm_80`, `sm_86`), Hopper (`sm_90`), and Blackwell (`sm_100`, `sm_120`). Maxwell, Pascal, and Volta are not covered by this cu130 release path. |
+| `NVIDIA CUDA` | NVIDIA GPUs covered by the pinned PyTorch CUDA build | Current cu130 x64 targets cover Turing (`sm_75`), Ampere (`sm_80`, `sm_86`), Hopper (`sm_90`), and Blackwell (`sm_100`, `sm_120`). Maxwell, Pascal, and Volta are not covered by this cu130 release path. |
 | `Intel XPU` | Intel GPU/device and OS combinations in the PyTorch XPU matrix | Current PyTorch 2.14 validation lists Arc A/B, selected Core Ultra Arc graphics, and Data Center GPU Max; driver, OS, and model support still apply. |
 | `AMD ROCm` | AMD hardware in the pinned ROCm/PyTorch matrix | ROCm 7.2.1 is Linux-first and lists selected Radeon RX 7000/9000, PRO/AI PRO, and Ryzen AI hardware; Windows is the narrower PyTorch-only path. |
-| `Apple Silicon / MPS` | Apple Silicon Macs with an MPS-enabled PyTorch build | Requires a supported macOS/device combination (current PyTorch guidance is macOS 14+); it does not cover Intel Macs or arbitrary Metal devices. |
+| `Apple MPS` | Apple Silicon Macs with an MPS-enabled PyTorch build | Requires a supported macOS/device combination (current PyTorch guidance is macOS 14+); it does not cover Intel Macs or arbitrary Metal devices. |
+
+These are the names used for packaged release targets and downloads. The
+application's logical runtime settings remain `cuda`, `rocm`, `xpu`, `mps`, and
+`cpu` so existing configuration and command-line usage continue to work.
 
 Practical rule of thumb:
 
-- If you have an NVIDIA GPU, choose **CUDA**.
-- If you are on Apple Silicon, choose **MPS**.
-- If you are on Windows without a validated CUDA, XPU, or explicitly supported ROCm runtime, choose **CPU**.
+- If you have a supported NVIDIA GPU, choose **NVIDIA CUDA**.
+- If you are on Apple Silicon, choose **Apple MPS**.
+- If you are on Windows without a validated NVIDIA CUDA, Intel XPU, or explicitly supported AMD ROCm runtime, choose **CPU**.
 - If you just want the most reliable option or are unsure, choose **CPU**.
 
 Intel XPU and AMD ROCm are available both as packaged runtime downloads and
@@ -95,9 +99,13 @@ not usable. The detailed pinned instructions and vendor links are in
 and [docs/amd-rocm.md](docs/amd-rocm.md).
 
 GitHub runtime-pack releases publish ten downloads: Windows and Linux CPU,
-NVIDIA/CUDA, Intel/XPU, and AMD/ROCm, plus macOS arm64 CPU and Apple/MPS.
+NVIDIA CUDA, Intel XPU, and AMD ROCm, plus macOS arm64 CPU and Apple MPS.
 They also publish the Python source distribution and wheel plus a checksummed
 bootstrap manifest. Model weights are never included in release archives.
+Runtime-pack archive names use the same explicit convention, for example
+`ShotSieve-windows-nvidia-cuda-x64.zip` and
+`ShotSieve-macos-apple-mps-arm64.tar.gz`. Older vendor-only launcher and target
+names remain accepted when upgrading an existing installation.
 
 ## Quick start with `shotsieve-desktop`
 
@@ -112,15 +120,15 @@ Downloaded bundles use platform- and runtime-specific launcher names instead of 
 | Platform | Runtime pack | Launcher |
 |---|---|---|
 | Windows | CPU | `ShotSieve-CPU.exe` |
-| Windows | NVIDIA / CUDA | `ShotSieve-NVIDIA.exe` |
-| Windows | Intel / XPU | `ShotSieve-Intel.exe` |
-| Windows | AMD / ROCm | `ShotSieve-AMD.exe` |
+| Windows | NVIDIA CUDA | `ShotSieve-NVIDIA-CUDA.exe` |
+| Windows | Intel XPU | `ShotSieve-Intel-XPU.exe` |
+| Windows | AMD ROCm | `ShotSieve-AMD-ROCm.exe` |
 | Linux | CPU | `ShotSieve-CPU` |
-| Linux | NVIDIA / CUDA | `ShotSieve-NVIDIA` |
-| Linux | Intel / XPU | `ShotSieve-Intel` |
-| Linux | AMD / ROCm | `ShotSieve-AMD` |
+| Linux | NVIDIA CUDA | `ShotSieve-NVIDIA-CUDA` |
+| Linux | Intel XPU | `ShotSieve-Intel-XPU` |
+| Linux | AMD ROCm | `ShotSieve-AMD-ROCm` |
 | macOS | CPU | `ShotSieve-CPU` |
-| macOS | Apple Silicon / MPS | `ShotSieve-MPS` |
+| macOS | Apple MPS | `ShotSieve-Apple-MPS` |
 
 So the quick rule is:
 
@@ -175,6 +183,22 @@ Fallback source decoding defaults to a 64-million-pixel (64 MP) budget before co
 ### File-operation results
 
 Copy, move, and delete operations keep the existing aggregate counts and now also return a per-file result through the operation status/result endpoints. Each result identifies the source, destination when known, action stage, OS error details, guarded source/destination state (`present`, `missing`, or `unknown`), observation errors, and whether retrying that file is safe. Preview cleanup warnings are reported separately from transfer failures. A cancelled or fatally stopped operation retains completed rows and every later frozen selection as unprocessed; if a mutation may have happened, both paths and the original plus observation errors are retained and that file is not automatically retried. Catalog failures are reconciled before a move is compensated. An async operation job can therefore be terminally failed while its result endpoint still returns the retained file summary.
+
+Move is portable across Windows, Linux, and macOS. It uses an exclusive
+copy-then-delete transfer, so it works between local disks, mapped drives,
+UNC paths, mounted SMB/NFS shares, and different filesystem volumes without
+requiring hard-link support. The source is deleted only after the destination
+copy succeeds; if source deletion is denied or interrupted, both paths remain
+visible in the partial/uncertain operation result and ShotSieve does not
+silently retry the mutation.
+
+Network shares must already be available to the account running ShotSieve and
+must grant read access to the source, write access to the destination, and
+delete access to the source. On Windows, use a mapped drive or UNC path such
+as `\\server\share\folder`; on Linux and macOS, mount the share first and
+use its local mount path. Optional filesystem metadata may not be supported by
+every remote provider; in that case the file transfer still completes and the
+operation result shows a warning.
 
 The Library workspace retains the latest operation result until you dismiss or replace it. It shows action-specific completed, partial, failed, and unprocessed counts, a bounded list of paths/stages/details, and buttons to copy or download the complete JSON result. Successful selections are removed after a terminal result while failed and unprocessed files remain selected; only files marked safe by the operation contract can be retried. Rejected-file deletion uses the same tracked operation flow as selected deletion, copying, and moving.
 

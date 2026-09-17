@@ -30,13 +30,13 @@ def test_coerce_pip_main_return_code_handles_none_int_and_unexpected_values() ->
     assert bootstrap_module._coerce_pip_main_return_code(object()) == 1
 
 
-def test_select_runtime_target_prefers_nvidia_on_windows_and_linux() -> None:
-    assert bootstrap_module.select_runtime_target(system_name="Windows", machine_name="AMD64", has_nvidia=True) == "windows-nvidia"
-    assert bootstrap_module.select_runtime_target(system_name="Linux", machine_name="x86_64", has_nvidia=True) == "linux-nvidia"
+def test_select_runtime_target_prefers_nvidia_cuda_on_windows_and_linux() -> None:
+    assert bootstrap_module.select_runtime_target(system_name="Windows", machine_name="AMD64", has_nvidia=True) == "windows-nvidia-cuda"
+    assert bootstrap_module.select_runtime_target(system_name="Linux", machine_name="x86_64", has_nvidia=True) == "linux-nvidia-cuda"
 
 
 def test_select_runtime_target_prefers_mps_on_apple_silicon() -> None:
-    assert bootstrap_module.select_runtime_target(system_name="Darwin", machine_name="arm64", has_nvidia=False) == "macos-mps"
+    assert bootstrap_module.select_runtime_target(system_name="Darwin", machine_name="arm64", has_nvidia=False) == "macos-apple-mps"
 
 
 def test_select_runtime_target_falls_back_to_cpu_when_no_accelerator() -> None:
@@ -49,28 +49,40 @@ def test_select_manifest_asset_returns_target_entry() -> None:
     manifest = {
         "assets": [
             {"id": "windows-cpu", "archive_name": "ShotSieve-windows-cpu-x64.zip"},
-            {"id": "linux-nvidia", "archive_name": "ShotSieve-linux-nvidia-x64.tar.gz"},
+            {"id": "linux-nvidia-cuda", "archive_name": "ShotSieve-linux-nvidia-cuda-x64.tar.gz"},
         ]
     }
 
     asset = bootstrap_module.select_manifest_asset(manifest, "linux-nvidia")
 
+    assert asset["id"] == "linux-nvidia-cuda"
+    assert asset["archive_name"] == "ShotSieve-linux-nvidia-cuda-x64.tar.gz"
+
+
+def test_select_manifest_asset_accepts_canonical_target_for_legacy_manifest() -> None:
+    manifest = {
+        "assets": [
+            {"id": "linux-nvidia", "archive_name": "ShotSieve-linux-nvidia-x64.tar.gz"},
+        ]
+    }
+
+    asset = bootstrap_module.select_manifest_asset(manifest, "linux-nvidia-cuda")
+
     assert asset["id"] == "linux-nvidia"
-    assert asset["archive_name"] == "ShotSieve-linux-nvidia-x64.tar.gz"
 
 
 def test_parse_runtime_asset_accepts_verified_split_parts() -> None:
     entry = {
-        "id": "linux-amd",
+        "id": "linux-amd-rocm",
         "platform": "linux",
         "runtime": "rocm",
-        "archive_name": "ShotSieve-linux-amd-x64.tar.gz",
-        "executable_name": "ShotSieve-AMD",
-        "variant_folder_name": "ShotSieve-linux-amd",
+        "archive_name": "ShotSieve-linux-amd-rocm-x64.tar.gz",
+        "executable_name": "ShotSieve-AMD-ROCm",
+        "variant_folder_name": "ShotSieve-linux-amd-rocm",
         "sha256": "a" * 64,
         "parts": [
             {
-                "archive_name": "ShotSieve-linux-amd-x64.tar.gz.part-000",
+                "archive_name": "ShotSieve-linux-amd-rocm-x64.tar.gz.part-000",
                 "url": "https://example.invalid/part-000",
                 "sha256": "b" * 64,
             }
@@ -229,7 +241,7 @@ def test_find_local_runtime_archive_in_parent_dist_root_for_frozen_launcher_layo
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    archive_name = "ShotSieve-windows-nvidia-x64.zip"
+    archive_name = "ShotSieve-windows-nvidia-cuda-x64.zip"
     dist_root = tmp_path / "dist"
     dist_root.mkdir(parents=True)
     local_archive = dist_root / archive_name
@@ -260,13 +272,13 @@ def test_maybe_prepare_torch_runtime_skips_when_bundle_already_contains_torch(tm
     (bundled_torch / "__init__.py").write_text("", encoding="utf-8")
 
     asset = bootstrap_module.RuntimeAsset(
-        id="windows-nvidia",
+        id="windows-nvidia-cuda",
         platform="windows",
         runtime="cuda",
         url="https://example.invalid/runtime.zip",
         archive_name="runtime.zip",
-        executable_name="ShotSieve-NVIDIA.exe",
-        variant_folder_name="ShotSieve-windows-nvidia",
+        executable_name="ShotSieve-NVIDIA-CUDA.exe",
+        variant_folder_name="ShotSieve-windows-nvidia-cuda",
         sha256=None,
     )
 
@@ -287,18 +299,18 @@ def test_maybe_prepare_torch_runtime_uses_existing_sidecar_site_packages(tmp_pat
     runtime_root = tmp_path / "runtime"
     install_dir = tmp_path / "install"
     install_dir.mkdir(parents=True)
-    site_packages = bootstrap_module.sidecar_site_packages_dir(runtime_root, "windows-nvidia")
+    site_packages = bootstrap_module.sidecar_site_packages_dir(runtime_root, "windows-nvidia-cuda")
     (site_packages / "torch").mkdir(parents=True)
     (site_packages / "torch" / "__init__.py").write_text("", encoding="utf-8")
 
     asset = bootstrap_module.RuntimeAsset(
-        id="windows-nvidia",
+        id="windows-nvidia-cuda",
         platform="windows",
         runtime="cuda",
         url="https://example.invalid/runtime.zip",
         archive_name="runtime.zip",
-        executable_name="ShotSieve-NVIDIA.exe",
-        variant_folder_name="ShotSieve-windows-nvidia",
+        executable_name="ShotSieve-NVIDIA-CUDA.exe",
+        variant_folder_name="ShotSieve-windows-nvidia-cuda",
         sha256=None,
     )
 
@@ -336,13 +348,13 @@ def test_maybe_prepare_torch_runtime_auto_installs_when_enabled(
     monkeypatch.setattr(bootstrap_module, "install_torch_sidecar", fake_install_torch_sidecar)
 
     asset = bootstrap_module.RuntimeAsset(
-        id="windows-nvidia",
+        id="windows-nvidia-cuda",
         platform="windows",
         runtime="cuda",
         url="https://example.invalid/runtime.zip",
         archive_name="runtime.zip",
-        executable_name="ShotSieve-NVIDIA.exe",
-        variant_folder_name="ShotSieve-windows-nvidia",
+        executable_name="ShotSieve-NVIDIA-CUDA.exe",
+        variant_folder_name="ShotSieve-windows-nvidia-cuda",
         sha256=None,
     )
 

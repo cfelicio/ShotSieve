@@ -157,7 +157,7 @@ def test_cleanup_warnings_are_visible_and_unknown_status_preserves_selection(chr
         return {afterUnknown, afterSuccess: [...state.selectedIds], tone: presenter.operationTone(result)};
     }""")
     assert state == {"afterUnknown": [1, 2], "afterSuccess": [2], "tone": "warning"}
-    expect(page.locator("#operation-result-counts")).to_contain_text("Cleanup warnings: 1")
+    expect(page.locator("#operation-result-counts")).to_contain_text("Warnings: 1")
     expect(page.locator("#operation-result-items")).to_contain_text("Preview access denied")
     expect(page.locator("#operation-result-panel")).to_have_attribute("data-outcome", "partial")
 

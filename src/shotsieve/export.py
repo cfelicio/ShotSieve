@@ -1,10 +1,10 @@
 """File export operations - copy or move selected files to a destination folder."""
 from __future__ import annotations
 
-import errno
 import os
+import stat
 import shutil
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
 
@@ -53,7 +53,7 @@ class _ExportRowOutcome:
     state: OperationState
     copied: int = 0
     moved: int = 0
-    warning: BaseException | None = None
+    warnings: list[tuple[str, BaseException | str]] = field(default_factory=list)
     error: BaseException | None = None
     error_cause: BaseException | None = None
     needs_rollback: bool = False
@@ -89,11 +89,22 @@ def export_files(
     if mode not in ("copy", "move"):
         raise ValueError(f"Export mode must be 'copy' or 'move', got '{mode}'")
 
-    dest_path = Path(destination).expanduser().resolve()
+    # Keep the spelling supplied by the caller after making relative paths
+    # absolute.  Resolving a remote path can perform an unnecessary network
+    # round-trip and can also change the relationship between a mapped drive
+    # and its equivalent UNC path.
+    dest_path = Path(destination).expanduser()
     if not dest_path.is_absolute():
         dest_path = Path.cwd() / dest_path
-    if not dest_path.is_dir():
-        raise ValueError(f"Destination directory does not exist: {dest_path}")
+    dest_path = Path(os.path.abspath(dest_path))
+    try:
+        destination_stat = dest_path.stat()
+    except (FileNotFoundError, NotADirectoryError) as exc:
+        raise ValueError(f"Destination directory does not exist: {dest_path}") from exc
+    except OSError as exc:
+        raise ValueError(f"Destination directory cannot be accessed: {dest_path}: {exc}") from exc
+    if not stat.S_ISDIR(destination_stat.st_mode):
+        raise ValueError(f"Destination path is not a directory: {dest_path}")
 
     # Defense-in-depth: refuse system-critical directories.
     _reject_system_directory(dest_path)
@@ -160,12 +171,12 @@ def export_files(
         summary.add(outcome.result)
         summary.copied += outcome.copied
         summary.moved += outcome.moved
-        if outcome.warning is not None:
+        for warning_stage, warning in outcome.warnings:
             summary.add_warning(
                 file_id=int(row["id"]),
                 source=str(row["path"]),
-                stage="preview_cleanup",
-                error=outcome.warning,
+                stage=warning_stage,
+                error=warning,
             )
         if outcome.error is not None:
             _append_unprocessed_rows(summary, rows[index:], action=mode, error=outcome.error)
@@ -260,7 +271,7 @@ def _process_export_row(
 def _copy_export_row(row, *, source: Path, target: Path, mode: str) -> _ExportRowOutcome:
     """Perform copy-only filesystem work and classify post-failure state."""
     try:
-        _copy_without_overwrite(source, target)
+        metadata_warning = _copy_without_overwrite(source, target)
     except OSError as exc:
         collision = isinstance(exc, FileExistsError)
         destination_observation = observe_filesystem_path(target)
@@ -315,6 +326,11 @@ def _copy_export_row(row, *, source: Path, target: Path, mode: str) -> _ExportRo
         ),
         state=OperationState.COMPLETED,
         copied=1,
+        warnings=(
+            [("transfer_metadata", metadata_warning)]
+            if metadata_warning is not None
+            else []
+        ),
     )
 
 
@@ -330,7 +346,7 @@ def _move_export_row(
 ) -> _ExportRowOutcome:
     """Transfer one source, then reconcile the catalog before cleanup."""
     try:
-        _move_without_overwrite(source, target)
+        metadata_warning = _move_without_overwrite(source, target)
     except OSError as exc:
         collision = isinstance(exc, FileExistsError)
         source_after = observe_filesystem_path(source)
@@ -422,7 +438,9 @@ def _move_export_row(
             needs_rollback=needs_rollback,
         )
 
-    warning: BaseException | None = None
+    warnings: list[tuple[str, BaseException | str]] = []
+    if metadata_warning is not None:
+        warnings.append(("transfer_metadata", metadata_warning))
     try:
         # Preview cleanup is best effort and happens only after catalog update.
         delete_managed_preview_file(
@@ -432,7 +450,7 @@ def _move_export_row(
             allow_path_parent_fallback=allow_preview_path_fallback,
         )
     except Exception as exc:
-        warning = exc
+        warnings.append(("preview_cleanup", exc))
 
     return _ExportRowOutcome(
         result=FileOperationResult(
@@ -445,7 +463,7 @@ def _move_export_row(
         ),
         state=OperationState.COMPLETED,
         moved=1,
-        warning=warning,
+        warnings=warnings,
     )
 
 
@@ -722,7 +740,14 @@ def _stop_with_unprocessed(
     raise error
 
 
-def _copy_without_overwrite(source: Path, target: Path) -> None:
+def _copy_without_overwrite(source: Path, target: Path) -> BaseException | None:
+    """Copy bytes to a new target without replacing an existing file.
+
+    The data copy is the portable part of a transfer.  Some remote providers
+    do not implement all of the metadata operations used by ``copystat``;
+    those failures must not turn an otherwise complete file copy into a
+    failed move.  The caller reports them as a warning.
+    """
     flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
     if hasattr(os, "O_BINARY"):
         flags |= os.O_BINARY
@@ -731,7 +756,6 @@ def _copy_without_overwrite(source: Path, target: Path) -> None:
     try:
         with os.fdopen(descriptor, "wb") as destination_stream, source.open("rb") as source_stream:
             shutil.copyfileobj(source_stream, destination_stream)
-        shutil.copystat(source, target)
     except BaseException as transfer_error:
         if created:
             try:
@@ -742,20 +766,43 @@ def _copy_without_overwrite(source: Path, target: Path) -> None:
                 raise _TransferCleanupError(transfer_error, cleanup_error) from transfer_error
         raise
 
-
-def _move_without_overwrite(source: Path, target: Path) -> None:
     try:
-        os.link(source, target)
-    except OSError as exc:
-        if exc.errno not in {errno.EXDEV, errno.ENOSYS, errno.EOPNOTSUPP} and getattr(exc, "winerror", None) not in {1, 50}:
-            raise
-        _copy_without_overwrite(source, target)
+        shutil.copystat(source, target)
+    except (OSError, NotImplementedError) as metadata_error:
+        return metadata_error
+    return None
+
+
+def _move_without_overwrite(source: Path, target: Path) -> BaseException | None:
+    """Move one file using an exclusive, remote-safe copy/delete sequence.
+
+    Hard links are not a portable move primitive: they are unavailable on
+    many filesystems and are provider-dependent over SMB/NFS.  Copying into a
+    newly-created target works across volumes, mapped drives, UNC paths, and
+    local filesystems while retaining the no-overwrite guarantee.
+    """
+    metadata_warning = _copy_without_overwrite(source, target)
+    try:
+        _unlink_moved_source(source)
+    except OSError:
+        # A copy/delete move can leave both paths.  The caller records this as
+        # partial/uncertain and deliberately does not retry it implicitly.
+        raise
+    return metadata_warning
+
+
+def _unlink_moved_source(source: Path) -> None:
+    """Remove a copied source, including Windows read-only files."""
     try:
         source.unlink()
-    except OSError:
-        # A cross-device move can leave both paths.  The caller records this
-        # as partial/uncertain and deliberately does not retry it implicitly.
-        raise
+    except PermissionError:
+        if os.name != "nt":
+            raise
+        # Windows treats the DOS read-only attribute as a delete denial.  A
+        # normal move is still allowed to remove such a file, so clear only
+        # that attribute and retry.  Other ACL/share denials still propagate.
+        os.chmod(source, stat.S_IWRITE)
+        source.unlink()
 
 
 def _resolve_target(dest_dir: Path, filename: str) -> Path:

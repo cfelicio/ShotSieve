@@ -2,6 +2,27 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.4.5] - 2026-09-17
+
+### Changed
+
+- Renamed accelerator runtime-pack IDs, archive folders, archives, and
+  launchers to identify both vendor and runtime: NVIDIA CUDA, AMD ROCm, Intel
+  XPU, and Apple MPS. Legacy target IDs remain accepted for existing manifests,
+  cached sidecars, and command-line workflows.
+
+### Fixed
+
+- Fixed the Move action for mapped drives, UNC paths, mounted network shares,
+  and cross-volume transfers on Windows, Linux, and macOS. Moves now use an
+  exclusive copy-then-delete sequence instead of relying on provider-specific
+  hard-link support, while retaining the no-overwrite collision guard.
+- Remote filesystems that reject optional metadata copying no longer make a
+  completed transfer appear to fail; the operation records a visible warning.
+- Destination access and preflight failures now retain the selected file IDs
+  and display a structured operation result instead of appearing to do
+  nothing.
+
 ## [0.4.4] - 2026-09-16
 
 ### Changed

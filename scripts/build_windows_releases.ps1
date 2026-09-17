@@ -24,6 +24,26 @@ function Resolve-AbsolutePath {
     return Join-Path $ProjectRoot $PathValue
 }
 
+function ConvertTo-CanonicalTargetId {
+    param([string]$TargetId)
+
+    $normalized = $TargetId.Trim().ToLowerInvariant()
+    $aliases = @{
+        "windows-nvidia" = "windows-nvidia-cuda"
+        "windows-cuda" = "windows-nvidia-cuda"
+        "windows-intel" = "windows-intel-xpu"
+        "windows-xpu" = "windows-intel-xpu"
+        "windows-amd" = "windows-amd-rocm"
+        "windows-rocm" = "windows-amd-rocm"
+    }
+
+    if ($aliases.ContainsKey($normalized)) {
+        return $aliases[$normalized]
+    }
+
+    return $normalized
+}
+
 function Resolve-PythonCommand {
     param(
         [string]$ProjectRoot,
@@ -394,7 +414,7 @@ if ($TargetIds.Count -gt 0) {
         if ([string]::IsNullOrWhiteSpace($targetId)) {
             continue
         }
-        $targetIdLookup[$targetId.Trim().ToLowerInvariant()] = $true
+        $targetIdLookup[(ConvertTo-CanonicalTargetId $targetId)] = $true
     }
 
     $selectedTargets = @(

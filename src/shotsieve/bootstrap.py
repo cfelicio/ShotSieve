@@ -142,7 +142,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="shotsieve-bootstrap", description="ShotSieve bootstrap launcher")
     parser.add_argument("--manifest-url", default=None, help="Override bootstrap manifest URL")
     parser.add_argument("--runtime-root", default=None, help="Directory used to cache downloaded runtime packs")
-    parser.add_argument("--target", default=None, help="Override runtime target id (for example windows-nvidia)")
+    parser.add_argument(
+        "--target",
+        default=None,
+        help="Override runtime target id (for example windows-nvidia-cuda; legacy IDs remain accepted)",
+    )
     parser.add_argument("--force-refresh", action="store_true", help="Redownload and reinstall the selected runtime pack")
     parser.add_argument("--print-plan", action="store_true", help="Print resolved bootstrap plan and exit")
     parser.add_argument("--no-browser", action="store_true", help="Pass --no-browser to the runtime application")

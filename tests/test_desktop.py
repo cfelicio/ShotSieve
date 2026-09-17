@@ -12,8 +12,9 @@ from shotsieve import runtime_support
 
 
 def test_resolve_cuda_runtime_target_id_only_returns_cuda_targets() -> None:
+    assert desktop_module._resolve_cuda_runtime_target_id("windows-nvidia-cuda") == "windows-nvidia-cuda"
+    assert desktop_module._resolve_cuda_runtime_target_id("linux-nvidia-cuda") == "linux-nvidia-cuda"
     assert desktop_module._resolve_cuda_runtime_target_id("windows-nvidia") == "windows-nvidia"
-    assert desktop_module._resolve_cuda_runtime_target_id("linux-nvidia") == "linux-nvidia"
     assert desktop_module._resolve_cuda_runtime_target_id("windows-cpu") is None
     assert desktop_module._resolve_cuda_runtime_target_id(None) is None
 
@@ -68,7 +69,7 @@ def test_default_data_dir_prefers_portable_internal_dir_for_frozen_build(
 
     portable_dir = tmp_path / "portable"
     portable_dir.mkdir(parents=True)
-    portable_exe = portable_dir / "ShotSieve-NVIDIA.exe"
+    portable_exe = portable_dir / "ShotSieve-NVIDIA-CUDA.exe"
     portable_exe.write_bytes(b"binary")
 
     monkeypatch.setattr(sys, "frozen", True, raising=False)
@@ -143,22 +144,31 @@ def test_main_uses_custom_data_dir(monkeypatch: pytest.MonkeyPatch, tmp_path: Pa
     assert called["open_browser"] is True
 
 
-def test_runtime_target_id_from_executable_name_detects_windows_nvidia(
+def test_runtime_target_id_from_executable_name_detects_windows_nvidia_cuda(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setattr(sys, "executable", r"C:\\tmp\\ShotSieve-NVIDIA-CUDA.exe", raising=False)
+
+    target_id = desktop_module.runtime_target_id_from_executable_name(system_name="Windows")
+
+    assert target_id == "windows-nvidia-cuda"
+
+
+def test_runtime_target_id_from_executable_name_keeps_legacy_nvidia_launcher_compatible(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(sys, "frozen", True, raising=False)
     monkeypatch.setattr(sys, "executable", r"C:\\tmp\\ShotSieve-NVIDIA.exe", raising=False)
 
-    target_id = desktop_module.runtime_target_id_from_executable_name(system_name="Windows")
-
-    assert target_id == "windows-nvidia"
+    assert desktop_module.runtime_target_id_from_executable_name(system_name="Windows") == "windows-nvidia"
 
 
 @pytest.mark.parametrize(
     ("executable_name", "expected_target", "expected_runtime"),
     (
-        ("ShotSieve-Intel.exe", "windows-intel", "xpu"),
-        ("ShotSieve-AMD.exe", "windows-amd", "rocm"),
+        ("ShotSieve-Intel-XPU.exe", "windows-intel-xpu", "xpu"),
+        ("ShotSieve-AMD-ROCm.exe", "windows-amd-rocm", "rocm"),
     ),
 )
 def test_experimental_windows_gpu_launcher_names_select_native_runtime(

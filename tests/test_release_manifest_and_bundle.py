@@ -54,14 +54,22 @@ def run_bundle_plan(target_id: str) -> dict[str, object]:
 def test_portable_bundle_builder_exposes_runtime_pack_target_plan() -> None:
     assert BUNDLE_SCRIPT_PATH.exists()
 
+    plan = run_bundle_plan("linux-nvidia-cuda")
+    target = _dict_value(plan["target"])
+
+    assert target["id"] == "linux-nvidia-cuda"
+    assert target["runtime"] == "cuda"
+    assert target["variantFolderName"] == "ShotSieve-linux-nvidia-cuda"
+    assert _string_value(plan["archivePath"]).endswith("ShotSieve-linux-nvidia-cuda-x64.tar.gz")
+    assert _string_value(plan["distPath"]).endswith("ShotSieve-linux-nvidia-cuda")
+
+
+def test_portable_bundle_builder_accepts_legacy_target_alias() -> None:
     plan = run_bundle_plan("linux-nvidia")
     target = _dict_value(plan["target"])
 
-    assert target["id"] == "linux-nvidia"
-    assert target["runtime"] == "cuda"
-    assert target["variantFolderName"] == "ShotSieve-linux-nvidia"
-    assert _string_value(plan["archivePath"]).endswith("ShotSieve-linux-nvidia-x64.tar.gz")
-    assert _string_value(plan["distPath"]).endswith("ShotSieve-linux-nvidia")
+    assert target["id"] == "linux-nvidia-cuda"
+    assert _string_value(plan["archivePath"]).endswith("ShotSieve-linux-nvidia-cuda-x64.tar.gz")
 
 
 def test_portable_bundle_target_plan_uses_typed_plan_contract() -> None:
@@ -174,9 +182,9 @@ def test_bootstrap_manifest_generator_records_split_runtime_archive_parts(tmp_pa
 
     archive_root = tmp_path / "release-assets"
     archive_root.mkdir()
-    split_target = next(target for target in module.runtime_pack_release_targets() if target.id == "linux-amd")
+    split_target = next(target for target in module.runtime_pack_release_targets() if target.id == "linux-amd-rocm")
     split_bytes = b"part-zero-part-one"
-    split_root = archive_root / "linux-amd-portable"
+    split_root = archive_root / "linux-amd-rocm-portable"
     split_root.mkdir()
     (split_root / f"{split_target.archiveName}.part-000").write_bytes(split_bytes[:9])
     (split_root / f"{split_target.archiveName}.part-001").write_bytes(split_bytes[9:])
@@ -216,20 +224,20 @@ def test_prepare_release_assets_splits_only_oversized_runtime_archives(tmp_path:
     source_root = tmp_path / "downloaded"
     output_root = tmp_path / "published"
     source_root.mkdir()
-    split_target = next(target for target in module.runtime_pack_release_targets() if target.id == "linux-intel")
+    split_target = next(target for target in module.runtime_pack_release_targets() if target.id == "linux-intel-xpu")
     for target in module.runtime_pack_release_targets():
         archive_path = source_root / target.id / target.archiveName
         archive_path.parent.mkdir(parents=True)
         archive_path.write_bytes(b"0123456789ABC" if target.id == split_target.id else b"small")
-    (source_root / "python-dist" / "shotsieve-0.4.4.tar.gz").parent.mkdir()
-    (source_root / "python-dist" / "shotsieve-0.4.4.tar.gz").write_bytes(b"sdist")
+    (source_root / "python-dist" / "shotsieve-0.4.5.tar.gz").parent.mkdir()
+    (source_root / "python-dist" / "shotsieve-0.4.5.tar.gz").write_bytes(b"sdist")
 
     published = module.prepare_release_assets(source_root=source_root, output_root=output_root)
 
     split_parts = sorted(output_root.rglob(f"{split_target.archiveName}.part-*"))
     assert [part.read_bytes() for part in split_parts] == [b"0123", b"4567", b"89AB", b"C"]
     assert not (source_root / split_target.id / split_target.archiveName).exists()
-    assert (output_root / "python-dist" / "shotsieve-0.4.4.tar.gz").read_bytes() == b"sdist"
+    assert (output_root / "python-dist" / "shotsieve-0.4.5.tar.gz").read_bytes() == b"sdist"
     assert set(published) == set(output_root.rglob("*")) - {path for path in output_root.rglob("*") if path.is_dir()}
 
 
@@ -367,19 +375,19 @@ def test_portable_bundle_builder_falls_back_when_existing_staged_bundle_is_locke
     (project_root / "shotsieve.spec").write_text("# stub spec", encoding="utf-8")
 
     target = SimpleNamespace(
-        id="windows-nvidia",
+        id="windows-nvidia-cuda",
         platform="windows",
         specPath="shotsieve.spec",
-        variantFolderName="ShotSieve-windows-nvidia",
-        archiveName="ShotSieve-windows-nvidia-x64.zip",
-        executableName="ShotSieve-NVIDIA.exe",
-        to_json=lambda: {"id": "windows-nvidia"},
+        variantFolderName="ShotSieve-windows-nvidia-cuda",
+        archiveName="ShotSieve-windows-nvidia-cuda-x64.zip",
+        executableName="ShotSieve-NVIDIA-CUDA.exe",
+        to_json=lambda: {"id": "windows-nvidia-cuda"},
     )
 
     dist_root = tmp_path / "dist"
     build_root = tmp_path / "build"
     locked_staged_bundle = dist_root / target.variantFolderName
-    locked_payload = locked_staged_bundle / "data" / "runtime" / "site-packages" / "windows-nvidia" / "torch" / "lib"
+    locked_payload = locked_staged_bundle / "data" / "runtime" / "site-packages" / "windows-nvidia-cuda" / "torch" / "lib"
     locked_payload.mkdir(parents=True, exist_ok=True)
     (locked_payload / "c10.dll").write_text("locked", encoding="utf-8")
 
@@ -417,15 +425,15 @@ def test_portable_bundle_builder_falls_back_when_existing_staged_bundle_is_locke
 
     assert rebuilt_bundle.exists()
     assert rebuilt_bundle != locked_staged_bundle
-    assert rebuilt_bundle.name.startswith("ShotSieve-windows-nvidia-rebuilt")
-    assert (rebuilt_bundle / "ShotSieve-NVIDIA.exe").exists()
+    assert rebuilt_bundle.name.startswith("ShotSieve-windows-nvidia-cuda-rebuilt")
+    assert (rebuilt_bundle / "ShotSieve-NVIDIA-CUDA.exe").exists()
     assert locked_staged_bundle.exists()
     assert archive_path.exists()
 
     with zipfile.ZipFile(archive_path, "r") as archive:
         names = archive.namelist()
 
-    assert "ShotSieve-NVIDIA.exe" in names
+    assert "ShotSieve-NVIDIA-CUDA.exe" in names
     assert "_internal/dummy.txt" in names
 
 

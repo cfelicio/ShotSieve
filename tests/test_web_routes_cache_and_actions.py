@@ -335,6 +335,62 @@ def test_files_export_route_accepts_review_browser_selection_payload(tmp_path: P
     assert captured["payload"] == {"copied": 3, "moved": 0, "failed": []}
 
 
+def test_files_export_direct_failure_retains_unprocessed_ids(tmp_path: Path):
+    from shotsieve import web_routes as route_module
+
+    connection = object()
+
+    class _DatabaseContext:
+        def __enter__(self):
+            return connection
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    def fail_export_files(_connection, **_kwargs):
+        raise ValueError("Destination directory cannot be accessed")
+
+    deps = SimpleNamespace(
+        optional_string=lambda value: value if isinstance(value, str) else None,
+        required_choice=lambda value, *, name, choices: value,
+        required_int_list=lambda value, *, name: list(value),
+        database=lambda _path: _DatabaseContext(),
+        review_selection_revision=lambda _connection, **kwargs: "rev-1",
+        get_preview_cache_root=lambda _connection, *, db_path, persist: tmp_path / "previews",
+        export_files=fail_export_files,
+    )
+    context = route_module.WebRouteContext(
+        db_path=tmp_path / "shotsieve.db",
+        operation_lock=threading.Lock(),
+        scan_registry=None,
+        score_registry=None,
+        compare_registry=None,
+        max_request_body_size=1024,
+        static_dir=tmp_path,
+        media_mime_fallbacks={},
+        dependencies=deps,
+    )
+
+    with pytest.raises(ValueError, match="Destination directory cannot be accessed") as exc_info:
+        route_module._execute_export_request(
+            context,
+            {
+                "file_ids": [7, 8],
+                "selection_revision": "rev-1",
+                "page_selection": {"scope": "review-browser", "root": "C:/photos"},
+                "destination": "\\\\truenas\\mv",
+                "mode": "move",
+            },
+            progress_callback=None,
+            cancel_check=None,
+        )
+
+    summary = exc_info.value.file_operation_summary
+    assert summary["fatal_error"] == "Destination directory cannot be accessed"
+    assert summary["unprocessed_count"] == 2
+    assert {item["file_id"] for item in summary["items"]} == {7, 8}
+
+
 def test_files_export_bulk_failure_retains_current_and_later_batch_ids(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):

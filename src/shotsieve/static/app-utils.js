@@ -341,10 +341,10 @@
 
   function runtimeDisplayName(runtime) {
     const labels = {
-      cuda: "CUDA",
+      cuda: "NVIDIA CUDA",
       rocm: "AMD ROCm",
-      xpu: "XPU",
-      mps: "MPS",
+      xpu: "Intel XPU",
+      mps: "Apple MPS",
       cpu: "CPU",
       auto: "Auto",
     };

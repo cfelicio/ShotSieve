@@ -211,7 +211,7 @@ def test_integrated_release_script_enforces_target_python_version() -> None:
 
 
 def test_integrated_release_script_recreates_broken_target_virtualenv(tmp_path: Path) -> None:
-    target_id = "windows-nvidia"
+    target_id = "windows-nvidia-cuda"
     build_root = tmp_path / "build-root"
     target_venv_root = build_root / target_id / ".venv"
     target_python = target_venv_root / "Scripts" / "python.exe"
@@ -250,7 +250,7 @@ def test_integrated_release_script_recreates_broken_target_virtualenv(tmp_path: 
 def test_integrated_release_script_recreates_target_virtualenv_when_python_startup_fails(
     tmp_path: Path,
 ) -> None:
-    target_id = "windows-nvidia"
+    target_id = "windows-nvidia-cuda"
     build_root = tmp_path / "build-root"
     target_venv_root = build_root / target_id / ".venv"
     target_python = target_venv_root / "Scripts" / "python.exe"
@@ -392,8 +392,8 @@ def test_build_guide_documents_release_builds_and_windows_runtime_script() -> No
 def test_build_guide_documents_prepare_then_publish_release_flow() -> None:
     build_doc_text = (PROJECT_ROOT / "docs" / "building.md").read_text(encoding="utf-8")
 
-    assert "./scripts/prepare_release.ps1 -Version 0.2.0" in build_doc_text
-    assert "./scripts/create_github_release.ps1 -Version v0.2.0" in build_doc_text
+    assert "./scripts/prepare_release.ps1 -Version 1.2.3" in build_doc_text
+    assert "./scripts/create_github_release.ps1 -Version v1.2.3" in build_doc_text
     assert "does **not** edit version files" in build_doc_text
 
 
@@ -418,7 +418,7 @@ def test_xpu_track_is_pinned_and_in_release_matrix() -> None:
     )
 
     matrix = run_release_matrix("runtime")
-    assert {entry["id"] for entry in matrix if entry["torchVariant"] == "xpu"} == {"windows-intel", "linux-intel"}
+    assert {entry["id"] for entry in matrix if entry["torchVariant"] == "xpu"} == {"windows-intel-xpu", "linux-intel-xpu"}
 
     xpu_doc = (PROJECT_ROOT / "docs" / "intel-xpu.md").read_text(encoding="utf-8")
     assert "https://download.pytorch.org/whl/xpu" in xpu_doc
@@ -442,7 +442,7 @@ def test_rocm_track_is_pinned_and_in_release_matrix() -> None:
     )
 
     matrix = run_release_matrix("runtime")
-    assert {entry["id"] for entry in matrix if entry["torchVariant"] == "rocm"} == {"windows-amd", "linux-amd"}
+    assert {entry["id"] for entry in matrix if entry["torchVariant"] == "rocm"} == {"windows-amd-rocm", "linux-amd-rocm"}
 
     rocm_doc = (PROJECT_ROOT / "docs" / "amd-rocm.md").read_text(encoding="utf-8")
     assert "rocm7.2.1" in rocm_doc
@@ -530,32 +530,32 @@ def test_tier1_release_matrix_covers_all_runtime_pack_targets() -> None:
 
     assert set(targets) == {
         "windows-cpu",
-        "windows-nvidia",
-        "windows-intel",
-        "windows-amd",
+        "windows-nvidia-cuda",
+        "windows-intel-xpu",
+        "windows-amd-rocm",
         "linux-cpu",
-        "linux-nvidia",
-        "linux-intel",
-        "linux-amd",
+        "linux-nvidia-cuda",
+        "linux-intel-xpu",
+        "linux-amd-rocm",
         "macos-cpu",
-        "macos-mps",
+        "macos-apple-mps",
     }
 
     assert targets["windows-cpu"]["runsOn"] == "windows-latest"
     assert targets["linux-cpu"]["runsOn"] == "ubuntu-latest"
-    assert targets["windows-intel"]["torchVariant"] == "xpu"
-    assert targets["linux-intel"]["torchVariant"] == "xpu"
-    assert targets["windows-amd"]["torchVariant"] == "rocm"
-    assert targets["linux-amd"]["torchVariant"] == "rocm"
-    assert targets["macos-mps"]["runsOn"] == "macos-latest"
+    assert targets["windows-intel-xpu"]["torchVariant"] == "xpu"
+    assert targets["linux-intel-xpu"]["torchVariant"] == "xpu"
+    assert targets["windows-amd-rocm"]["torchVariant"] == "rocm"
+    assert targets["linux-amd-rocm"]["torchVariant"] == "rocm"
+    assert targets["macos-apple-mps"]["runsOn"] == "macos-latest"
     assert targets["windows-cpu"]["constraintsFile"] == "scripts/release-constraints-torch.txt"
-    assert targets["windows-nvidia"]["constraintsFile"] == "scripts/release-constraints-torch.txt"
+    assert targets["windows-nvidia-cuda"]["constraintsFile"] == "scripts/release-constraints-torch.txt"
     assert targets["linux-cpu"]["constraintsFile"] == "scripts/release-constraints-torch.txt"
-    assert targets["linux-nvidia"]["constraintsFile"] == "scripts/release-constraints-torch.txt"
+    assert targets["linux-nvidia-cuda"]["constraintsFile"] == "scripts/release-constraints-torch.txt"
     assert targets["macos-cpu"]["constraintsFile"] == "scripts/release-constraints-torch.txt"
-    assert targets["macos-mps"]["constraintsFile"] == "scripts/release-constraints-torch.txt"
-    assert targets["linux-nvidia"]["torchVariant"] == "cuda"
-    assert targets["macos-mps"]["runtime"] == "mps"
+    assert targets["macos-apple-mps"]["constraintsFile"] == "scripts/release-constraints-torch.txt"
+    assert targets["linux-nvidia-cuda"]["torchVariant"] == "cuda"
+    assert targets["macos-apple-mps"]["runtime"] == "mps"
     assert _string_value(targets["windows-cpu"]["archiveName"]).endswith(".zip")
     assert _string_value(targets["linux-cpu"]["archiveName"]).endswith(".tar.gz")
     assert _string_value(targets["macos-cpu"]["archiveName"]).endswith(".tar.gz")

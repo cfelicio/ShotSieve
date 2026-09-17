@@ -81,19 +81,21 @@ shotsieve-desktop
 Downloaded runtime packs use target-specific launcher names instead:
 
 - Windows CPU: `ShotSieve-CPU.exe`
-- Windows NVIDIA / CUDA: `ShotSieve-NVIDIA.exe`
-- Windows Intel / XPU: `ShotSieve-Intel.exe`
-- Windows AMD / ROCm: `ShotSieve-AMD.exe`
+- Windows NVIDIA CUDA: `ShotSieve-NVIDIA-CUDA.exe`
+- Windows Intel XPU: `ShotSieve-Intel-XPU.exe`
+- Windows AMD ROCm: `ShotSieve-AMD-ROCm.exe`
 - Linux CPU: `ShotSieve-CPU`
-- Linux NVIDIA / CUDA: `ShotSieve-NVIDIA`
-- Linux Intel / XPU: `ShotSieve-Intel`
-- Linux AMD / ROCm: `ShotSieve-AMD`
+- Linux NVIDIA CUDA: `ShotSieve-NVIDIA-CUDA`
+- Linux Intel XPU: `ShotSieve-Intel-XPU`
+- Linux AMD ROCm: `ShotSieve-AMD-ROCm`
 - macOS CPU: `ShotSieve-CPU`
-- macOS Apple Silicon / MPS: `ShotSieve-MPS`
+- macOS Apple MPS: `ShotSieve-Apple-MPS`
 
 The XPU and ROCm packs use the same learned-model catalog as the CPU and CUDA
 packs. Hardware acceleration still requires a supported driver, GPU, and
 matching runtime; a bundle existing does not certify every device.
+Release names include the vendor and runtime for clarity, while application
+runtime values remain `cuda`, `rocm`, `xpu`, `mps`, and `cpu`.
 
 Useful flags:
 
@@ -177,6 +179,23 @@ Scan failures and cancellations are recorded as failed scan diagnostics even whe
 The asynchronous scan route keeps the HTTP adapter small and hands a frozen request snapshot to the scan runner. Root execution, job-level progress translation, pagination across roots, and final result/diagnostic construction are separate stages; the scanner dependency, per-root transaction boundary, cancellation callback, and status/result payloads remain the same.
 
 Copy, move, and delete workers expose one shared per-file result contract in their synchronous and asynchronous responses. Results retain source/destination paths, the operation stage, OS error details, guarded present/missing/unknown filesystem state, observation errors, retry safety, and partial/unprocessed outcomes; preview cleanup warnings do not inflate transfer failures. When a transfer or unlink may have mutated the filesystem, the result retains both paths and is never marked safe for automatic retry. Catalog failures are rolled back and read back before a move is compensated, and failed bulk jobs retain every untouched ID, including the remainder of the current batch. Completed file mutations are committed independently so cancellation or a later fatal row does not erase earlier work. Failed operation jobs retain their summary for the existing status and result endpoints, while partial or uncertain files are left for manual inspection rather than automatically retried.
+
+Move/export transfer behavior is platform-neutral: the move implementation creates
+the destination with exclusive-create semantics, copies the file, and deletes
+the source only after the copy succeeds. This supports local paths, mapped or
+UNC paths on Windows, mounted SMB/NFS paths on Linux and macOS, and transfers
+between different filesystem volumes without requiring hard links. It still
+depends on the OS/provider exposing normal file operations to the ShotSieve
+process and on the process account having source read/delete and destination
+write permissions. If source deletion fails after a successful copy, both paths
+are retained as a partial/uncertain result for manual inspection.
+
+Copying optional timestamps or other filesystem metadata is best effort because
+remote providers vary in metadata support. A metadata failure is recorded as a
+warning after the data transfer, not converted into a false transfer failure.
+Destination validation preserves mapped/UNC path spelling and reports access
+errors through the retained operation result, including the selected IDs that
+were not started.
 
 The file-operation implementation is staged by operation: export separates source/target validation, copy or move transfer, catalog update, compensation, and preview cleanup; delete separates trusted-root policy, one-file removal, catalog reconciliation, and preview cleanup; missing-entry maintenance separates root inspection, preview revalidation, and catalog deletion. Private row-outcome and reconciliation state objects retain observed-missing, deleted, not-processed, and catalog-uncertain distinctions while the public summary and exception payloads remain unchanged.
 
@@ -266,20 +285,27 @@ Useful examples:
 # JSON plan for the default Windows runtime targets
 ./scripts/build_windows_releases.ps1 -Mode runtime -PlanOnly -AsJson
 
-# Build only the NVIDIA runtime pack
-./scripts/build_windows_releases.ps1 -Mode runtime -TargetIds windows-nvidia
+# Build only the NVIDIA CUDA runtime pack
+./scripts/build_windows_releases.ps1 -Mode runtime -TargetIds windows-nvidia-cuda
 
 # Use the target's reproducible Python interpreter explicitly when `python`
 # resolves to a different installed version
-./scripts/build_windows_releases.ps1 -PythonExe C:\\Python313\\python.exe -Mode runtime -TargetIds windows-nvidia
+./scripts/build_windows_releases.ps1 -PythonExe C:\\Python313\\python.exe -Mode runtime -TargetIds windows-nvidia-cuda
 ```
 
 Current Windows runtime-pack outputs:
 
 - `ShotSieve-windows-cpu`
-- `ShotSieve-windows-nvidia`
-- `ShotSieve-windows-intel`
-- `ShotSieve-windows-amd`
+- `ShotSieve-windows-nvidia-cuda`
+- `ShotSieve-windows-intel-xpu`
+- `ShotSieve-windows-amd-rocm`
+
+The same vendor/runtime naming is used in archive files, such as
+`ShotSieve-windows-nvidia-cuda-x64.zip`. The build scripts accept the older
+vendor-only target IDs (`windows-nvidia`, `windows-intel`, and `windows-amd`)
+as compatibility aliases, but new manifests and build outputs use the
+explicit IDs above. Existing older launchers continue to resolve their
+original sidecar paths.
 
 Tier 1 runtime-pack targets are currently defined for:
 
@@ -294,7 +320,7 @@ After all runtime-pack build jobs finish, the release workflow runs `scripts/gen
 Prepare release references first, then publish the tag. The prep helper updates the package version files and ensures the changelog has an entry for the release:
 
 ```powershell
-./scripts/prepare_release.ps1 -Version 0.2.0
+./scripts/prepare_release.ps1 -Version 1.2.3
 ```
 
 That script updates `pyproject.toml`, `src/shotsieve/__init__.py`, `CHANGELOG.md`, and (when present) the checked-in `src/shotsieve.egg-info/PKG-INFO`. Review and commit those changes before publishing the tag.
@@ -302,13 +328,13 @@ That script updates `pyproject.toml`, `src/shotsieve/__init__.py`, `CHANGELOG.md
 To publish a GitHub release, use the separate tag helper to create and push an annotated version tag:
 
 ```powershell
-./scripts/create_github_release.ps1 -Version v0.2.0
+./scripts/create_github_release.ps1 -Version v1.2.3
 ```
 
 That tag helper performs the local git safety checks, creates the tag, and pushes it to `origin`, but it does **not** edit version files. The actual GitHub release is then published by `.github/workflows/release.yml` after the `v*` tag push reaches GitHub. A dry run is available with:
 
 ```powershell
-./scripts/create_github_release.ps1 -Version v0.2.0 -DryRun
+./scripts/create_github_release.ps1 -Version v1.2.3 -DryRun
 ```
 
 The current tag-push workflow does not support `-PreRelease`; if you need a pre-release, mark it manually in GitHub after the workflow publishes it or extend the release workflow to handle that metadata.

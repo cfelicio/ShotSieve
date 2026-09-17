@@ -248,7 +248,7 @@
       if (result.copied) parts.push(`${result.copied} copied`);
       if (result.moved) parts.push(`${result.moved} moved`);
       if (result.failed?.length) parts.push(`${result.failed.length} failed`);
-      if (result.warnings?.length) parts.push(`${result.warnings.length} cleanup warning(s)`);
+      if (result.warnings?.length) parts.push(`${result.warnings.length} warning(s)`);
       return parts.join(", ");
     }
 
@@ -313,7 +313,7 @@
         ["Partial", result.partial_count || 0],
         ["Failed", result.failed_count ?? (Array.isArray(result.failed) ? result.failed.length : 0)],
         ["Unprocessed", result.unprocessed_count || 0],
-        ["Cleanup warnings", result.warnings?.length || 0],
+        ["Warnings", result.warnings?.length || 0],
       ];
       for (const [label, value] of countValues) {
         const count = document.createElement("span");
@@ -324,7 +324,7 @@
 
       itemsContainer.replaceChildren();
       const detailItems = [
-        ...(result.warnings || []).map((item) => ({ ...item, outcome: "cleanup warning" })),
+        ...(result.warnings || []).map((item) => ({ ...item, outcome: "warning" })),
         ...items.filter((item) => item.outcome !== "success"),
         ...items.filter((item) => item.outcome === "success"),
       ];

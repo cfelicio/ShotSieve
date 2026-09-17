@@ -14,15 +14,14 @@ from shotsieve.export import _reject_system_directory, export_files
 from shotsieve.scanner import scan_root
 
 
-@pytest.mark.parametrize("error_code", [errno.EXDEV, errno.EOPNOTSUPP, errno.ENOSYS])
-def test_move_copies_when_hard_links_are_unavailable(tmp_path, monkeypatch, error_code):
+def test_move_does_not_require_hard_links(tmp_path, monkeypatch):
     from shotsieve.export import _move_without_overwrite
 
     source, target = tmp_path / "source.jpg", tmp_path / "target.jpg"
     source.write_bytes(b"original photo")
 
     def unsupported(*args):
-        raise OSError(error_code, "hard links unavailable")
+        raise PermissionError("hard links unavailable")
 
     monkeypatch.setattr("shotsieve.export.os.link", unsupported)
     _move_without_overwrite(source, target)
@@ -35,13 +34,13 @@ def test_move_recovery_never_overwrites_a_racing_source(tmp_path, monkeypatch):
 
     source, target = tmp_path / "source.jpg", tmp_path / "target.jpg"
     target.write_bytes(b"moved photo")
-    real_link = export.os.link
+    real_open = export.os.open
 
-    def racing_link(old, new):
+    def racing_open(path, flags, *args):
         source.write_bytes(b"new photo")
-        return real_link(old, new)
+        return real_open(path, flags, *args)
 
-    monkeypatch.setattr(export.os, "link", racing_link)
+    monkeypatch.setattr(export.os, "open", racing_open)
     with pytest.raises(FileExistsError):
         export._restore_moved_source(source, target)
     assert source.read_bytes() == b"new photo"
@@ -350,6 +349,33 @@ class TestValidation:
 
 
 class TestMovePreviewCleanup:
+    def test_move_succeeds_when_remote_metadata_copy_is_unsupported(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        from shotsieve import export as export_module
+
+        db_path, photo_dir, ids_by_name = setup_library(tmp_path)
+        destination = tmp_path / "export"
+        destination.mkdir()
+
+        def fail_metadata_copy(*_args, **_kwargs):
+            raise OSError("simulated remote metadata limitation")
+
+        monkeypatch.setattr(export_module.shutil, "copystat", fail_metadata_copy)
+
+        with database(db_path) as connection:
+            result = export_files(
+                connection,
+                file_ids=[ids_by_name["alpha.jpg"]],
+                destination=str(destination),
+                mode="move",
+            )
+
+        assert result.moved == 1
+        assert not (photo_dir / "alpha.jpg").exists()
+        assert (destination / "alpha.jpg").exists()
+        assert result.warnings[0]["stage"] == "transfer_metadata"
+
     def test_move_deletes_old_preview_file(self, tmp_path: Path):
         db_path, photo_dir, ids_by_name = setup_library(tmp_path)
         preview_dir = tmp_path / "previews"
