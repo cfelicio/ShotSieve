@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.4.10] - 2026-09-18
+
+### Fixed
+
+- Cleared cached host/frozen `tqdm` modules before learned-IQA diagnostics so
+  Transformers can load `tqdm.contrib` from the selected runtime sidecar.
+
 ## [0.4.9] - 2026-09-18
 
 ### Fixed

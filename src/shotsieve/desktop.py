@@ -36,6 +36,7 @@ LEARNED_IQA_MISSING_MODULE_PACKAGE_HINTS = {
     "huggingface_hub": "huggingface-hub",
     "sympy": "sympy",
     "facexlib": "facexlib",
+    "tqdm": "tqdm",
 }
 
 
@@ -130,9 +131,17 @@ def _clear_transformers_module_cache() -> None:
             sys.modules.pop(module_name, None)
 
 
+def _clear_tqdm_module_cache() -> None:
+    """Drop a host/frozen tqdm module before loading the sidecar runtime."""
+    for module_name in list(sys.modules):
+        if module_name == "tqdm" or module_name.startswith("tqdm."):
+            sys.modules.pop(module_name, None)
+
+
 def _learned_iqa_runtime_import_diagnostic() -> str | None:
     _clear_pyiqa_module_cache()
     _clear_transformers_module_cache()
+    _clear_tqdm_module_cache()
 
     try:
         importlib.invalidate_caches()

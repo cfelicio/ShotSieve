@@ -553,6 +553,28 @@ def test_runtime_has_learned_iqa_clears_stale_module_cache_before_import(
             module_cache.pop(sentinel_key, None)
 
 
+def test_clear_tqdm_module_cache_removes_cached_host_modules() -> None:
+    module_cache = cast(dict[str, object], sys.modules)
+    original_tqdm = module_cache.get("tqdm")
+    original_tqdm_contrib = module_cache.get("tqdm.contrib")
+    module_cache["tqdm"] = object()
+    module_cache["tqdm.contrib"] = object()
+
+    try:
+        desktop_module._clear_tqdm_module_cache()
+        assert "tqdm" not in module_cache
+        assert "tqdm.contrib" not in module_cache
+    finally:
+        if original_tqdm is not None:
+            module_cache["tqdm"] = original_tqdm
+        else:
+            module_cache.pop("tqdm", None)
+        if original_tqdm_contrib is not None:
+            module_cache["tqdm.contrib"] = original_tqdm_contrib
+        else:
+            module_cache.pop("tqdm.contrib", None)
+
+
 def test_sidecar_cuda_probe_uses_runtime_import_check(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
