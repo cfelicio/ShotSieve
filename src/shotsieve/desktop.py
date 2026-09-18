@@ -35,6 +35,7 @@ LEARNED_IQA_MISSING_MODULE_PACKAGE_HINTS = {
     "pil": "Pillow",
     "huggingface_hub": "huggingface-hub",
     "sympy": "sympy",
+    "facexlib": "facexlib",
 }
 
 
@@ -173,6 +174,29 @@ def _learned_iqa_runtime_import_diagnostic() -> str | None:
         # constructed. Probe it here so a stale or internally inconsistent
         # sidecar is repaired before the user reaches model preparation.
         getattr(transformers_module, "AutoModelForImageTextToText")
+    except Exception as exc:
+        details = [f"{type(exc).__name__}: {exc}"]
+        missing_module_name = getattr(exc, "name", None)
+        if isinstance(missing_module_name, str) and missing_module_name:
+            module_root = missing_module_name.split(".", 1)[0].casefold()
+            suggested_package = LEARNED_IQA_MISSING_MODULE_PACKAGE_HINTS.get(module_root)
+            if suggested_package:
+                details.append(
+                    f"missing module '{missing_module_name}' (suggested package: {suggested_package})"
+                )
+            else:
+                details.append(f"missing module '{missing_module_name}'")
+
+        trace_text = traceback.format_exc(limit=6).strip()
+        if trace_text:
+            details.append(trace_text)
+        return " | ".join(details)
+
+    try:
+        # TOPIQ's architecture module imports FaceRestoreHelper even for the
+        # non-face topiq_nr model.  Probe registration here so an older
+        # sidecar missing facexlib is repaired before model preparation.
+        importlib.import_module("pyiqa.archs.topiq_arch")
     except Exception as exc:
         details = [f"{type(exc).__name__}: {exc}"]
         missing_module_name = getattr(exc, "name", None)

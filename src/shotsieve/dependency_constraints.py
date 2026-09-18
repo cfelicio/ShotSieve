@@ -5,6 +5,9 @@ import importlib.metadata
 
 COMMON_MODEL_REQUIREMENTS = (
     "pyiqa==0.1.16",
+    # PyIQA imports FaceRestoreHelper while registering TOPIQ, including for
+    # the non-face topiq_nr model.
+    "facexlib==0.3.0",
     "timm==1.0.29",
     "huggingface-hub==1.31.0",
     # Keep the earlier Q-ReAlign-compatible pin;
@@ -68,6 +71,7 @@ ROCM_WINDOWS_PACKAGE_URLS = (
 
 MODEL_DEPENDENCY_DISTRIBUTIONS = (
     "pyiqa",
+    "facexlib",
     "torch",
     "torchvision",
     "timm",

@@ -33,6 +33,7 @@ _OFFLINE_ENV_NAMES = ("HF_HUB_OFFLINE", "TRANSFORMERS_OFFLINE")
 _VERSION_PACKAGE_NAMES = (
     "shotsieve",
     "pyiqa",
+    "facexlib",
     "torch",
     "torchvision",
     "timm",

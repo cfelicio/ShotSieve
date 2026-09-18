@@ -56,6 +56,10 @@ _LEARNED_IQA_NO_DEPS_PACKAGES = frozenset({
     "timm",
     "openai-clip",
     "accelerate",
+    # PyIQA imports FaceRestoreHelper from facexlib while registering TOPIQ,
+    # including for the non-face topiq_nr model.  Keep its torch dependency
+    # out of the already-loaded runtime sidecar.
+    "facexlib",
 })
 
 # openai-clip is a source-only package from 2022.  Its isolated build invokes

@@ -2,6 +2,17 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.4.7] - 2026-09-18
+
+### Fixed
+
+- Restored the Q-ReAlign-compatible Transformers pin and added a startup probe
+  for `AutoModelForImageTextToText`, so stale learned-IQA sidecars are repaired
+  before model preparation.
+- Added the missing `facexlib` sidecar dependency and a TOPIQ architecture
+  import probe, so `topiq_nr` repairs older sidecars instead of failing with a
+  misleading `CFANet` registry error.
+
 ## [0.4.6] - 2026-09-17
 
 ### Changed

@@ -402,14 +402,14 @@ def test_embedded_install_learned_iqa_sidecar_does_not_replace_loaded_torch(
     )
 
     assert installed is True
-    requirements = {"timm==1.0.29", "openai-clip==1.0.1", "accelerate==1.15.0"}
+    requirements = {"timm==1.0.29", "openai-clip==1.0.1", "accelerate==1.15.0", "facexlib==0.3.0"}
     args_by_requirement = {
         requirement: args
         for args in captured_args
         for requirement in requirements
         if requirement in args
     }
-    for requirement in ("timm==1.0.29", "openai-clip==1.0.1", "accelerate==1.15.0"):
+    for requirement in ("timm==1.0.29", "openai-clip==1.0.1", "accelerate==1.15.0", "facexlib==0.3.0"):
         assert "--no-deps" in args_by_requirement[requirement]
     assert "--no-build-isolation" in args_by_requirement["openai-clip==1.0.1"]
 
