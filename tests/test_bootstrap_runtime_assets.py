@@ -331,12 +331,19 @@ def test_install_learned_iqa_sidecar_replaces_old_tree_after_clean_staged_instal
 ) -> None:
     site_packages = tmp_path / "site-packages"
     site_packages.mkdir(parents=True)
+    (site_packages / "torch").mkdir()
+    (site_packages / "torch" / "__init__.py").write_text("torch", encoding="utf-8")
+    (site_packages / "torchvision").mkdir()
+    (site_packages / "torchvision" / "__init__.py").write_text("torchvision", encoding="utf-8")
     (site_packages / "transformers").mkdir()
     (site_packages / "transformers" / "stale-module.py").write_text("stale", encoding="utf-8")
 
     def fake_embedded_install(*, runtime: str, site_packages: Path, force_reinstall: bool = False, output_func=print):
         assert runtime == "cuda"
         assert force_reinstall is True
+        assert (site_packages / "torch" / "__init__.py").read_text(encoding="utf-8") == "torch"
+        assert (site_packages / "torchvision" / "__init__.py").read_text(encoding="utf-8") == "torchvision"
+        assert not (site_packages / "transformers" / "stale-module.py").exists()
         (site_packages / "pyiqa").mkdir(parents=True)
         (site_packages / "pyiqa" / "__init__.py").write_text("", encoding="utf-8")
         (site_packages / "transformers").mkdir()

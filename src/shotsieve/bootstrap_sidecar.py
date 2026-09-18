@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import contextlib
+import csv
 import errno
 import hashlib
 import importlib
@@ -9,6 +10,7 @@ import json
 import os
 import platform
 import pkgutil
+import re
 import shutil
 import sys
 import tarfile
@@ -850,6 +852,123 @@ def _learned_iqa_packages_for_runtime(runtime: str) -> list[str]:
     return packages
 
 
+_LEARNED_IQA_TOP_LEVEL_ALIASES = {
+    "opencv-python-headless": ("cv2",),
+    "openai-clip": ("clip",),
+    "pyyaml": ("yaml",),
+    "huggingface-hub": ("huggingface_hub",),
+}
+
+
+def _normalized_distribution_name(value: str) -> str:
+    return re.sub(r"[-_.]+", "_", value).casefold()
+
+
+def _sidecar_distribution_name(metadata_dir: Path) -> str | None:
+    metadata_path = metadata_dir / "METADATA"
+    try:
+        for line in metadata_path.read_text(encoding="utf-8", errors="replace").splitlines():
+            if line.casefold().startswith("name:"):
+                return line.split(":", 1)[1].strip()
+    except OSError:
+        pass
+
+    for suffix in (".dist-info", ".egg-info"):
+        if metadata_dir.name.endswith(suffix):
+            return metadata_dir.name[: -len(suffix)].rsplit("-", 1)[0]
+    return None
+
+
+def _safe_sidecar_path(site_packages: Path, relative_name: str) -> Path | None:
+    relative_path = PurePosixPath(relative_name)
+    if relative_path.is_absolute() or any(part in {"", ".", ".."} for part in relative_path.parts):
+        return None
+    candidate = site_packages.joinpath(*relative_path.parts)
+    try:
+        candidate.resolve().relative_to(site_packages.resolve())
+    except ValueError:
+        return None
+    return candidate
+
+
+def _purge_sidecar_distribution(site_packages: Path, requirement: str) -> None:
+    """Remove one learned distribution before a clean staged reinstall.
+
+    The Torch runtime and learned-IQA packages share one target directory. A
+    staged learned repair must retain Torch, but it must not retain old
+    Transformers or other learned package files that a ``--target`` install
+    would otherwise leave behind.
+    """
+    distribution_name = _distribution_name(requirement)
+    normalized_name = _normalized_distribution_name(distribution_name)
+    metadata_dirs = [
+        *site_packages.glob("*.dist-info"),
+        *site_packages.glob("*.egg-info"),
+    ]
+    top_level_names: set[str] = set(
+        _LEARNED_IQA_TOP_LEVEL_ALIASES.get(
+            distribution_name,
+            (distribution_name.replace("-", "_"),),
+        )
+    )
+
+    for metadata_dir in metadata_dirs:
+        metadata_name = _sidecar_distribution_name(metadata_dir) or ""
+        if not metadata_dir.is_dir() or _normalized_distribution_name(metadata_name) != normalized_name:
+            continue
+
+        top_level_path = metadata_dir / "top_level.txt"
+        try:
+            top_level_names.update(
+                line.strip()
+                for line in top_level_path.read_text(encoding="utf-8", errors="replace").splitlines()
+                if line.strip()
+            )
+        except OSError:
+            pass
+
+        record_path = metadata_dir / "RECORD"
+        try:
+            with record_path.open(newline="", encoding="utf-8", errors="replace") as record_file:
+                for row in csv.reader(record_file):
+                    if row and (recorded_path := _safe_sidecar_path(site_packages, row[0])) is not None:
+                        try:
+                            if recorded_path.is_file() or recorded_path.is_symlink():
+                                recorded_path.unlink()
+                        except OSError:
+                            pass
+        except OSError:
+            pass
+
+        shutil.rmtree(metadata_dir, ignore_errors=True)
+
+    for top_level_name in top_level_names:
+        top_level_path = _safe_sidecar_path(site_packages, top_level_name)
+        if top_level_path is None:
+            continue
+        if top_level_path.is_dir():
+            shutil.rmtree(top_level_path, ignore_errors=True)
+        else:
+            try:
+                top_level_path.unlink()
+            except OSError:
+                pass
+
+
+def _prepare_learned_iqa_staging(*, source_dir: Path, staging_dir: Path, runtime: str) -> None:
+    """Copy the Torch base and remove learned packages before reinstalling."""
+    if source_dir.exists():
+        for source_path in source_dir.iterdir():
+            destination_path = staging_dir / source_path.name
+            if source_path.is_dir() and not source_path.is_symlink():
+                shutil.copytree(source_path, destination_path, dirs_exist_ok=True)
+            else:
+                shutil.copy2(source_path, destination_path)
+
+    for package_name in _learned_iqa_packages_for_runtime(runtime):
+        _purge_sidecar_distribution(staging_dir, package_name)
+
+
 def _install_learned_iqa_sidecar_with_embedded_pip(
     *,
     runtime: str,
@@ -1016,6 +1135,11 @@ def install_learned_iqa_sidecar(
     staging_dir = Path(tempfile.mkdtemp(prefix=f".{site_packages.name}.learned-install-", dir=site_packages.parent))
     try:
         with _sidecar_install_lock(site_packages):
+            _prepare_learned_iqa_staging(
+                source_dir=site_packages,
+                staging_dir=staging_dir,
+                runtime=runtime,
+            )
             embedded_install_result = sidecar_func(
                 runtime=runtime,
                 # A --target reinstall does not remove files from an older

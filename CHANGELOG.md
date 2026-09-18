@@ -2,6 +2,14 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.4.9] - 2026-09-18
+
+### Fixed
+
+- Learned-IQA sidecar repairs now retain the already-installed Torch and
+  torchvision runtime while rebuilding learned packages, instead of replacing
+  the shared target with a tree that omitted torchvision.
+
 ## [0.4.8] - 2026-09-18
 
 ### Fixed
