@@ -1,7 +1,7 @@
 # ShotSieve maintainability, architecture, and technical-debt audit
 
 **Audit date:** 2026-09-18  
-**Scope:** The initial audit was read-only. WI-01 was subsequently implemented and verified; this document now records both the original evidence and the lean follow-up policy. Line references are 1-indexed and reflect the audited checkout unless noted otherwise.
+**Scope:** The initial audit was read-only. WI-01, WI-02, and WI-03 were subsequently implemented and verified; this document now records both the original evidence and the lean follow-up policy. Line references are 1-indexed and reflect the audited checkout unless noted otherwise.
 
 ## Solo-development policy
 
@@ -34,7 +34,7 @@ listed rollback boundary.
 |---|---|---|---|---|---|
 | **WI-01** | **Completed — retain** | P1 | **Direct correctness fixes** | Bare SQLite migration rows, worker-start lock release, composed **Open original**, reset profile detail, and two documentation corrections. No new reusable production abstraction was introduced. | Completed: 718 passed, 1 skipped; Ruff passed. |
 | **WI-02** | **Completed — retain** | P2 | **Delete version-compatibility code** | Remove only code that supports an old install, old target/launcher ID, old sidecar location/marker, old preview name, old model alias, or old public/private helper name. Make current-version direct paths the only path. Do not add replacement adapters. | Completed: 710 passed, 1 skipped; Ruff passed. Type tools unavailable. |
-| **WI-03** | Proposed | P3 | **Delete proven frontend no-ops** | Remove no-op `addLogEntry`, unused score-card/status-pill hooks, and the unused score-sort hook. Keep the now-working direct Open-original callback. Do **not** add module registries or startup validation frameworks. | Frontend state/static tests and the browser suite. |
+| **WI-03** | **Completed - retain** | P3 | **Delete proven frontend no-ops** | Remove no-op `addLogEntry`, unused score-card/status-pill hooks, and the unused score-sort hook. Keep the now-working direct Open-original callback. Do **not** add module registries or startup validation frameworks. | Completed: 157 frontend/static/accessibility/responsive tests; 57 browser tests passed with one transient shell-ready timeout whose isolated rerun passed; Ruff passed; full pytest 711 passed, 1 skipped. Type tools unavailable. |
 | **WI-04** | Proposed | P3 | **Remove legacy signature fallback dispatch** | Replace `inspect.signature` compatibility forwarding for `max_decode_pixels` with direct current signatures, then delete the unused fallback branches and imports. Do not introduce a generic callback helper. | Scanner, preview, scoring, and runtime-helper tests. |
 | **WI-05** | Parked | P4 | **Simplify runtime-asset publication only if first-install evidence fails** | Do not add previous-version backup/restore or upgrade recovery. Current checksum and staging behavior is sufficient unless a reproducible *fresh-install* corruption case appears. | Reproduce first; do not write speculative tests or recovery code. |
 | **WI-06** | Rejected | — | **Central target-install plan emitter** | Keep the existing explicit Python, PowerShell, and Actions install commands. A shared plan parser/emitter would add more code and shell failure modes than it removes for one maintainer. | None. Update the few explicit commands together when pins change. |
@@ -97,14 +97,47 @@ tests**, with **1 skipped**, in **232.44s**. Type verification was not run
 because neither `mypy` nor `pyright` is installed and no type-check command is
 configured.
 
+### WI-03 implementation review
+
+**Decision: retain the direct frontend composition; no rollback is recommended.**
+
+- Removed the no-op `addLogEntry` function, every production call and
+  dependency injection, and the log-only export metadata. Real `showToast`
+  notifications, busy-state messages, cancellation handling, and error paths
+  remain in place.
+- Removed the unused `scoreCard` and `statusPill` controller factories and
+  grid/review forwarding. Review still renders its active detail score and
+  metadata directly, including the working composed Open-original callback.
+- Removed the unused `getSortRelevantScore` function, public export, and
+  app/grid forwarding. The actual server-backed sort and queue score display
+  paths remain unchanged. No registry, startup validator, or replacement
+  abstraction was introduced.
+- Added a static regression asserting that the four deleted hook names are
+  absent from the shipped combined frontend JavaScript, and removed stale
+  no-op notification fixtures from frontend tests.
+
+Focused verification before behavior changes: the baseline frontend/static,
+accessibility, and responsive batch passed **156 tests**. After each deletion
+batch, the focused workflow/static batch passed **121 tests**; the new static
+dead-hook assertion passed **1 test**. The final frontend/static/accessibility/
+responsive batch passed **157 tests**. The explicit browser-marked suite passed
+**57 tests** with one transient shell-readiness timeout; rerunning the exact
+affected test passed **1 test**.
+
+Final verification: `python -m ruff check src tests` passed; the full
+`python -m pytest -q --basetemp .pytest-tmp-wi03-full` suite passed **711
+tests**, with **1 skipped**, in **237.12s**. Type verification was not run
+because neither `mypy` nor `pyright` is installed and no type-check command is
+configured.
+
 ### New-session starter prompt
 
-> Continue ShotSieve cleanup using `report.md` as the source of truth. Work on **WI-02 only**: delete compatibility code made unnecessary by fresh-download, single-user deployment. Prefer direct current-version paths; do not add adapters, registries, factories, migration support, or replacement shims. Verify each deletion has no remaining production caller, run focused tests after each small batch, then run Ruff and the full pytest suite. Update the WI-02 status and completion notes with the exact checks run.
+> Continue ShotSieve cleanup using `report.md` as the source of truth. Work on **WI-04 only**: remove legacy `inspect.signature` compatibility forwarding for `max_decode_pixels` and call the current internal signatures directly. Do not introduce a generic callback helper. Verify scanner, preview, scoring, and runtime-helper behavior after each deletion batch, then run Ruff and the full pytest suite. Update the WI-04 status and completion notes with the exact checks run.
 
 ### WI-01 completion notes
 
 - Implemented the four bounded behavior fixes and the README/AMD ROCm
-  documentation corrections. WI-03 through WI-08 remain unchanged.
+  documentation corrections. WI-04 through WI-08 remain unchanged.
 - Added regressions for bare SQLite migration connections, scan/score/compare
   worker-start lock release, the composed Review “Open File” request, and
   full-reset resource-profile detail refresh.
@@ -337,16 +370,16 @@ Only four files in `src/` exceed 1,000 lines when counted with `Path.read_text()
 
 ## G. Dead-code and compatibility inventory
 
-The no-op entries remain candidates for WI-03. The compatibility entries are
+The no-op entries were removed in WI-03. The compatibility entries are
 candidates for deletion in WI-02, not reasons to preserve an upgrade path.
 
-### Verified removable or no-op candidates
+### WI-03 no-op inventory
 
 | Candidate | Evidence | Classification and recommendation |
 |---|---|---|
-| `addLogEntry()` | `app.js:109-112` discards both values; all call sites therefore have no observable effect. | Verified no-op frontend plumbing. Remove only as a coordinated injection cleanup after behavior tests cover notifications. |
-| `scoreCard` and `statusPill` hooks | Defined in `app-controller.js:37-57`, replaced by no-ops in `app.js:139-140`, then ignored by `app-review.js:305-306`. | Verified dead presentation injection. Remove together with the unused parameters. |
-| `getSortRelevantScore` pipeline | Defined/exported by `app-review.js:40-47`, passed through `app-grid.js`, and explicitly unused in `app-review.js:164-173`. | Verified dead hook. Remove with the presentation injection cleanup. |
+| `addLogEntry()` | The former `app.js` function discarded both values; all call sites therefore had no observable effect. | Removed in WI-03, with real toast/error/cancellation paths retained and covered by the frontend/browser batch. |
+| `scoreCard` and `statusPill` hooks | The former controller factories were replaced by no-ops in `app.js` and ignored by `app-review.js`. | Removed in WI-03 with the unused controller, grid, and review parameters. |
+| `getSortRelevantScore` pipeline | The former function was exported by `app-review.js`, passed through `app-grid.js`, and explicitly unused by queue rendering. | Removed in WI-03 with the public export and forwarding destructures. |
 
 ### Compatibility code reviewed for WI-02
 

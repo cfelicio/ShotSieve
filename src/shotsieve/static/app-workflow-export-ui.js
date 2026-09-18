@@ -13,7 +13,7 @@
 
     const { fetchJson } = api;
     const { setBusyMessage, setBusyPhaseProgress, withBusy } = busy;
-    const { addLogEntry, showToast } = notifications;
+    const { showToast } = notifications;
     const { refreshWorkspace } = deps.review;
     const { handleError } = ui;
     // The export and library workflows are composed in dependency order, so
@@ -29,7 +29,6 @@
         resolveRequest: async () => workflowExport.activeSelectionRequest(),
         busyMessage: (count) => `${mode === "move" ? "Moving" : "Copying"} ${count} files...`,
         successPrefix: mode === "move" ? "Move complete" : "Copy complete",
-        logTitle: "Export",
         emptyResultMessage: "Select at least one file to export.",
       };
     }
@@ -139,7 +138,6 @@
             ? request.successPrefix
             : `${request.mode === "move" ? "Move" : "Copy"} results`;
           showToast(`${resultLabel}: ${summary || "no matching files"}.`, operationTone(result));
-          addLogEntry(request.logTitle, `${request.mode} to ${destination}: ${summary}`);
           await refreshWorkspace();
         }).catch(handleError);
       });
@@ -179,7 +177,6 @@
           };
           const result = await workflowLibrary.runTrackedOperation(operationRequest);
           workflowExport.presentOperationResult(result, operationRequest);
-          addLogEntry("Delete rejected in library", `Deleted ${result.deleted_count} files from ${root}, ${result.failed_count} failed.`);
           showToast(`Deleted ${result.deleted_count || 0} rejected files from this library.`, operationTone(result));
           await refreshWorkspace();
         }).catch(handleError);
@@ -211,7 +208,6 @@
           },
           busyMessage: (count) => `Moving ${count} rejected files in this library...`,
           successPrefix: "Move complete",
-          logTitle: "Move rejected",
           emptyResultMessage: "No rejected files found.",
         });
       });

@@ -988,6 +988,13 @@ class TestStaticAssetHeaders:
         body = self._combined_js(base_url)
         assert 'document.getElementById("max-score").value = "50";' not in body
 
+    def test_static_js_removes_dead_review_injection_hooks(self, test_server):
+        base_url, _, _ = test_server
+        body = self._combined_js(base_url)
+
+        for marker in ("addLogEntry", "scoreCard", "statusPill", "getSortRelevantScore"):
+            assert marker not in body
+
     def test_static_review_js_uses_ai_label_without_overall_score_cards(self, test_server):
         base_url, _, _ = test_server
         body = urlopen(f"{base_url}/app-review.js").read().decode("utf-8")

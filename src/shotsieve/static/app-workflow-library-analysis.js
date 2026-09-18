@@ -23,7 +23,7 @@
       trackJob = () => {},
     } = busy;
     const { currentResourceProfile, scoreBatchSize } = compare;
-    const { addLogEntry, showToast } = notifications;
+    const { showToast } = notifications;
     const { loadQueue, refreshWorkspace, syncReviewRoot } = review;
     const { currentLibraryRoot, saveUiState, setTab } = ui;
     const { pollScanJob, pollScoreJob, pollModelPreparationJob } = pollingModule;
@@ -125,7 +125,6 @@
       }
       setBusyMessage(`Scan completed. Processed ${result.files_seen} file(s).`);
 
-      addLogEntry("Scan completed", `Seen ${result.files_seen}, added ${result.files_added}, updated ${result.files_updated}, removed ${result.files_removed}.`);
       showToast("Scan completed.");
       await refreshWorkspace();
       syncReviewRoot(root);
@@ -193,7 +192,6 @@
         const cause = diagnostic.cause || result?.job_error || "Scoring failed.";
         const recovery = diagnostic.recovery_action || "Open Settings and choose Prepare selected model before retrying.";
         showToast(`${cause} ${recovery}`, "error");
-        addLogEntry("Score failed", `${cause} ${recovery}`);
         await refreshWorkspace();
         return result;
       }
@@ -214,7 +212,6 @@
       }
       setBusyMessage(`Scoring completed. Processed ${result.rows_loaded || 0} row(s).`);
 
-      addLogEntry("Score completed", `Scored ${result.files_scored || 0}, learned ${result.learned_scored || 0}, skipped ${result.files_skipped || 0}, failed ${result.files_failed || 0}.`);
       showToast("Scoring completed.");
       await refreshWorkspace();
       syncReviewRoot(root);
@@ -261,14 +258,12 @@
           const detail = result?.error || diagnostic.cause || "Model preparation failed.";
           const recovery = result?.recovery_action || diagnostic.recovery_action || "Retry preparation from Settings.";
           showToast(`Model preparation failed: ${detail} ${recovery}`, "error");
-          addLogEntry("Model preparation failed", `${detail} ${recovery}`);
           return result;
         }
         setBusyProgress(100);
         setBusyPhaseProgress({ percent: 100, phaseIndex: 3, phaseCount: 3, phaseLabel: "Model prepared" });
         const testedRuntime = String(result?.tested_runtime || result?.actual_runtime || preparationDevice).toUpperCase();
         showToast(`${model} is prepared and passed a ${testedRuntime} validation inference.`);
-        addLogEntry("Model prepared", `${model} is ready for use on ${testedRuntime}.`);
         return result;
       } catch (error) {
         if (error?.name !== "AbortError") {
@@ -290,7 +285,6 @@
       }
 
       saveUiState();
-      addLogEntry("Analyze folder", root);
       setBusyMessage("Fast scan: indexing files without preview generation...");
       await runScan(root, {
         generatePreviews: false,

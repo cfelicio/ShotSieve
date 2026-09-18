@@ -9,6 +9,9 @@ All notable changes to this project will be documented in this file.
 - Removed version-compatibility aliases and facades for retired release targets,
   sidecar locations and markers, preview names, learned-model names, and runtime
   helper imports. Fresh downloads now use only the current direct paths.
+- Removed proven frontend no-ops: the discarded `addLogEntry` injection, unused
+  score-card/status-pill hooks, and the unused score-sort hook. The composed
+  Review "Open File" callback remains wired directly.
 
 ### Fixed
 

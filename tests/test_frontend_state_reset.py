@@ -147,7 +147,6 @@ def test_public_workflow_facade_preserves_library_and_review_behavior(chromium_p
               sortComparisonRows: (rows) => rows,
             },
             notifications: {
-              addLogEntry: (title) => calls.push(["log", title]),
               showToast: (message) => calls.push(["toast", message]),
             },
             review: {

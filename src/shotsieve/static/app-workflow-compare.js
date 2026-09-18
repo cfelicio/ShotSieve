@@ -36,7 +36,7 @@
       pathLeaf,
       sortComparisonRows,
     } = formatting;
-    const { addLogEntry, showToast } = notifications;
+    const { showToast } = notifications;
     const { currentLibraryRoot, selectedComparisonModels, setTab } = ui;
 
     const {
@@ -577,7 +577,6 @@
 
       if (rowsTotal === 0) {
         const prerequisiteMessage = "No cached photos found under this library root. Running Scan first.";
-        addLogEntry("Comparison prerequisites", prerequisiteMessage);
         showToast(prerequisiteMessage);
         setBusyMessage(prerequisiteMessage);
 
@@ -592,7 +591,6 @@
         if (rowsTotal <= 0) {
           state.comparison = result;
           renderComparisonResults();
-          addLogEntry("Model comparison skipped", "No comparable files were found after prerequisite scan.");
           showToast("No comparable photos found under this library root after scanning.", "error");
           return;
         }
@@ -652,7 +650,6 @@
         renderComparisonResults();
         const cause = result.diagnostic.cause || summary?.job_error || "Model comparison failed.";
         const recovery = result.diagnostic.recovery_action || "Open Settings and choose Prepare selected model before retrying.";
-        addLogEntry("Model comparison failed", `${cause} ${recovery}`);
         showToast(`${cause} ${recovery}`, "error");
         return result;
       }
@@ -686,7 +683,6 @@
         phaseLabel: "Model scoring complete",
       });
       setBusyMessage(`Comparison completed in ${formatDuration(result.elapsed_seconds)}.`);
-      addLogEntry("Model comparison completed", `Compared ${result.files_compared} file(s) across ${result.model_names.length} model(s) in ${formatDuration(result.elapsed_seconds)} at ${formatFilesPerSecond(result.files_compared, result.elapsed_seconds)}.`);
       showToast("Model comparison completed.");
     }
 

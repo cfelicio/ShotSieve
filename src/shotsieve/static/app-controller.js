@@ -16,7 +16,6 @@
       currentResourceProfile,
       escapeHtml,
       formatPhotoSupport,
-      getScoreColor,
       parseRuntimeStatusMap,
       runtimeDisplayName,
       runtimeStatusToken,
@@ -26,33 +25,10 @@
 
     const { fetchJson } = api;
     const { clearUiState, currentLibraryRoot, loadUiState, saveUiState } = uiStore;
-    const { addLogEntry, showToast } = notifications;
+    const { showToast } = notifications;
 
     const overlayFocusReturn = new Map();
     const OVERLAY_SELECTORS = ["#lightbox-overlay"];
-    const SCORE_TOOLTIPS = {
-      "AI Score": "AI aesthetic quality prediction (0–100). Higher is better.",
-    };
-
-    function scoreCard(label, value, hint = "") {
-      if (value === null || value === undefined) {
-        return "";
-      }
-      const tooltip = SCORE_TOOLTIPS[label] || "";
-      const colorClass = getScoreColor(value);
-      return `
-        <article class="score-card ${colorClass}" title="${tooltip}">
-          <span>${label}</span>
-          <strong>${Number(value).toFixed(1)}</strong>
-          ${hint ? `<span class="muted">${hint}</span>` : ""}
-        </article>
-      `;
-    }
-
-    function statusPill(label) {
-      return `<span class="status-pill">${escapeHtml(label)}</span>`;
-    }
-
     function overlayNodes() {
       return OVERLAY_SELECTORS
         .map((selector) => document.querySelector(selector))
@@ -691,8 +667,6 @@
     }
 
     return {
-      scoreCard,
-      statusPill,
       openOverlay,
       closeOverlay,
       applyTheme,

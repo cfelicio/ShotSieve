@@ -107,7 +107,7 @@ def _run_retry_scenario(page, scenario: dict[str, object]) -> dict[str, object]:
                     postJson: async () => ({}),
                 },
                 busy,
-                notifications: { addLogEntry: () => {}, showToast: () => {} },
+                notifications: { showToast: () => {} },
                 review: {
                     refreshWorkspace: async () => { refreshes += 1; },
                 },
@@ -299,7 +299,7 @@ def test_unresolved_job_blocks_new_work_and_check_status_refreshes(chromium_page
                     fetchJson: async () => ({ status: "completed" }),
                     postJson: async () => ({}),
                 },
-                notify: { addLogEntry: () => {}, showToast: () => {} },
+                notify: { showToast: () => {} },
             });
             busy.trackJob({
                 kind: "scan",
@@ -331,7 +331,7 @@ def test_unresolved_job_blocks_new_work_and_check_status_refreshes(chromium_page
                 busy,
                 compare: { currentResourceProfile: () => "normal", scoreBatchSize: () => 1 },
                 formatting: { escapeHtml: (value) => value, formatDuration: () => "0s" },
-                notifications: { addLogEntry: () => {}, showToast: () => {} },
+                notifications: { showToast: () => {} },
                 pollingModule: {
                     pollJob: async () => ({}),
                     pollScanJob: async () => ({}),
@@ -447,7 +447,7 @@ def test_scan_and_score_share_job_lifecycle_without_losing_kind_specific_polling
               busy,
               compare: { currentResourceProfile: () => "normal", scoreBatchSize: () => 4 },
               formatting: { escapeHtml: (value) => value, formatDuration: () => "0s" },
-              notifications: { addLogEntry: () => {}, showToast: () => {} },
+              notifications: { showToast: () => {} },
               pollingModule,
               review: { refreshWorkspace: async () => {}, syncReviewRoot: () => {} },
               ui: { currentLibraryRoot: () => "C:/photos", saveUiState: () => {}, setTab: () => {} },

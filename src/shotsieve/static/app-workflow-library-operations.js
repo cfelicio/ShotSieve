@@ -20,7 +20,7 @@
       trackJob = () => {},
     } = busy;
     const { formatDuration } = formatting;
-    const { addLogEntry, showToast } = notifications;
+    const { showToast } = notifications;
     const { refreshWorkspace } = review;
     const { pollJob, createResultFetcher, createStatusFetcher } = pollingModule;
     const fetchOperationJobStatus = createStatusFetcher("/api/operations/status");
@@ -249,7 +249,6 @@
       if (workflowExport?.presentOperationResult && (result?.outcome || Array.isArray(result?.items))) {
         workflowExport.presentOperationResult(result, state.latestOperationRequest);
       }
-      addLogEntry("Cache action", `${message}: files ${result.files}, scores ${result.scores}, review ${result.review}.`);
       showToast(message, workflowExport?.operationTone ? workflowExport.operationTone(result) : "success");
       if (scope === "all") {
         if (workflowExport?.clearActiveSelection) {
@@ -331,10 +330,6 @@
         reviewRemovedCount += Number(result.review_removed_count || 0);
       }
 
-      addLogEntry(
-        "Missing-entry cleanup",
-        `Removed ${removedCount} cached entr${removedCount === 1 ? "y" : "ies"} and ${reviewRemovedCount} review decision(s).`,
-      );
       showToast(`Removed ${removedCount} missing cached entr${removedCount === 1 ? "y" : "ies"}.`);
       await refreshWorkspace();
     }
@@ -357,7 +352,6 @@
       if (workflowExport?.presentOperationResult) {
         workflowExport.presentOperationResult(result, state.latestOperationRequest);
       }
-      addLogEntry("Disk delete", `Deleted ${result.deleted_count}, failed ${result.failed_count}.`);
       showToast(`Deleted ${result.deleted_count} files from disk.`, workflowExport?.operationTone ? workflowExport.operationTone(result) : "success");
       await refreshWorkspace();
     }

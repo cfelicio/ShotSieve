@@ -1,7 +1,7 @@
 (() => {
   function createBusyController({ state, api, notify, documentRef = document } = {}) {
     const { fetchJson, postJson } = api;
-    const { addLogEntry, showToast } = notify;
+    const { showToast } = notify;
 
     function jobKindLabel(kind) {
       const labels = {
@@ -399,7 +399,6 @@
           state.cancelPending = true;
           setBusyMessage("Cancelling...");
           showToast("Cancellation requested. Stopping the current operation...", "error");
-          addLogEntry("Cancelled", message);
           const cancellationConfirmed = await requestServerCancellation();
           if (typeof options.onCancelled === "function") {
             await options.onCancelled({

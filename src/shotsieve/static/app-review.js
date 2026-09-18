@@ -37,15 +37,6 @@
     });
   }
 
-  function getSortRelevantScore(item) {
-    const sort = document.getElementById("sort-filter")?.value || "";
-    const map = {
-      learned_asc: { label: "AI", value: item.learned_score_normalized },
-      learned_desc: { label: "AI", value: item.learned_score_normalized },
-    };
-    return map[sort] || null;
-  }
-
   function displayScore(item) {
     if (item?.learned_score_normalized !== null && item?.learned_score_normalized !== undefined) {
       return item.learned_score_normalized;
@@ -161,7 +152,6 @@
       state,
       renderDetail,
       formatNumber: formatNumberFn,
-      getSortRelevantScore: getSortRelevantScoreFn,
       getScoreColor,
       escapeHtml,
       pathLeaf,
@@ -169,8 +159,6 @@
       selectFile,
       handleError,
     } = deps;
-
-    void getSortRelevantScoreFn;
 
     const queueList = document.getElementById("queue-list");
     if (!queueList) {
@@ -295,15 +283,9 @@
       pathLeaf,
       escapeHtml,
       formatNumber: formatNumberFn,
-      scoreCard,
-      statusPill,
       openOriginalFile,
       handleError,
     } = deps;
-
-    void escapeHtml;
-    void scoreCard;
-    void statusPill;
 
     if (!state.detail) {
       document.getElementById("detail-empty").classList.remove("hidden");
@@ -446,7 +428,6 @@
   }
 
   window.ShotSieveReview = {
-    getSortRelevantScore,
     renderDetail,
     renderQueue,
     updateSelectionState,

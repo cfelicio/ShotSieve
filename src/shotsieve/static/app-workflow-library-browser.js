@@ -294,7 +294,6 @@
         message = "The local server request failed. If an analysis is still running, wait for completion before retrying.";
       }
       showToast(message, "error");
-      notifications.addLogEntry("Error", message);
     }
 
     return {

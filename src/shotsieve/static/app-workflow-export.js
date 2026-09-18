@@ -11,7 +11,7 @@
 
     const { fetchJson, postJson } = api;
     const { withBusy } = busy;
-    const { addLogEntry, showToast } = notifications;
+    const { showToast } = notifications;
     const {
       applyReviewUpdate,
       isAutoAdvanceEnabled,
@@ -211,7 +211,6 @@
         return;
       }
       await postJson("/api/review/batch", { ...selectionRequest, ...payload });
-      addLogEntry("Batch review update", `${message} on ${selectionRequest.count} items.`);
       showToast(`${message} (${selectionRequest.count} items).`);
       clearActiveSelection();
       await refreshWorkspace();

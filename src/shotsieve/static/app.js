@@ -67,7 +67,6 @@ if (!reviewModule) {
 }
 
 const {
-  getSortRelevantScore,
   renderDetail: renderDetailView,
   renderQueue: renderQueueView,
   updateSelectionState: updateSelectionStateView,
@@ -106,11 +105,6 @@ function showToast(message, tone = "success") {
   }
 }
 
-function addLogEntry(title, detail) {
-  void title;
-  void detail;
-}
-
 const {
   clearTrackedJob,
   markTrackedJobUnknown,
@@ -123,7 +117,7 @@ const {
 } = busyModule.createBusyController({
   state,
   api: { fetchJson, postJson },
-  notify: { addLogEntry, showToast },
+  notify: { showToast },
 });
 
 const gridController = window.ShotSieveGrid.createGridController({
@@ -136,8 +130,6 @@ const gridController = window.ShotSieveGrid.createGridController({
   stateModule,
   appUtils,
   handleError: (err) => console.error(err),
-  scoreCard: () => "",
-  statusPill: () => "",
   openOriginalFile: (...args) => workflowsHolder.openOriginalFile(...args),
 });
 
@@ -151,7 +143,7 @@ const controller = window.ShotSieveController.createController({
   api: { fetchJson, postJson },
   workflows: workflowsHolder,
   grid: gridController,
-  notifications: { addLogEntry, showToast },
+  notifications: { showToast },
 });
 
 const workflows = workflowsModule.createWorkflows({
@@ -189,7 +181,6 @@ const workflows = workflowsModule.createWorkflows({
     sortComparisonRows,
   },
   notifications: {
-    addLogEntry,
     showToast,
   },
   review: {

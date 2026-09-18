@@ -12,7 +12,7 @@
     } = deps;
 
     const { escapeHtml, formatNumber, getScoreColor, pathDirectory, pathLeaf } = formatting;
-    const { getSortRelevantScore, renderDetail: renderDetailView, renderQueue: renderQueueView, updateSelectionState: updateSelectionStateView } = reviewModule;
+    const { renderDetail: renderDetailView, renderQueue: renderQueueView, updateSelectionState: updateSelectionStateView } = reviewModule;
     const { showToast } = notifications;
     const { fetchJson } = api;
 
@@ -212,7 +212,6 @@
         state,
         renderDetail,
         formatNumber,
-        getSortRelevantScore,
         getScoreColor,
         escapeHtml,
         pathLeaf,
@@ -232,8 +231,6 @@
         pathLeaf,
         escapeHtml,
         formatNumber,
-        scoreCard: deps.scoreCard,
-        statusPill: deps.statusPill,
         openOriginalFile: deps.openOriginalFile,
         handleError: deps.handleError,
       });

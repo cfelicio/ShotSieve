@@ -112,7 +112,6 @@ def _render_compare_results(page, comparison: dict[str, object], *, root: str = 
                     sortComparisonRows: utils.sortComparisonRows,
                 },
                 notifications: {
-                    addLogEntry() {},
                     showToast() {},
                 },
                 review: {
