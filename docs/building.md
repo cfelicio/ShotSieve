@@ -163,7 +163,7 @@ Startup automation remains available when explicitly configured:
 - `SHOTSIEVE_BOOTSTRAP_AUTO_INSTALL_LEARNED_IQA=1` to auto-install learned-IQA dependencies without prompting
 - `SHOTSIEVE_BOOTSTRAP_AUTO_INSTALL_LEARNED_IQA=0` to skip the learned-IQA install step
 
-Interactive console launches may still ask for consent when neither automation setting is present. Portable and frozen builds prefer the bundled pip-based installer paths from `shotsieve.bootstrap`; if that installer is unavailable or declined, ShotSieve keeps running but learned backends may stay disabled. Cancelling an explicit installation takes effect between runtime install steps; restart ShotSieve if newly installed native packages are not usable in the current process.
+Interactive console launches may still ask for consent when neither automation setting is present. Portable and frozen builds prefer the bundled pip-based installer paths from `shotsieve.bootstrap_sidecar`; if that installer is unavailable or declined, ShotSieve keeps running but learned backends may stay disabled. Cancelling an explicit installation takes effect between runtime install steps; restart ShotSieve if newly installed native packages are not usable in the current process.
 
 The supported learned-model catalog is `topiq_nr`, `clipiqa`, and `qrealign-mini`, with TOPIQ as the default. Q-ReAlign Mini is the only initial Q-ReAlign size; its published checkpoint is about 2.2 GB and the authors claim CPU support and under 4 GB GPU memory. Runtime availability and release support remain model- and target-specific, so Settings only exposes models discovered and compatible in the selected runtime. PyIQA discovery is not an allowlist: if a product model is not discoverable or cannot initialize, Settings shows an unavailable/empty model state. No process-wide `torch.load` override is used.
 
@@ -254,12 +254,12 @@ family modules, so common, scan, file, job, review, and media routes do not reso
 monkeypatch seams remain available, while import order no longer determines whether a
 route family can find a helper.
 
-Desktop startup and sidecar installation share one stateless `RuntimeSupport` facade
-for package-path checks, environment parsing, console detection, confirmation, and
-`PYTHONPATH` composition. The historical private names in `desktop.py`,
-`bootstrap_sidecar.py`, and the `bootstrap.py` facade remain available as aliases;
-the facade resolves its module-level helpers when called so existing tests and
-integrations can continue to monkeypatch those helpers.
+Desktop startup and sidecar installation import the stateless helpers in
+`runtime_support.py` directly for package-path checks, environment parsing, console
+detection, confirmation, and `PYTHONPATH` composition. `bootstrap_assets.py` owns
+runtime-pack acquisition, `bootstrap_sidecar.py` owns sidecar installation, and
+`bootstrap.py` remains only the runtime-pack launcher; it does not re-export the
+sidecar API.
 
 The folder browser accepts a full local path or UNC path such as `\\server\share\folder`; press Enter after editing the path to open it. The browser does not enumerate network servers or probe write/delete permissions against user photos.
 
@@ -335,11 +335,9 @@ Current Windows runtime-pack outputs:
 - `ShotSieve-windows-amd-rocm`
 
 The same vendor/runtime naming is used in archive files, such as
-`ShotSieve-windows-nvidia-cuda-x64.zip`. The build scripts accept the older
-vendor-only target IDs (`windows-nvidia`, `windows-intel`, and `windows-amd`)
-as compatibility aliases, but new manifests and build outputs use the
-explicit IDs above. Existing older launchers continue to resolve their
-original sidecar paths.
+`ShotSieve-windows-nvidia-cuda-x64.zip`. Release manifests, build scripts, and
+launchers accept only the explicit target IDs above; a fresh download is required
+when an older target or launcher name is encountered.
 
 Tier 1 runtime-pack targets are currently defined for:
 

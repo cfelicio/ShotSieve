@@ -94,7 +94,6 @@ def _handle_media_get_routes(handler: Any, context: WebRouteContext, parsed: Any
             is_within_any_root=deps.is_within_any_root,
             media_path_for_file=deps.media_path_for_file,
             stable_preview_name=deps.stable_preview_name,
-            preview_name_candidates=deps.preview_name_candidates,
             guess_media_type=deps.guess_media_type,
         ),
     )
@@ -130,7 +129,6 @@ def _handle_file_action_post_routes(handler: Any, context: WebRouteContext, pars
                 is_within_any_root=deps.is_within_any_root,
                 media_path_for_file=deps.media_path_for_file,
                 stable_preview_name=deps.stable_preview_name,
-                preview_name_candidates=deps.preview_name_candidates,
                 guess_media_type=deps.guess_media_type,
             ),
         )

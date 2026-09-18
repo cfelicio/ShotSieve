@@ -8,7 +8,7 @@ import pytest
 from shotsieve.bootstrap_sidecar import (
     ROCM_LINUX_PACKAGE_URLS,
     ROCM_WINDOWS_PACKAGE_URLS,
-    sidecar_site_packages_candidates,
+    sidecar_site_packages_dir,
     torch_install_plan,
     torch_sidecar_is_valid,
 )
@@ -38,15 +38,15 @@ def test_rocm_plans_use_the_exact_platform_wheels() -> None:
     assert torch_install_plan(target_id="windows-amd-rocm").packages == ROCM_WINDOWS_PACKAGE_URLS
 
 
-def test_legacy_sidecar_aliases_are_read_but_new_target_is_canonical(tmp_path: Path) -> None:
-    candidates = sidecar_site_packages_candidates(tmp_path, "windows-nvidia-cuda")
-    assert candidates[0].name == "windows-nvidia-cuda"
-    assert candidates[1].name == "windows-nvidia"
+def test_sidecar_uses_only_the_current_target_location(tmp_path: Path) -> None:
+    current = sidecar_site_packages_dir(tmp_path, "windows-nvidia-cuda")
+    legacy = sidecar_site_packages_dir(tmp_path, "windows-nvidia")
+    assert current != legacy
+    assert current.name == "windows-nvidia-cuda"
 
-    legacy = candidates[1]
     (legacy / "torch").mkdir(parents=True)
-    (legacy / "torch" / "__init__.py").write_text("# legacy\n", encoding="utf-8")
-    assert torch_sidecar_is_valid(legacy, target_id="windows-nvidia-cuda", runtime="cuda")
+    (legacy / "torch" / "__init__.py").write_text("# old target\n", encoding="utf-8")
+    assert not torch_sidecar_is_valid(legacy, target_id="windows-nvidia-cuda", runtime="cuda")
 
 
 def test_partial_or_mismatched_sidecar_is_not_valid(tmp_path: Path) -> None:

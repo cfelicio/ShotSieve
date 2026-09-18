@@ -68,7 +68,7 @@ def test_prepare_model_writes_atomic_success_record_and_releases_backend(tmp_pat
         calls.append(("build", (model, device)))
         return _Backend(calls)
 
-    result = model_assets.prepare_model("topiq-nr", data_dir=tmp_path, backend_factory=factory)
+    result = model_assets.prepare_model("topiq_nr", data_dir=tmp_path, backend_factory=factory)
 
     assert result["state"] == "prepared"
     assert result["model"] == "topiq_nr"
@@ -194,7 +194,7 @@ def test_preparation_uses_requested_accelerator_for_qrealign_mini(tmp_path: Path
         return QReAlignBackend(calls)
 
     result = model_assets.prepare_model(
-        "q-realign",
+        "qrealign-mini",
         data_dir=tmp_path,
         device="cuda",
         backend_factory=factory,

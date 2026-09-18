@@ -18,7 +18,6 @@ from shotsieve.image_conversion import (
     enforce_decode_budget,
     IMAGE_CONVERSION_VERSION,
     ImageDecodeLimitError,
-    MAX_DECODE_PIXELS,
     TRANSPARENCY_MATTE,
     prepare_image_for_rgb,
 )
@@ -238,7 +237,7 @@ def test_generate_preview_rejects_oversized_source_before_conversion(
     source_path.write_bytes(b"header-only fixture")
 
     class HeaderOnlyImage:
-        size = (MAX_DECODE_PIXELS + 1, 1)
+        size = (DEFAULT_MAX_DECODE_PIXELS + 1, 1)
 
         def __enter__(self):
             return self
@@ -272,7 +271,7 @@ def test_learned_preprocessing_rejects_oversized_source_before_conversion(
     source_path.write_bytes(b"header-only fixture")
 
     class HeaderOnlyImage:
-        size = (MAX_DECODE_PIXELS + 1, 1)
+        size = (DEFAULT_MAX_DECODE_PIXELS + 1, 1)
 
         def __enter__(self):
             return self

@@ -84,12 +84,6 @@ def normalize_file_ids(file_ids: Iterable[int]) -> list[int]:
     return normalized
 
 
-def _allow_legacy_preview_path_fallback(connection, preview_cache_root: Path | None) -> bool:
-    if preview_cache_root is None:
-        return False
-    return len(infer_preview_cache_roots(connection)) > 1
-
-
 def _trusted_delete_roots(connection) -> tuple[Path, ...]:
     rows = connection.execute(
         """
@@ -185,7 +179,6 @@ def remove_files_from_cache(
     preview_cache_root: Path | None = None,
 ) -> int:
     normalized_ids = normalize_file_ids(file_ids)
-    allow_preview_path_fallback = _allow_legacy_preview_path_fallback(connection, preview_cache_root)
     selected_rows = connection.execute(
         f"SELECT id, path, preview_path FROM files WHERE id IN ({','.join('?' for _ in normalized_ids)})",
         tuple(normalized_ids),
@@ -198,7 +191,6 @@ def remove_files_from_cache(
             row["preview_path"],
             source_path=row["path"],
             preview_cache_root=preview_cache_root,
-            allow_path_parent_fallback=allow_preview_path_fallback,
             suppress_errors=True,
         )
 
@@ -217,7 +209,6 @@ def prune_missing_cache_entries(connection, *, preview_cache_root: Path | None =
     calling thread. Do NOT add connection.execute() calls inside the executor
     - SQLite connections are not safe to share across threads.
     """
-    allow_preview_path_fallback = _allow_legacy_preview_path_fallback(connection, preview_cache_root)
     removed_count = 0
     last_seen_id = 0
 
@@ -252,7 +243,6 @@ def prune_missing_cache_entries(connection, *, preview_cache_root: Path | None =
                     row["preview_path"],
                     source_path=row["path"],
                     preview_cache_root=preview_cache_root,
-                    allow_path_parent_fallback=allow_preview_path_fallback,
                     suppress_errors=True,
                 )
 
@@ -489,7 +479,6 @@ def apply_missing_cache_entries(
                     ),
                 }
 
-        allow_preview_path_fallback = _allow_legacy_preview_path_fallback(connection, preview_cache_root)
         affected_review_count = int(payload["affected_review_count"])
         for entry in missing_entries:
             row = entry.row
@@ -497,7 +486,6 @@ def apply_missing_cache_entries(
                 row["preview_path"],
                 source_path=row["path"],
                 preview_cache_root=preview_cache_root,
-                allow_path_parent_fallback=allow_preview_path_fallback,
                 suppress_errors=True,
             )
 
@@ -558,7 +546,6 @@ def clear_cache_scope(
         return {"files": 0, "scores": 0, "review": removed, "scan_runs": 0}
 
     if scope == "all":
-        allow_preview_path_fallback = _allow_legacy_preview_path_fallback(connection, preview_cache_root)
         review_count = connection.execute("SELECT COUNT(*) AS count FROM review_state").fetchone()["count"]
         score_count = connection.execute("SELECT COUNT(*) AS count FROM scores").fetchone()["count"]
         file_count = connection.execute("SELECT COUNT(*) AS count FROM files").fetchone()["count"]
@@ -577,7 +564,6 @@ def clear_cache_scope(
                 row["preview_path"],
                 source_path=row["path"],
                 preview_cache_root=preview_cache_root,
-                allow_path_parent_fallback=allow_preview_path_fallback,
                 suppress_errors=True,
             )
             emit_progress(index, total_steps)
@@ -615,7 +601,6 @@ def delete_files(
     cancel_check: Callable[[], None] | None = None,
 ) -> dict[str, object]:
     normalized_ids = normalize_file_ids(file_ids)
-    allow_preview_path_fallback = _allow_legacy_preview_path_fallback(connection, preview_cache_root)
     trusted_roots = _trusted_delete_roots(connection) if delete_from_disk else ()
     selected_rows = connection.execute(
         f"SELECT id, path, path_key, preview_path FROM files WHERE id IN ({','.join('?' for _ in normalized_ids)})",
@@ -661,7 +646,6 @@ def delete_files(
             delete_from_disk=delete_from_disk,
             trusted_roots=trusted_roots,
             preview_cache_root=preview_cache_root,
-            allow_preview_path_fallback=allow_preview_path_fallback,
         )
         summary.add(outcome.result)
         if outcome.deleted_id is not None:
@@ -693,7 +677,6 @@ def _delete_row(
     delete_from_disk: bool,
     trusted_roots: Sequence[Path],
     preview_cache_root: Path | None,
-    allow_preview_path_fallback: bool,
 ) -> _DeleteRowOutcome:
     """Perform policy checks, one delete, catalog commit, and preview cleanup."""
     source = Path(row["path"])
@@ -784,7 +767,6 @@ def _delete_row(
                 row["preview_path"],
                 source_path=source,
                 preview_cache_root=preview_cache_root,
-                allow_path_parent_fallback=allow_preview_path_fallback,
             )
         except (OSError, ValueError) as exc:
             warning = exc

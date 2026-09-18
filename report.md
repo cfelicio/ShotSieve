@@ -1,42 +1,110 @@
 # ShotSieve maintainability, architecture, and technical-debt audit
 
 **Audit date:** 2026-09-18  
-**Scope:** Read-only review of all tracked production modules, static frontend, tests, build/release scripts, workflows, and project documentation. Line references are 1-indexed and reflect this checkout. No product behavior was changed.
+**Scope:** The initial audit was read-only. WI-01 was subsequently implemented and verified; this document now records both the original evidence and the lean follow-up policy. Line references are 1-indexed and reflect the audited checkout unless noted otherwise.
+
+## Solo-development policy
+
+ShotSieve is a single-user desktop application maintained by one developer.
+New versions are distributed as fresh downloads; upgrade, migration, and
+external-integration compatibility are not product requirements. This policy
+supersedes any contrary recommendation in the historical audit detail below.
+
+- Prefer deleting old branches, aliases, shims, and test scaffolding over
+  preserving upgrade paths.
+- Prefer one direct call or explicit duplicated release command over a new
+  registry, plan emitter, factory, callback layer, or framework.
+- Preserve protections for the *current run*: user-photo deletion guards,
+  atomic writes required for an interrupted first install, database closure,
+  bounded decoding, and cancellation truthfulness are still non-negotiable.
+- Do not add recovery for a previous version. A broken or abandoned runtime
+  should be fixed by a fresh download/reinstall, not by retained-version
+  fallback machinery.
+- The work-item register is the only actionable roadmap. Sections A–K retain
+  source evidence, but their former priority/order must not create work that
+  is absent from the register.
 
 ## Work-item register
 
-Use this register to plan follow-up sessions. Items are intentionally bounded;
-the detailed audit sections below are the evidence and design notes for them.
-Do not merge items that cross their listed rollback boundary.
+Use this register to plan follow-up sessions. Items are intentionally bounded
+to reduce code and maintenance burden. Do not merge items that cross their
+listed rollback boundary.
 
 | ID | Status | Priority | Work item | Scope and acceptance criteria | Suggested verification |
 |---|---|---|---|---|---|
-| **WI-01** | **Completed (2026-09-18)** | P1 | **Quick safety and documentation corrections** | Fix bare-connection migration row access; release the operation lock when scan/score/compare worker startup fails; late-bind the grid's **Open original** handler; pass the profile-detail updater to full-reset handling; rename the README 0.4 heading; fix the malformed AMD ROCm bullet. No API or product-workflow redesign. | Focused schema, jobs, and browser tests; Ruff; full pytest. |
-| **WI-02** | Proposed | P1 | **Make runtime-asset publication rollback-safe** | Validate the staged runtime executable before replacement; stage on the destination volume; retain/restore the prior install if publication fails; clean retained staging only after a successful publish. Preserve checksums, archive traversal protections, and local fallback behavior. | New bootstrap failure-injection tests; existing bootstrap asset suite; packaged runtime smoke. |
-| **WI-03** | Proposed | P2 | **Centralize target-specific Torch install plans** | Keep `release_targets.py` as target/artifact metadata and `dependency_constraints.py` as version/source data. Add a machine-readable existing-plan adapter and migrate PowerShell, Actions, and CPU smoke one consumer at a time. | Plan parity tests for every target; release-script tests; `pip check` for each target environment. |
-| **WI-04** | Proposed | P2 | **Make release asset consumption explicit** | Change split-archive source deletion to an explicit opt-in for CI artifact cleanup or visibly document/confirm the destructive behavior. Default local rehearsal behavior must preserve original archives. | `prepare_release_assets` default/opt-in tests; release workflow review. |
-| **WI-05** | Proposed | P3 | **Remove proven frontend no-op plumbing and validate module loading** | After WI-01 covers the live callback, remove unused score-card/status-pill/sort-hook injection and no-op logging plumbing. Add a startup check that names a missing mandatory workflow factory. Preserve the stable `ShotSieveWorkflows` API and classic-script delivery. | Composed browser tests; static-asset contract tests; accessibility/browser suite. |
-| **WI-06** | Proposed | P3 | **Reduce canonical target translation drift** | Add a canonical `ReleaseTarget` lookup for platform/runtime fields and consume it where a canonical target ID is already available. Retain legacy aliases and launcher-name parsing at external boundaries. | Target/alias parametrization; runtime helper and release-matrix tests. |
-| **WI-07** | Deferred | P3 | **Consolidate optional decode-budget signature compatibility** | Consider one tiny helper for the repeated inspect-and-forward `max_decode_pixels` compatibility pattern only if legacy callback signatures remain supported. Do not build a generic callback framework. | Callable-with-keyword, callable-without-keyword, and opaque-callable regressions. |
-| **WI-08** | Deferred | P3 | **Improve multi-root missing-cache partial-result presentation** | Report roots already cleaned when a later root requires refresh, then refresh UI state in a `finally` path. Never roll back completed filesystem/catalog cleanup. | First-root-success/second-root-stale frontend integration test. |
+| **WI-01** | **Completed — retain** | P1 | **Direct correctness fixes** | Bare SQLite migration rows, worker-start lock release, composed **Open original**, reset profile detail, and two documentation corrections. No new reusable production abstraction was introduced. | Completed: 718 passed, 1 skipped; Ruff passed. |
+| **WI-02** | **Completed — retain** | P2 | **Delete version-compatibility code** | Remove only code that supports an old install, old target/launcher ID, old sidecar location/marker, old preview name, old model alias, or old public/private helper name. Make current-version direct paths the only path. Do not add replacement adapters. | Completed: 710 passed, 1 skipped; Ruff passed. Type tools unavailable. |
+| **WI-03** | Proposed | P3 | **Delete proven frontend no-ops** | Remove no-op `addLogEntry`, unused score-card/status-pill hooks, and the unused score-sort hook. Keep the now-working direct Open-original callback. Do **not** add module registries or startup validation frameworks. | Frontend state/static tests and the browser suite. |
+| **WI-04** | Proposed | P3 | **Remove legacy signature fallback dispatch** | Replace `inspect.signature` compatibility forwarding for `max_decode_pixels` with direct current signatures, then delete the unused fallback branches and imports. Do not introduce a generic callback helper. | Scanner, preview, scoring, and runtime-helper tests. |
+| **WI-05** | Parked | P4 | **Simplify runtime-asset publication only if first-install evidence fails** | Do not add previous-version backup/restore or upgrade recovery. Current checksum and staging behavior is sufficient unless a reproducible *fresh-install* corruption case appears. | Reproduce first; do not write speculative tests or recovery code. |
+| **WI-06** | Rejected | — | **Central target-install plan emitter** | Keep the existing explicit Python, PowerShell, and Actions install commands. A shared plan parser/emitter would add more code and shell failure modes than it removes for one maintainer. | None. Update the few explicit commands together when pins change. |
+| **WI-07** | Rejected | — | **Release-asset preservation flag** | Keep intentional source-archive deletion in release-only tooling. Local release inputs are disposable and a fresh build/download is the recovery path. Do not add a flag, confirmation protocol, or retained-artifact policy. | Existing release-script tests. |
+| **WI-08** | Rejected | — | **Module registry and extra partial-result UX** | Classic script ordering is adequate for a single app shell. The current missing-cache behavior is truthful enough; do not add registry plumbing or per-root presentation state without a user-visible failure. | None. |
 
-### Recommended first follow-up session
+### WI-01 implementation review
 
-Implement **WI-01 only**. It contains small, independent, low-risk changes and
-their tests; it must not include runtime archive publication, release plan
-consolidation, or broad frontend restructuring. Commit it as separate logical
-changes in this order: migration fix, worker-start lock fix, Open-original
-wiring, reset/docs correction. Update each work-item status only after its
-focused tests pass.
+**Decision: retain all production changes; no rollback is recommended.**
+
+- `db.py` changed one expression from `row["name"]` to `row[1]`, which works
+  for both the existing `sqlite3.Row` connection and a bare SQLite connection.
+  It reduces an implicit requirement rather than adding a compatibility layer.
+- The three worker-start fixes are direct four-line guards. They prevent the
+  single process from becoming permanently unavailable after a rare thread
+  creation failure; no lifecycle abstraction was introduced.
+- The Open-original fix is one late-bound callback and a browser regression.
+  It fixes a visible no-op without altering the endpoint or adding a module
+  system. The closure is safe because it runs after workflow composition.
+- Passing `updateResourceProfileDetail` is one explicit dependency that fixes
+  a stale Settings display. Replacing it with event redispatching would be
+  less direct and would alter persistence side effects.
+- The added tests are specific regression coverage. Their minor duplication
+  and the private `_open_review_tab` import are acceptable test-only costs;
+  do not create a shared test framework to remove them.
+
+The only follow-up note is stylistic: `workflowsHolder` is declared after the
+callback that closes over it. JavaScript's closure semantics make this safe,
+and moving the declaration would provide no material benefit. Leave it alone.
+
+### WI-02 implementation review
+
+**Decision: retain the current-version direct paths; no rollback is recommended.**
+
+- Release target and launcher handling now accepts only the explicit current
+  target IDs. Old target aliases, manifest aliases, and old sidecar locations or
+  state markers are no longer resolved.
+- `desktop.py` and `bootstrap_sidecar.py` import runtime helpers directly.
+  `bootstrap.py` no longer re-exports the sidecar API, and the shared runtime
+  façade plus its seam-only tests were removed.
+- Preview-name candidates, stale-preview cleanup fallback, the old preview
+  conversion wrapper, the `MAX_DECODE_PIXELS` alias, retired learned-model
+  aliases, and the CUDA bootstrap alias were removed. Current preview-root,
+  atomic sidecar, path, bounded-decoding, and database safeguards remain.
+- The frontend marker function was removed after replacing its source-string
+  assertion with a browser behavioral test for database-scoped UI state.
+
+Focused verification was run before and after each behavior batch: the baseline
+compatibility set passed **145 tests**; target/sidecar tests passed **97**;
+model-catalog tests passed **112**; preview/cache/media tests passed **205**;
+decode/cleanup tests passed **28**; direct-facade tests passed **104**; the
+frontend/static batch passed **102**; and the final media-focused check passed
+**8 tests**. The first full run identified two obsolete preview-name tests;
+those tests were removed with the retired behavior, then the focused media check
+passed. The final explicit-launcher parsing check passed **74 tests**.
+
+Final verification: `python -m ruff check src tests` passed; the full
+`python -m pytest -q --basetemp .pytest-tmp-wi02-full3` suite passed **710
+tests**, with **1 skipped**, in **232.44s**. Type verification was not run
+because neither `mypy` nor `pyright` is installed and no type-check command is
+configured.
 
 ### New-session starter prompt
 
-> Continue ShotSieve cleanup using `report.md` as the source of truth. Implement **WI-01: Quick safety and documentation corrections** only. First read the work-item register and the cited code/tests. Add or strengthen regressions before each behavior change, preserve public APIs and compatibility seams, and do not touch WI-02 through WI-08. Run focused tests after each logical change, then Ruff and the full pytest suite. Update `report.md` statuses/notes with the completed work and exact verification results.
+> Continue ShotSieve cleanup using `report.md` as the source of truth. Work on **WI-02 only**: delete compatibility code made unnecessary by fresh-download, single-user deployment. Prefer direct current-version paths; do not add adapters, registries, factories, migration support, or replacement shims. Verify each deletion has no remaining production caller, run focused tests after each small batch, then run Ruff and the full pytest suite. Update the WI-02 status and completion notes with the exact checks run.
 
 ### WI-01 completion notes
 
 - Implemented the four bounded behavior fixes and the README/AMD ROCm
-  documentation corrections. WI-02 through WI-08 remain unchanged.
+  documentation corrections. WI-03 through WI-08 remain unchanged.
 - Added regressions for bare SQLite migration connections, scan/score/compare
   worker-start lock release, the composed Review “Open File” request, and
   full-reset resource-profile detail refresh.
@@ -52,15 +120,16 @@ focused tests pass.
 
 ## A. Executive summary
 
-ShotSieve is in good shape for a codebase that has just completed a substantial 0.4.x runtime, safety, and frontend-workflow refactor. The important design decisions are generally explicit: destructive file operations preserve per-file state; scans are deterministic and retain diagnostics; optional ML probes fail safely; release target identity is data-driven; and the frontend decomposition preserves a stable public facade without introducing a framework.
+ShotSieve is in good shape for a single-user desktop application following a
+substantial 0.4.x runtime, safety, and frontend-workflow refactor. The
+important design decisions are generally explicit: destructive file operations
+preserve per-file state; scans are deterministic and retain diagnostics; and
+optional ML probes fail safely.
 
-The main concern is not broad architectural decay. It is a small set of boundary defects and sources of future drift:
-
-1. A public SQLite migration helper only works with ShotSieve's row-factory connection, despite accepting a generic `sqlite3.Connection`.
-2. Runtime-archive publication can remove a working install before validating the extracted replacement and has no restore path.
-3. The composed frontend wires the visible **Open original** control to a no-op callback.
-4. Three job starters can leave the global operation lock held if thread creation fails.
-5. Target-specific Torch installation knowledge is duplicated between the sidecar planner, GitHub Actions, and PowerShell.
+WI-01 resolved the three concrete current-version defects found in the initial
+audit. The remaining maintainability goal is to remove old-version support and
+proven no-op code—not to add resilience for upgrades, generalized metadata
+systems, or more frontend infrastructure.
 
 | Dimension | Score | Rationale |
 |---|---:|---|
@@ -73,9 +142,9 @@ The main concern is not broad architectural decay. It is a small set of boundary
 
 ### Evidence collected
 
-- `python -m ruff check src tests` passed on Windows with Python 3.14.5.
-- `python -m pytest -q` passed: **712 passed, 1 skipped in 236.65s**.
-- A direct bare-connection probe reproduced `apply_schema_migrations()` failing with `TypeError: tuple indices must be integers or slices, not str`.
+- `python -m ruff check src tests` passed after WI-01 on Windows with Python 3.14.5.
+- `python -m pytest -q` passed after WI-01: **718 passed, 1 skipped in 245.09s**.
+- A direct bare-connection probe reproduced the prior `apply_schema_migrations()` failure; WI-01 corrected it with positional `PRAGMA` row access.
 - The current PyTorch XPU and AMD ROCm compatibility pages were checked. They support the repository's qualified hardware/OS/driver wording; they do **not** establish that ShotSieve has run on every packaged target.
 
 ## Architecture and execution flows
@@ -110,11 +179,12 @@ The shared sidecar lifecycle is sound and should remain intact:
 - **HTTP/jobs:** `web.py` owns server construction and the legacy dependency container. `web_route_common.py` projects it into narrower route-family views. `web_route_jobs.py`, `web_route_files.py`, `web_route_review.py`, and `web_route_scan.py` then own their family-specific orchestration.
 - **Frontend:** `app-workflows.js` is composition-only as documented in `docs/frontend-workflows.md`; polling, operation results, comparison, export, library operations, analysis, and folder browsing are separated into dedicated factories.
 
-## B. Immediate problems
+## B. Original findings and disposition
 
-These are concrete correctness, recoverability, or safety issues. They are not style-only concerns.
+This section preserves the original evidence. The work-item register controls
+current priority and supersedes the original recommendation where necessary.
 
-### P1 — `apply_schema_migrations()` violates its generic SQLite contract
+### Resolved in WI-01 — `apply_schema_migrations()` bare-connection support
 
 **Evidence:** `src/shotsieve/db.py:192-199` accepts `sqlite3.Connection` but indexes `PRAGMA table_info` rows with `row["name"]`. Bare SQLite connections return tuples unless a row factory is configured. A direct reproduction fails before any migration is applied. The normal product path hides the defect because `connect()` sets `sqlite3.Row` (`src/shotsieve/db.py:50-58`).
 
@@ -128,7 +198,7 @@ These are concrete correctness, recoverability, or safety issues. They are not s
 
 **Protective tests:** extend `tests/test_schema_and_path_policy.py` with a bare connection containing legacy `files`, `scores`, and `scan_runs` tables; run the helper twice and assert required columns exist both times. The current test at `45-64` exercises the product initializer but not the generic helper.
 
-### P1 — Runtime archive publication discards a known-good install too early
+### Parked (WI-05) — Runtime archive publication rollback
 
 **Evidence:** `ensure_runtime_asset()` extracts into a temporary directory but does not call `_find_runtime_executable()` until after it removes `install_dir` and moves the extraction (`src/shotsieve/bootstrap_assets.py:623-687`, especially `677-687`). The move is also not a same-directory staged swap with restoration of the previous install.
 
@@ -142,7 +212,7 @@ These are concrete correctness, recoverability, or safety issues. They are not s
 
 **Protective tests:** `tests/test_bootstrap_runtime_assets.py:29-253` already covers digest failures, local archive fallback, split download, and successful extraction. Add (1) malformed-but-correctly-hashed archive layout leaves the old install untouched, (2) simulated publish rename failure restores the old executable, and (3) a successful refresh removes the previous directory.
 
-### P1 — The composed **Open original** action is a no-op
+### Resolved in WI-01 — The composed **Open original** action
 
 **Evidence:** `src/shotsieve/static/app.js:133-145` creates the grid before workflow composition and supplies `openOriginalFile: async () => {}`. `src/shotsieve/static/app-review.js:333-347` sees that function, prevents normal link navigation, and calls it. The actual workflow implementation does correctly post to `/api/files/open` in `app-workflow-library-browser.js`.
 
@@ -156,7 +226,7 @@ These are concrete correctness, recoverability, or safety issues. They are not s
 
 **Protective tests:** `tests/test_frontend_state_reset.py:34-184` invokes `openOriginalFile` on an independently constructed workflow, and `tests/test_web_static_assets.py:997-1005` checks source strings. Add a browser test against the fully booted app that clicks `#open-original` and verifies the `/api/files/open` request (or a mocked successful reveal endpoint) occurs.
 
-### P2 — Direct scan, score, and compare starters can permanently retain the operation lock
+### Resolved in WI-01 — Direct job-starter lock release
 
 **Evidence:** `start_scan_job()` acquires the global lock then calls `thread_factory(...).start()` without a cleanup guard (`src/shotsieve/web_route_jobs.py:407-431`). The same pattern appears in `start_score_job()` (`434-505`, start at `504`) and `start_compare_job()` (`616-679`, start at `678`). In contrast, `_start_operation_job()` releases the lock when start fails (`250-305`).
 
@@ -170,9 +240,13 @@ These are concrete correctness, recoverability, or safety issues. They are not s
 
 **Protective tests:** `tests/test_web_route_operation_jobs.py:20-85` verifies lock release for `_start_operation_job()` only. Add one parametrized test for scan, score, and compare with a `thread_factory` whose `start()` raises; assert the operation lock is available after the exception.
 
-## C. High-value cleanup
+## C. Superseded cleanup proposals
 
-### Make target-specific Torch installation a single consumable plan
+The following historical proposals are retained for traceability only. WI-06
+and WI-07 reject their proposed new configuration/confirmation machinery; do
+not implement them under the current deployment policy.
+
+### Rejected (WI-06) — Make target-specific Torch installation a single consumable plan
 
 **Evidence of duplication:**
 
@@ -182,11 +256,11 @@ These are concrete correctness, recoverability, or safety issues. They are not s
 - `scripts/build_windows_releases.ps1:27-45` repeats Windows aliases, and `219-274` repeats CPU/CUDA/XPU indexes plus Windows ROCm URLs.
 - `model-smoke.yml:31-37` independently repeats the CPU install recipe.
 
-**Recommendation:** retain `release_targets.py` as the authoritative artifact/target record and `dependency_constraints.py` as the authoritative package-source record. Add a small source-controlled plan emitter (for example, `scripts/release_target_install_plan.py`) that resolves a target through the existing `torch_install_plan()` and outputs a machine-readable `packages` and `index_args` list. Let GitHub Actions and the PowerShell script consume that plan rather than copy URLs. Do not centralize hardware detection or model-policy code into this plan.
-
-| Concrete benefit | Incremental path | Main risk | Tests |
-|---|---|---|---|
-| A pin or AMD URL changes once, preventing CI/local/sidecar drift. | First add the plan emitter and a parity test without changing callers. Convert PowerShell, then GitHub Actions, then the CPU smoke recipe. | Shell/PowerShell JSON quoting and argument expansion. Keep `pip check` and each target's constraints as they are. | Extend `test_release_manifest_and_bundle.py` and `test_runtime_helpers.py` to assert every target's emitted plan equals `torch_install_plan()` and that ROCm never resolves through PyPI. |
+**Solo-maintainer decision:** keep these explicit commands. The release paths are
+few, vendor-specific, and easy to inspect in place; an emitted-plan format,
+parser, and cross-shell argument adapter would cost more to maintain than the
+duplicated URL lines. When a pin changes, update the explicit source values and
+run the existing release tests.
 
 ### Remove verified frontend no-op plumbing after fixing the live callback
 
@@ -202,27 +276,28 @@ These are not unused imports; they are reachable no-op code. They inflate the fr
 
 **Benefit:** smaller dependency injection surface and fewer lifecycle placeholders to wire incorrectly. **Risk:** low-to-medium because static tests intentionally inspect some implementation boundaries. **Verification:** add behavioral tests first, then update the affected static contract checks in the same change.
 
-### Make release-asset source deletion explicit
+### Rejected (WI-07) — Make release-asset source deletion explicit
 
 **Evidence:** `scripts/prepare_release_assets.py:43-76` splits oversized archives into a separate publish tree, then unconditionally deletes the corresponding file under the caller-provided `--source-root` (`source.unlink()` at `74`). `tests/test_release_manifest_and_bundle.py:216-250` deliberately asserts that deletion.
 
-**Assessment:** this is intentional release-only disk reclamation, not dead code. It is nevertheless a surprising destructive CLI contract: a local operator can point `--source-root` at a valuable archive directory and lose its oversized original.
+**Solo-maintainer decision:** keep the intentional release-only disk reclamation
+and its existing test. Build artifacts are disposable, and adding a flag,
+confirmation flow, or retained-artifact policy would make a rarely used script
+more complicated without protecting user photos or current application data.
 
-**Recommendation:** make consumption opt-in (`--consume-source`) and have `release.yml` enable it for downloaded GitHub artifacts, or at minimum rename/document the option as destructive and print the deletion plan before mutation. The safer default is to preserve source artifacts.
+## D. Lower-priority historical ideas
 
-**Benefit:** local rehearsals and manual releases cannot silently destroy the only large archive. **Risk:** GitHub runners need more disk. Retain the explicit release-workflow flag to preserve current cleanup behavior there. **Tests:** update the existing split test to verify the default preserves source and add a flagged case that deletes it.
+- **Target translation drift:** handle it by deleting legacy IDs in WI-02, not
+  by adding a canonical lookup layer.
+- **`max_decode_pixels` inspection:** simplify it with direct current-version
+  calls in WI-04, not with a shared compatibility helper.
+- **Multi-root missing-cache presentation:** reject until an actual user sees a
+  confusing result. It affects cache cleanup rather than source photos.
+- **Reset profile detail:** completed in WI-01.
+- **Workflow module validation:** reject. Ordered classic scripts are adequate
+  for a single application shell; no registry or framework is warranted.
 
-## D. Medium-value cleanup and targeted hardening
-
-| Priority | Finding and evidence | Recommendation | Why it matters / test |
-|---|---|---|---|
-| P3 | Runtime target meaning is re-derived from target-name suffixes in `desktop._runtime_name_from_target_id()` (`src/shotsieve/desktop.py:345-357`) and `bootstrap_sidecar._target_parts()` (`246-292`) even though `ReleaseTarget` already stores `platform` and `runtime` (`release_targets.py:43-63`). | Add a canonical target lookup that returns the existing `ReleaseTarget` fields; retain legacy aliases in `release_targets.py:8-40`. Use it where the canonical target exists, while keeping launcher-name parsing at the UI boundary. | Reduces future alias drift without merging distinct “launcher parsing” and “runtime probing” concerns. Extend target/legacy-alias parametrization in `test_desktop.py` and plan tests. |
-| P3 | The three `max_decode_pixels` compatibility inspections in `scoring.py:26-81`, `scanner.py:25-45`, and `preview.py:641-715` duplicate the same optimistic legacy-callable fallback. `learned_iqa_backend._supports_keyword()` is a fourth near-equivalent implementation. | Extract one very small compatibility helper only if the legacy callback signature remains supported. Preserve the current “signature unavailable means forward the keyword” behavior. | This is an incremental clarity improvement, not a correctness fix. Test a callable with/without the keyword and one opaque callable. Do not create a generic framework. |
-| P3 | `reviewMissingEntries()` applies multi-root cleanup sequentially (`app-workflow-library-operations.js`, the `reviewMissingEntries` function). If a later root returns `refresh_required`, earlier root cleanup is already committed but the UI exits through a generic error path. | Return/present per-root completion and refresh workspace in a `finally` block after any attempted root. Do not attempt rollback of completed cleanup. | Makes partial success truthful and refreshes stale UI. Test first-root success plus second-root stale response. |
-| P4 | Full-cache reset sets the profile selector to normal but cannot call the controller's `updateResourceProfileDetail`; the symbol is not injected into `app-events.js` and the `typeof` check silently skips it (`app-events.js:97-145`, `602-616`). | Pass the controller function through the event dependencies or let reset dispatch the select change event. | Cosmetic but user-visible stale profile text. A focused browser reset test can assert the normal-profile wording. |
-| P4 | The page uses ordered classic scripts and `window.ShotSieve*` exports. `app-workflows.js` validates the polling module but direct-accesses other workflow globals (`src/shotsieve/static/app-workflows.js:1-58`); export UI is optional at `app-workflow-export.js:401-409`. | Do not add React/Vue/a bundler. Add a tiny startup assertion covering all mandatory workflow factories and fail with a named missing-module error. | Converts a late button-click `TypeError` into a startup diagnostic. Static test the required script list/order in `index.html`; browser-test an intentionally absent factory. |
-
-## E. Leave alone
+## E. Existing safeguards to retain
 
 These areas look complicated because they protect real constraints. Refactoring them now would move risk rather than remove it.
 
@@ -254,13 +329,16 @@ Only four files in `src/` exceed 1,000 lines when counted with `Path.read_text()
 | `styles.css` / `styles-layout.css` / `styles-workstation.css` | 966 / 917 / 761 | Large but stylesheet responsibilities are split already. | Leave alone; no unused-selector claim without runtime coverage. |
 | `export.py` | 871 | Copy/move transfer and compensation are cohesive, high-risk behavior. | Leave alone. |
 | `learned_iqa_runtime.py` | 871 | Device resolution, conservative probes, resource sizing, and import hygiene form one optional-runtime boundary. | Leave alone. |
-| `web_route_jobs.py` | 779 | Job status/result/cancel, shared operation launcher, and scan/score/compare/model starters. | No decomposition now; apply the P2 lock-start hardening. |
+| `web_route_jobs.py` | 779 | Job status/result/cancel, shared operation launcher, and scan/score/compare/model starters. | No decomposition now; WI-01 completed the direct lock-start hardening. |
 | `review.py` / `web_route_common.py` | 771 / 753 | The former is a facade around review query contracts; the latter centralizes context, selection snapshots, and response helpers. | Leave alone while the recent boundary refactor settles. |
 | `app-events.js` / `app-controller.js` | 733 / 718 | One DOM event binder and one UI controller; large dependency surfaces but cohesive roles. | Leave alone; remove no-op injections and add the small reset correction. |
 | `preview.py` / `app-workflow-compare.js` | 715 / 710 | Preview supports standard/RAW, capture diagnostics, cache naming, and managed cleanup; comparison owns both presentation and workflow. | Leave alone. |
-| `web.py` / `bootstrap_assets.py` / `desktop.py` | 690 / 687 / 649 | Server assembly, archive integrity/acquisition, and desktop runtime activation respectively. | Keep boundaries; harden archive publication and centralize target lookup. |
+| `web.py` / `bootstrap_assets.py` / `desktop.py` | 690 / 687 / 649 | Server assembly, archive integrity/acquisition, and desktop runtime activation respectively. | Keep boundaries and explicit current-version code paths; do not add upgrade-recovery or target-lookup layers. |
 
-## G. Dead-code and compatibility report
+## G. Dead-code and compatibility inventory
+
+The no-op entries remain candidates for WI-03. The compatibility entries are
+candidates for deletion in WI-02, not reasons to preserve an upgrade path.
 
 ### Verified removable or no-op candidates
 
@@ -270,17 +348,26 @@ Only four files in `src/` exceed 1,000 lines when counted with `Path.read_text()
 | `scoreCard` and `statusPill` hooks | Defined in `app-controller.js:37-57`, replaced by no-ops in `app.js:139-140`, then ignored by `app-review.js:305-306`. | Verified dead presentation injection. Remove together with the unused parameters. |
 | `getSortRelevantScore` pipeline | Defined/exported by `app-review.js:40-47`, passed through `app-grid.js`, and explicitly unused in `app-review.js:164-173`. | Verified dead hook. Remove with the presentation injection cleanup. |
 
-### Retained code that is **not** dead
+### Compatibility code reviewed for WI-02
 
-- `bootstrap.py` is a facade/CLI compatibility surface and supplies the imported sidecar helpers used by desktop startup (`desktop.py:11-17`). It also preserves test monkeypatch seams; do not delete it based on internal call counts.
-- `runtime_support.py` and the aliases in `desktop.py`/`bootstrap_sidecar.py` are intentional late-bound test and integration seams, verified by `tests/test_runtime_helpers.py`.
-- Legacy target aliases in `release_targets.py:8-40`, old preview-name candidates in `preview.py:481-526`, `_prepare_standard_preview_image()` (`233-241`), `MAX_DECODE_PIXELS` (`image_conversion.py:31-34`), legacy preview cleanup fallback, and the old `maybe_prepare_cuda_torch_runtime()` name (`desktop.py:575-590`) are backward-compatibility surfaces.
-- Retired model names are normalizable but blocked for new work in `learned_iqa_catalog.py:34-78` and `183-210`. No active DirectML implementation was found; the test suite explicitly rejects the retired legacy adapter. Do not delete aliases without a migration/support-window policy for stored settings and external callers.
-- `_testContractMarkers()` (`app.js:299-303`) has no runtime caller but exists for an implementation-level test contract. Treat it as a test seam until that test is redesigned.
+- `bootstrap.py` is currently a façade/CLI surface supplying sidecar helpers to `desktop.py:11-17`. In WI-02, first verify that no package entry point needs it, switch the one in-repository importer to its concrete module, then delete its re-export/monkeypatch compatibility surface and obsolete tests.
+- `runtime_support.py` and aliases in `desktop.py`/`bootstrap_sidecar.py` exist primarily as late-bound test/integration seams. Replace in-repository callers with direct functions and delete the façade, aliases, and seam-only tests only when no current product caller remains.
+- Legacy target aliases, old sidecar candidates/state acceptance, preview-name candidates, `_prepare_standard_preview_image()`, `MAX_DECODE_PIXELS`, legacy preview cleanup fallback, and `maybe_prepare_cuda_torch_runtime()` were removed in small verified groups.
+- Retired model aliases were removed from `learned_iqa_catalog.py` and the tests that retained them. No active DirectML implementation was found, so no DirectML compatibility migration was needed.
+- `_testContractMarkers()` had no product caller. Its source-string assertion was replaced with a browser behavioral check, and the test-only marker was deleted.
+- The bootstrap and runtime-support entries above are now complete: concrete
+  modules are used directly, the sidecar exports were removed from
+  `bootstrap.py`, and the façade/alias seam tests were deleted.
 
-No unused Python imports were identified by Ruff. No unused endpoint, environment-variable, configuration-field, or release helper was proven dead across production and test usage, so no deletion is recommended there.
+No unused Python imports were identified by Ruff. No endpoint, environment
+variable, configuration field, or release helper was proven dead, so WI-02
+should not delete those without an in-repository caller check.
 
-## H. Duplication report and ownership
+## H. Duplication decisions
+
+The explicit package-install command duplication remains acceptable for a
+single maintainer. WI-06 rejects a shared plan emitter; keep the current
+commands readable and update them together when pins change.
 
 | Rule or logic | Current locations | Recommended ownership | Action |
 |---|---|---|---|
@@ -291,52 +378,34 @@ No unused Python imports were identified by Ruff. No unused endpoint, environmen
 | File-operation result shape/retry semantics | models, export, review cache, route adapters, frontend operation-result module | `models.FileOperationResult` / `FileOperationSummary` server-side and operation-results JS client-side | Already appropriately centralized at each side of the HTTP boundary. Keep the two representations distinct. |
 | Review filters, listing, count, revisions, and selections | `review_filters.py`, `review.py`, web route common/review | `review_filters.py` for predicate construction | Already a good consolidation. Do not reintroduce duplicated route-specific filters. |
 
-## I. Proposed target architecture
+## I. Target architecture
 
-This is deliberately a small evolution, not a rewrite.
+No new target architecture is needed. Keep the current direct modules and
+explicit scripts. The intended shape is smaller over time:
 
 ```mermaid
 flowchart LR
-  Target[release_targets.py\nIDs, aliases, artifact metadata] --> Plan[release target install-plan emitter]
-  Constraints[dependency_constraints.py\npins, indexes, exact ROCm URLs] --> Plan
-  Plan --> CI[release.yml / model-smoke.yml]
-  Plan --> PS[build_windows_releases.ps1]
-  Plan --> Sidecar[bootstrap_sidecar.py]
-
-  Desktop[desktop.py\nlauncher parse + activation] --> Target
-  Desktop --> Sidecar
-  Sidecar --> Model[model_assets.py\nreadiness state machine]
-
-  Routes[web_route_jobs.py] --> StartGuard[small worker-start guard]
-  StartGuard --> Registry[JobRegistry]
-
-  App[app.js] --> Grid[app-grid.js]
-  App --> Workflows[workflow factories]
-  Grid --> LateBound[late-bound open-original callback]
-  LateBound --> Workflows
+  Current[Current-version code path] --> App[Desktop and frontend]
+  Current --> Runtime[Runtime and model setup]
+  Current --> Release[Explicit release scripts]
+  Legacy[Legacy aliases, shims, upgrade paths] --> Delete[WI-02 deletion review]
+  NoOps[Proven no-op UI plumbing] --> DeleteUI[WI-03 deletion]
 ```
 
-Keep the following boundaries unchanged:
+Keep only the safeguards required for a fresh install and the current running
+application. Avoid new intermediary modules, plan generators, registries, and
+facades unless a current-version defect cannot be fixed directly.
 
-- `release_targets.py` owns artifact metadata; it should not own hardware probing or package URLs.
-- `dependency_constraints.py` owns concrete package sources; a plan emitter is an adapter, not another metadata store.
-- `bootstrap_sidecar.py` retains atomic sidecar state and package recovery.
-- `model_assets.py` remains the durable model-readiness owner.
-- Route-family dependency views and frontend factories remain compatibility boundaries.
+## J. Lean cleanup sequence
 
-## J. Ordered refactoring sequence
-
-Each step is independently reviewable and has a clear rollback point.
-
-1. **Fix generic migration row access.** Add the bare-connection regression first; make the smallest `db.py` accessor change; run schema/path tests. Rollback is one helper/test commit.
-2. **Harden runtime-asset publication.** Add tests for invalid extracted layout and simulated publish failure; implement destination-volume staging, pre-publication executable validation, previous-directory restore, and cleanup. Rollback is confined to `ensure_runtime_asset()`.
-3. **Repair the Open-original wiring.** Add a composed-browser regression; replace the grid callback placeholder with a late-bound workflow proxy. Rollback is one static-app initialization change.
-4. **Guarantee lock release on worker-start errors.** Add parametrized failing-thread tests for scan, score, and compare; add three narrow guards or a minimal shared guard. Rollback is limited to route starts.
-5. **Introduce, but do not yet consume, an install-plan emitter.** Test it against all `ReleaseTarget` entries and `torch_install_plan()`. This creates a stable, reviewable source of truth without changing releases.
-6. **Migrate release consumers one at a time.** Convert PowerShell first, then `release.yml`, then CPU model smoke. Keep the existing command syntax available until all parity tests pass. Each consumer conversion is separately revertible.
-7. **Make release-asset consumption explicit.** Add `--consume-source` and update only the GitHub release caller initially. Document the default behavior and adapt the existing deletion test.
-8. **Do the isolated frontend no-op cleanup.** Only after the real callback has a behavioral test, remove dead injection points and update static boundary assertions. Do not combine it with a workflow redesign.
-9. **Apply documentation-only corrections.** Rename the README's “Release 0.4.0 highlights” heading to “0.4 series highlights” (`README.md:6-8`), correct the malformed ROCm Windows continuation bullet (`docs/amd-rocm.md:21-24`), and add an explicit hardware/packaged-runtime evidence matrix link.
+1. **WI-02:** delete old-version compatibility code in small, independently
+  testable batches. Prefer deleting its tests rather than retaining a shim.
+2. **WI-03:** remove proven frontend no-ops directly; do not replace them with
+  logging, registries, or another indirection layer.
+3. **WI-04:** remove `max_decode_pixels` legacy signature probing and call the
+  current internal interfaces directly.
+4. Stop after each item and measure the maintenance benefit. WI-05 through
+  WI-08 are intentionally not planned without a new current-version problem.
 
 ## K. Verification commands
 
@@ -401,4 +470,9 @@ Then follow `docs/intel-xpu.md` or `docs/amd-rocm.md` for a native tensor operat
 
 ## Final assessment
 
-Prioritize the four immediate fixes, then consolidate only the concrete release-install duplication and verified frontend no-op plumbing. Preserve the recent scanner, sidecar, model-readiness, file-operation, route-boundary, and frontend-factory safeguards: they are complexity with a job, not complexity looking for one.
+WI-01 is lean and should remain. Future work should remove code, not create
+more recovery or metadata machinery: start with WI-02, then WI-03 and WI-04
+only if each deletion has a clear current-version benefit. Preserve current-run
+photo, filesystem, database, decoding, and cancellation safeguards; discard
+upgrade and compatibility mechanisms that are no longer part of the product
+contract.

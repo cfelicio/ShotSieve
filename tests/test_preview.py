@@ -7,7 +7,7 @@ from types import SimpleNamespace
 import pytest
 
 from shotsieve import preview as preview_module
-from shotsieve.image_conversion import MAX_DECODE_PIXELS
+from shotsieve.image_conversion import DEFAULT_MAX_DECODE_PIXELS
 
 
 class _FakeFuture:
@@ -570,9 +570,9 @@ def test_generate_raw_preview_rejects_oversized_demosaic_before_postprocess(
 
     class FakeRawImage:
         sizes = SimpleNamespace(
-            iwidth=MAX_DECODE_PIXELS + 1,
+            iwidth=DEFAULT_MAX_DECODE_PIXELS + 1,
             iheight=1,
-            width=MAX_DECODE_PIXELS + 1,
+            width=DEFAULT_MAX_DECODE_PIXELS + 1,
             height=1,
         )
 

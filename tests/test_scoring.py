@@ -14,7 +14,7 @@ from shotsieve.scanner import scan_root
 from shotsieve.scoring import score_files
 
 
-def test_score_accepts_qrealign_mini_alias_as_a_supported_model(tmp_path: Path) -> None:
+def test_score_accepts_the_current_qrealign_mini_model(tmp_path: Path) -> None:
     db_path = tmp_path / "data" / "shotsieve.db"
     preview_dir = tmp_path / "previews"
     photo_dir = tmp_path / "photos"
@@ -41,7 +41,7 @@ def test_score_accepts_qrealign_mini_alias_as_a_supported_model(tmp_path: Path) 
         )
         summary = score_files(
             connection,
-            learned_backend_name="q-realign",
+            learned_backend_name="qrealign-mini",
             learned_device="cuda",
             learned_backend_factory=lambda _model_name: FakeQReAlignBackend(),
         )

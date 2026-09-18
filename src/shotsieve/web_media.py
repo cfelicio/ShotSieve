@@ -10,7 +10,6 @@ MediaPathForFile = Callable[..., Path | None]
 DatabaseFactory = Callable[[Path], Any]
 BuildConfigFunc = Callable[[str], Any]
 PreviewNameFunc = Callable[[Path], str]
-PreviewNameCandidatesFunc = Callable[[Path], list[str]]
 GuessMediaTypeFunc = Callable[[str], tuple[str | None, str | None]]
 
 
@@ -27,7 +26,6 @@ class MediaDependencies:
     build_config: BuildConfigFunc
     media_path_for_file: MediaPathForFile
     stable_preview_name: PreviewNameFunc
-    preview_name_candidates: PreviewNameCandidatesFunc
     guess_media_type: GuessMediaTypeFunc
     is_within_any_root: Callable[[Path, list[Path]], bool]
 
@@ -71,30 +69,7 @@ def resolve_media_request(
                 if file_row is not None and file_row["path"] and file_row["preview_path"]:
                     preview_candidate = Path(str(file_row["preview_path"])).expanduser().resolve()
                     canonical_preview_name = f"{dependencies.stable_preview_name(Path(str(file_row['path'])))}.jpg"
-                    expected_preview_names = {
-                        f"{preview_name}.jpg"
-                        for preview_name in dependencies.preview_name_candidates(Path(str(file_row["path"])))
-                    }
-                    preview_reference_count = 0
-                    uses_fallback_preview_name = (
-                        preview_candidate.name in expected_preview_names
-                        and preview_candidate.name != canonical_preview_name
-                    )
-                    if uses_fallback_preview_name:
-                        preview_reference_count = root_conn.execute(
-                            "SELECT COUNT(*) AS count FROM files WHERE preview_path = ?",
-                            (str(preview_candidate),),
-                        ).fetchone()["count"]
-                    if (
-                        preview_candidate == resolved_media
-                        and (
-                            preview_candidate.name == canonical_preview_name
-                            or (
-                                uses_fallback_preview_name
-                                and preview_reference_count == 1
-                            )
-                        )
-                    ):
+                    if preview_candidate == resolved_media and preview_candidate.name == canonical_preview_name:
                         known_roots.append(preview_candidate.parent)
         if config.preview_dir:
             known_roots.append(config.preview_dir.resolve())

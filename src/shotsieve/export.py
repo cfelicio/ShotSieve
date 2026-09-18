@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
 
-from shotsieve.db import infer_preview_cache_roots, normalize_path_case
+from shotsieve.db import normalize_path_case
 from shotsieve.file_operation_state import OperationState
 from shotsieve.models import (
     FilesystemObservation,
@@ -132,11 +132,6 @@ def export_files(
     if missing_ids:
         raise ValueError(f"File IDs not found in database: {missing_ids}")
 
-    allow_preview_path_fallback = (
-        preview_cache_root is not None
-        and len(infer_preview_cache_roots(connection)) > 1
-    )
-
     summary = ExportSummary()
     total_files = len(rows)
 
@@ -166,7 +161,6 @@ def export_files(
             destination=dest_path,
             mode=mode,
             preview_cache_root=preview_cache_root,
-            allow_preview_path_fallback=allow_preview_path_fallback,
         )
         summary.add(outcome.result)
         summary.copied += outcome.copied
@@ -204,7 +198,6 @@ def _process_export_row(
     destination: Path,
     mode: str,
     preview_cache_root: Path | None,
-    allow_preview_path_fallback: bool,
 ) -> _ExportRowOutcome:
     """Run validation and one copy/move without mutating the aggregate summary."""
     source = Path(row["path"])
@@ -264,7 +257,6 @@ def _process_export_row(
         target=target,
         mode=mode,
         preview_cache_root=preview_cache_root,
-        allow_preview_path_fallback=allow_preview_path_fallback,
     )
 
 
@@ -342,7 +334,6 @@ def _move_export_row(
     target: Path,
     mode: str,
     preview_cache_root: Path | None,
-    allow_preview_path_fallback: bool,
 ) -> _ExportRowOutcome:
     """Transfer one source, then reconcile the catalog before cleanup."""
     try:
@@ -447,7 +438,6 @@ def _move_export_row(
             row["preview_path"],
             source_path=row["path"],
             preview_cache_root=preview_cache_root,
-            allow_path_parent_fallback=allow_preview_path_fallback,
         )
     except Exception as exc:
         warnings.append(("preview_cleanup", exc))

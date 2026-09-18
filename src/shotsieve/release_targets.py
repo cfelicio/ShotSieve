@@ -3,41 +3,9 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 
 
-# Runtime-pack IDs are part of manifests, cache paths, and build tooling. Keep
-# old IDs readable so an upgraded bootstrap can consume manifests and sidecars
-# produced before the runtime names were made explicit.
-LEGACY_RELEASE_TARGET_ID_ALIASES = {
-    "windows-nvidia": "windows-nvidia-cuda",
-    "windows-cuda": "windows-nvidia-cuda",
-    "windows-intel": "windows-intel-xpu",
-    "windows-xpu": "windows-intel-xpu",
-    "windows-amd": "windows-amd-rocm",
-    "windows-rocm": "windows-amd-rocm",
-    "linux-nvidia": "linux-nvidia-cuda",
-    "linux-cuda": "linux-nvidia-cuda",
-    "linux-intel": "linux-intel-xpu",
-    "linux-xpu": "linux-intel-xpu",
-    "linux-amd": "linux-amd-rocm",
-    "linux-rocm": "linux-amd-rocm",
-    "macos-mps": "macos-apple-mps",
-}
-
-
 def canonical_release_target_id(target_id: str) -> str:
-    """Return the explicit runtime-pack ID for a requested target ID."""
-    normalized = str(target_id).strip().casefold()
-    return LEGACY_RELEASE_TARGET_ID_ALIASES.get(normalized, normalized)
-
-
-def release_target_id_aliases(target_id: str) -> tuple[str, ...]:
-    """Return the canonical ID followed by IDs accepted from older releases."""
-    canonical = canonical_release_target_id(target_id)
-    legacy_ids = tuple(
-        alias
-        for alias, replacement in LEGACY_RELEASE_TARGET_ID_ALIASES.items()
-        if replacement == canonical
-    )
-    return (canonical, *legacy_ids)
+    """Normalize a current runtime-pack ID at an input boundary."""
+    return str(target_id).strip().casefold()
 
 
 @dataclass(frozen=True, slots=True)

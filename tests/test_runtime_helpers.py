@@ -28,21 +28,6 @@ def _new_module(name: str) -> Any:
     return types.ModuleType(name)
 
 
-def test_runtime_support_aliases_share_one_facade() -> None:
-    from shotsieve import bootstrap_sidecar, desktop, runtime_support
-
-    shared = runtime_support.shared_runtime_support
-    assert desktop._runtime_support is shared
-    assert bootstrap_sidecar._runtime_support is shared
-    for module in (desktop, bootstrap_sidecar):
-        assert module._path_has_torch.__self__ is shared
-        assert module._path_has_pyiqa.__self__ is shared
-        assert module._parse_env_bool.__self__ is shared
-        assert module._is_interactive_console.__self__ is shared
-        assert module._confirm.__self__ is shared
-        assert module._compose_pythonpath.__self__ is shared
-
-
 def test_learned_iqa_split_runtime_and_catalog_modules_preserve_facade_exports() -> None:
     from shotsieve import learned_iqa_catalog as catalog_module
     from shotsieve import learned_iqa_runtime as runtime_module
@@ -519,7 +504,7 @@ def test_learned_model_catalog_exposes_all_supported_backends() -> None:
     assert "apple" in runtimes
 
 
-def test_learned_model_aliases_and_runtime_resolution() -> None:
+def test_current_learned_models_and_runtime_resolution() -> None:
     class NoCudaTorch:
         @staticmethod
         def device(name: str) -> str:
@@ -602,12 +587,9 @@ def test_learned_model_aliases_and_runtime_resolution() -> None:
     def import_missing(name: str):
         raise ImportError(name)
 
-    assert normalize_model_name("TOPIQ-NR") == "topiq_nr"
-    assert normalize_model_name("TOPIQ") == "topiq_nr"
-    assert normalize_model_name("topiq_nr_spaq") == "topiq_nr-spaq"
-    assert normalize_model_name("Q-ReAlign Mini") == "qrealign-mini"
-    assert normalize_model_name("qrealign") == "qrealign-mini"
-    assert normalize_model_name("Quali-Clip") == "qualiclip"
+    assert normalize_model_name(" TOPIQ_NR ") == "topiq_nr"
+    assert normalize_model_name("qrealign-mini") == "qrealign-mini"
+    assert normalize_model_name("q-realign") == "q-realign"
     assert normalize_device_target("NVIDIA") == "cuda"
     assert normalize_device_target("AMD", system_name="Windows") == "amd"
     assert normalize_device_target("AMD", system_name="Linux") == "amd"

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import os
 import sys
-from collections.abc import Callable
 from pathlib import Path
 
 
@@ -66,36 +65,6 @@ def compose_pythonpath(*, existing: str | None, prepend_path: Path) -> str:
     return os.pathsep.join(deduplicated)
 
 
-class RuntimeSupport:
-    """Small dependency facade for runtime bootstrap and desktop seams.
-
-    The methods intentionally resolve the module-level functions when called.
-    This keeps the facade injectable while preserving the existing tests and
-    integrations that monkeypatch those shared helpers.
-    """
-
-    def path_has_torch(self, path: Path) -> bool:
-        return path_has_torch(path)
-
-    def path_has_pyiqa(self, path: Path) -> bool:
-        return path_has_pyiqa(path)
-
-    def parse_env_bool(self, value: str | None) -> bool | None:
-        return parse_env_bool(value)
-
-    def is_interactive_console(self) -> bool:
-        return is_interactive_console()
-
-    def confirm(self, prompt: str, *, input_func: Callable[[str], str] = input) -> bool:
-        return confirm(prompt, input_func=input_func)
-
-    def compose_pythonpath(self, *, existing: str | None, prepend_path: Path) -> str:
-        return compose_pythonpath(existing=existing, prepend_path=prepend_path)
-
-
-shared_runtime_support = RuntimeSupport()
-
-
 def source_checkout_root(module_file: str | Path, *, package_name: str) -> Path | None:
     resolved_module = Path(module_file).resolve()
     package_dir = resolved_module.parent
@@ -115,13 +84,11 @@ def source_checkout_root(module_file: str | Path, *, package_name: str) -> Path 
 
 
 __all__ = [
-    "RuntimeSupport",
     "compose_pythonpath",
     "confirm",
     "is_interactive_console",
     "parse_env_bool",
     "path_has_pyiqa",
     "path_has_torch",
-    "shared_runtime_support",
     "source_checkout_root",
 ]

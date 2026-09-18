@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import sys
 from types import SimpleNamespace
@@ -8,15 +9,7 @@ from typing import cast
 
 import shotsieve.desktop as desktop_module
 import pytest
-from shotsieve import runtime_support
-
-
-def test_resolve_cuda_runtime_target_id_only_returns_cuda_targets() -> None:
-    assert desktop_module._resolve_cuda_runtime_target_id("windows-nvidia-cuda") == "windows-nvidia-cuda"
-    assert desktop_module._resolve_cuda_runtime_target_id("linux-nvidia-cuda") == "linux-nvidia-cuda"
-    assert desktop_module._resolve_cuda_runtime_target_id("windows-nvidia") == "windows-nvidia"
-    assert desktop_module._resolve_cuda_runtime_target_id("windows-cpu") is None
-    assert desktop_module._resolve_cuda_runtime_target_id(None) is None
+from shotsieve.bootstrap_sidecar import torch_install_plan
 
 
 def test_desktop_parser_accepts_optional_model_cache_dir() -> None:
@@ -100,7 +93,7 @@ def test_main_uses_default_data_dir_and_no_browser(monkeypatch: pytest.MonkeyPat
         })
 
     monkeypatch.setattr(desktop_module, "serve_review_ui", fake_serve_review_ui)
-    monkeypatch.setattr(desktop_module, "maybe_prepare_cuda_torch_runtime", lambda data_dir: None)
+    monkeypatch.setattr(desktop_module, "maybe_prepare_torch_runtime", lambda data_dir: None)
     monkeypatch.setattr(desktop_module, "maybe_prepare_learned_iqa_runtime", lambda data_dir: None)
     monkeypatch.setattr(sys, "argv", ["shotsieve-desktop", "--port", "9001", "--no-browser"])
 
@@ -127,7 +120,7 @@ def test_main_uses_custom_data_dir(monkeypatch: pytest.MonkeyPatch, tmp_path: Pa
         })
 
     monkeypatch.setattr(desktop_module, "serve_review_ui", fake_serve_review_ui)
-    monkeypatch.setattr(desktop_module, "maybe_prepare_cuda_torch_runtime", lambda data_dir: False)
+    monkeypatch.setattr(desktop_module, "maybe_prepare_torch_runtime", lambda data_dir: False)
     monkeypatch.setattr(desktop_module, "_call_prepare_learned_iqa_runtime", lambda data_dir, assume_install_consent=False: None)
     monkeypatch.setattr(
         sys,
@@ -155,13 +148,13 @@ def test_runtime_target_id_from_executable_name_detects_windows_nvidia_cuda(
     assert target_id == "windows-nvidia-cuda"
 
 
-def test_runtime_target_id_from_executable_name_keeps_legacy_nvidia_launcher_compatible(
+def test_runtime_target_id_from_executable_name_ignores_a_legacy_nvidia_launcher(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(sys, "frozen", True, raising=False)
     monkeypatch.setattr(sys, "executable", r"C:\\tmp\\ShotSieve-NVIDIA.exe", raising=False)
 
-    assert desktop_module.runtime_target_id_from_executable_name(system_name="Windows") == "windows-nvidia"
+    assert desktop_module.runtime_target_id_from_executable_name(system_name="Windows") is None
 
 
 @pytest.mark.parametrize(
@@ -184,7 +177,7 @@ def test_experimental_windows_gpu_launcher_names_select_native_runtime(
     assert desktop_module._runtime_name_from_target_id(expected_target) == expected_runtime
 
 
-def test_maybe_prepare_cuda_torch_runtime_installs_sidecar_when_auto_enabled(
+def test_maybe_prepare_torch_runtime_installs_sidecar_when_auto_enabled(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -192,7 +185,7 @@ def test_maybe_prepare_cuda_torch_runtime_installs_sidecar_when_auto_enabled(
     data_dir.mkdir(parents=True)
 
     monkeypatch.setenv("SHOTSIEVE_BOOTSTRAP_AUTO_INSTALL_TORCH", "1")
-    monkeypatch.setattr(desktop_module, "runtime_target_id_from_executable_name", lambda system_name=None: "windows-nvidia")
+    monkeypatch.setattr(desktop_module, "runtime_target_id_from_executable_name", lambda system_name=None: "windows-nvidia-cuda")
     monkeypatch.setattr(desktop_module, "runtime_bundle_has_usable_cuda_torch", lambda force_reload=False: False)
 
     calls: list[tuple[str, Path, bool]] = []
@@ -207,7 +200,7 @@ def test_maybe_prepare_cuda_torch_runtime_installs_sidecar_when_auto_enabled(
 
     monkeypatch.setattr(desktop_module, "install_torch_sidecar", fake_install_torch_sidecar)
 
-    desktop_module.maybe_prepare_cuda_torch_runtime(data_dir)
+    desktop_module.maybe_prepare_torch_runtime(data_dir)
 
     assert len(calls) == 1
     assert calls[0][0] == "cuda"
@@ -215,7 +208,7 @@ def test_maybe_prepare_cuda_torch_runtime_installs_sidecar_when_auto_enabled(
     assert calls[0][2] is False
 
 
-def test_maybe_prepare_cuda_torch_runtime_invalidates_hardware_cache_after_successful_install(
+def test_maybe_prepare_torch_runtime_invalidates_hardware_cache_after_successful_install(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -223,7 +216,7 @@ def test_maybe_prepare_cuda_torch_runtime_invalidates_hardware_cache_after_succe
     data_dir.mkdir(parents=True)
 
     monkeypatch.setenv("SHOTSIEVE_BOOTSTRAP_AUTO_INSTALL_TORCH", "1")
-    monkeypatch.setattr(desktop_module, "runtime_target_id_from_executable_name", lambda system_name=None: "windows-nvidia")
+    monkeypatch.setattr(desktop_module, "runtime_target_id_from_executable_name", lambda system_name=None: "windows-nvidia-cuda")
     monkeypatch.setattr(desktop_module, "runtime_bundle_has_usable_cuda_torch", lambda force_reload=False: False)
     monkeypatch.setattr(desktop_module, "_sidecar_torch_has_usable_cuda", lambda path: True)
 
@@ -239,12 +232,12 @@ def test_maybe_prepare_cuda_torch_runtime_invalidates_hardware_cache_after_succe
 
     monkeypatch.setattr(desktop_module, "install_torch_sidecar", fake_install_torch_sidecar)
 
-    desktop_module.maybe_prepare_cuda_torch_runtime(data_dir)
+    desktop_module.maybe_prepare_torch_runtime(data_dir)
 
     assert invalidations == ["torch"]
 
 
-def test_maybe_prepare_cuda_torch_runtime_non_interactive_skips_install_without_consent(
+def test_maybe_prepare_torch_runtime_non_interactive_skips_install_without_consent(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -252,9 +245,9 @@ def test_maybe_prepare_cuda_torch_runtime_non_interactive_skips_install_without_
     data_dir.mkdir(parents=True)
 
     monkeypatch.delenv("SHOTSIEVE_BOOTSTRAP_AUTO_INSTALL_TORCH", raising=False)
-    monkeypatch.setattr(desktop_module, "runtime_target_id_from_executable_name", lambda system_name=None: "windows-nvidia")
+    monkeypatch.setattr(desktop_module, "runtime_target_id_from_executable_name", lambda system_name=None: "windows-nvidia-cuda")
     monkeypatch.setattr(desktop_module, "runtime_bundle_has_usable_cuda_torch", lambda force_reload=False: False)
-    monkeypatch.setattr(desktop_module, "_is_interactive_console", lambda: False)
+    monkeypatch.setattr(desktop_module, "is_interactive_console", lambda: False)
 
     calls: list[tuple[str, Path, bool]] = []
 
@@ -269,7 +262,7 @@ def test_maybe_prepare_cuda_torch_runtime_non_interactive_skips_install_without_
     monkeypatch.setattr(desktop_module, "install_torch_sidecar", fake_install_torch_sidecar)
 
     messages: list[str] = []
-    desktop_module.maybe_prepare_cuda_torch_runtime(data_dir, output_func=messages.append)
+    desktop_module.maybe_prepare_torch_runtime(data_dir, output_func=messages.append)
 
     assert calls == []
     assert any("skipping automatic installation" in message.casefold() for message in messages)
@@ -284,7 +277,7 @@ def test_maybe_prepare_learned_iqa_runtime_non_interactive_skips_install_without
 
     monkeypatch.delenv("SHOTSIEVE_BOOTSTRAP_AUTO_INSTALL_LEARNED_IQA", raising=False)
     monkeypatch.setattr(desktop_module, "_runtime_has_learned_iqa", lambda: False)
-    monkeypatch.setattr(desktop_module, "_is_interactive_console", lambda: False)
+    monkeypatch.setattr(desktop_module, "is_interactive_console", lambda: False)
 
     install_calls: list[Path] = []
     monkeypatch.setattr(
@@ -304,7 +297,7 @@ def test_maybe_prepare_learned_iqa_runtime_non_interactive_skips_install_without
 def test_runtime_pythonpath_updates_prepend_sidecar_path(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     existing_a = str((tmp_path / "existing-a").resolve())
     existing_b = str((tmp_path / "existing-b").resolve())
-    sidecar = (tmp_path / "runtime" / "site-packages" / "windows-nvidia").resolve()
+    sidecar = (tmp_path / "runtime" / "site-packages" / "windows-nvidia-cuda").resolve()
 
     monkeypatch.setenv("PYTHONPATH", os.pathsep.join([existing_a, existing_b]))
     monkeypatch.setattr(sys, "path", [existing_a, existing_b], raising=False)
@@ -320,7 +313,7 @@ def test_runtime_pythonpath_updates_prepend_sidecar_path(monkeypatch: pytest.Mon
 
 def test_runtime_pythonpath_updates_use_shared_composer(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     existing = str((tmp_path / "existing-a").resolve())
-    sidecar = (tmp_path / "runtime" / "site-packages" / "windows-nvidia").resolve()
+    sidecar = (tmp_path / "runtime" / "site-packages" / "windows-nvidia-cuda").resolve()
 
     monkeypatch.setenv("PYTHONPATH", existing)
     monkeypatch.setattr(sys, "path", [existing], raising=False)
@@ -331,52 +324,13 @@ def test_runtime_pythonpath_updates_use_shared_composer(monkeypatch: pytest.Monk
         compose_calls.append((existing, prepend_path))
         return "shared-pythonpath"
 
-    monkeypatch.setattr(runtime_support, "compose_pythonpath", fake_compose_pythonpath)
+    monkeypatch.setattr(desktop_module, "compose_pythonpath", fake_compose_pythonpath)
 
     desktop_module._prepend_runtime_pythonpath(sidecar)
 
     assert compose_calls == [(existing, sidecar)]
     assert os.environ["PYTHONPATH"] == "shared-pythonpath"
     assert sys.path[0] == str(sidecar)
-
-
-def test_desktop_runtime_support_wrappers_delegate_to_shared_module(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    calls: list[tuple[str, object]] = []
-
-    monkeypatch.setattr(runtime_support, "path_has_torch", lambda path: calls.append(("torch", path)) or True)
-    monkeypatch.setattr(runtime_support, "path_has_pyiqa", lambda path: calls.append(("pyiqa", path)) or False)
-    monkeypatch.setattr(runtime_support, "parse_env_bool", lambda value: calls.append(("bool", value)) or True)
-    monkeypatch.setattr(runtime_support, "is_interactive_console", lambda: calls.append(("interactive", None)) or False)
-
-    def fake_confirm(prompt: str, *, input_func=input) -> bool:
-        calls.append(("confirm", prompt))
-        return True
-
-    monkeypatch.setattr(runtime_support, "confirm", fake_confirm)
-    monkeypatch.setattr(
-        runtime_support,
-        "compose_pythonpath",
-        lambda *, existing, prepend_path: calls.append(("pythonpath", (existing, prepend_path))) or "shared-pythonpath",
-    )
-
-    assert desktop_module._path_has_torch(tmp_path) is True
-    assert desktop_module._path_has_pyiqa(tmp_path) is False
-    assert desktop_module._parse_env_bool("yes") is True
-    assert desktop_module._is_interactive_console() is False
-    assert desktop_module._confirm("Install now?") is True
-    assert desktop_module._compose_pythonpath(existing="existing", prepend_path=tmp_path) == "shared-pythonpath"
-
-    assert calls == [
-        ("torch", tmp_path),
-        ("pyiqa", tmp_path),
-        ("bool", "yes"),
-        ("interactive", None),
-        ("confirm", "Install now?"),
-        ("pythonpath", ("existing", tmp_path)),
-    ]
 
 
 def test_runtime_bundle_has_usable_cuda_torch_false_when_import_fails(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -579,7 +533,7 @@ def test_sidecar_cuda_probe_uses_runtime_import_check(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    site_packages = (tmp_path / "runtime" / "site-packages" / "windows-nvidia").resolve()
+    site_packages = (tmp_path / "runtime" / "site-packages" / "windows-nvidia-cuda").resolve()
     site_packages.mkdir(parents=True, exist_ok=True)
 
     monkeypatch.setattr(desktop_module, "runtime_bundle_has_usable_cuda_torch", lambda force_reload=False: force_reload)
@@ -587,7 +541,7 @@ def test_sidecar_cuda_probe_uses_runtime_import_check(
     assert desktop_module._sidecar_torch_has_usable_cuda(site_packages) is True
 
 
-def test_maybe_prepare_cuda_torch_runtime_repairs_sidecar_when_explicitly_requested(
+def test_maybe_prepare_torch_runtime_repairs_sidecar_when_explicitly_requested(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -595,8 +549,8 @@ def test_maybe_prepare_cuda_torch_runtime_repairs_sidecar_when_explicitly_reques
     data_dir.mkdir(parents=True)
 
     monkeypatch.delenv("SHOTSIEVE_BOOTSTRAP_AUTO_INSTALL_TORCH", raising=False)
-    monkeypatch.setattr(desktop_module, "_is_interactive_console", lambda: False)
-    monkeypatch.setattr(desktop_module, "runtime_target_id_from_executable_name", lambda system_name=None: "windows-nvidia")
+    monkeypatch.setattr(desktop_module, "is_interactive_console", lambda: False)
+    monkeypatch.setattr(desktop_module, "runtime_target_id_from_executable_name", lambda system_name=None: "windows-nvidia-cuda")
 
     check_calls: list[bool] = []
 
@@ -607,9 +561,21 @@ def test_maybe_prepare_cuda_torch_runtime_repairs_sidecar_when_explicitly_reques
     monkeypatch.setattr(desktop_module, "runtime_bundle_has_usable_cuda_torch", fake_runtime_bundle_has_usable_cuda_torch)
 
     runtime_root = (data_dir / "runtime").resolve()
-    site_packages = desktop_module.sidecar_site_packages_dir(runtime_root, "windows-nvidia")
+    site_packages = desktop_module.sidecar_site_packages_dir(runtime_root, "windows-nvidia-cuda")
     (site_packages / "torch").mkdir(parents=True, exist_ok=True)
     (site_packages / "torch" / "__init__.py").write_text("", encoding="utf-8")
+    (site_packages / ".shotsieve-runtime.json").write_text(
+        json.dumps(
+            {
+                "schema": 1,
+                "kind": "runtime",
+                "complete": True,
+                "torch_complete": True,
+                "plan": torch_install_plan(target_id="windows-nvidia-cuda", runtime="cuda").to_json(),
+            }
+        ),
+        encoding="utf-8",
+    )
 
     install_calls: list[tuple[str, Path, bool]] = []
 
@@ -624,7 +590,7 @@ def test_maybe_prepare_cuda_torch_runtime_repairs_sidecar_when_explicitly_reques
     monkeypatch.setattr(desktop_module, "install_torch_sidecar", fake_install_torch_sidecar)
 
     messages: list[str] = []
-    desktop_module.maybe_prepare_cuda_torch_runtime(data_dir, force_install=True, output_func=messages.append)
+    desktop_module.maybe_prepare_torch_runtime(data_dir, force_install=True, output_func=messages.append)
 
     assert check_calls == [False]
     assert len(install_calls) == 1
@@ -633,7 +599,7 @@ def test_maybe_prepare_cuda_torch_runtime_repairs_sidecar_when_explicitly_reques
     assert any("installing pytorch runtime" in message.casefold() for message in messages)
 
 
-def test_maybe_prepare_cuda_torch_runtime_skips_reinstall_when_explicitly_disabled(
+def test_maybe_prepare_torch_runtime_skips_reinstall_when_explicitly_disabled(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -641,14 +607,26 @@ def test_maybe_prepare_cuda_torch_runtime_skips_reinstall_when_explicitly_disabl
     data_dir.mkdir(parents=True)
 
     monkeypatch.setenv("SHOTSIEVE_BOOTSTRAP_AUTO_INSTALL_TORCH", "0")
-    monkeypatch.setattr(desktop_module, "runtime_target_id_from_executable_name", lambda system_name=None: "windows-nvidia")
+    monkeypatch.setattr(desktop_module, "runtime_target_id_from_executable_name", lambda system_name=None: "windows-nvidia-cuda")
     monkeypatch.setattr(desktop_module, "runtime_bundle_has_usable_cuda_torch", lambda force_reload=False: False)
     monkeypatch.setattr(desktop_module, "_sidecar_torch_has_usable_cuda", lambda path: False)
 
     runtime_root = (data_dir / "runtime").resolve()
-    site_packages = desktop_module.sidecar_site_packages_dir(runtime_root, "windows-nvidia")
+    site_packages = desktop_module.sidecar_site_packages_dir(runtime_root, "windows-nvidia-cuda")
     (site_packages / "torch").mkdir(parents=True, exist_ok=True)
     (site_packages / "torch" / "__init__.py").write_text("", encoding="utf-8")
+    (site_packages / ".shotsieve-runtime.json").write_text(
+        json.dumps(
+            {
+                "schema": 1,
+                "kind": "runtime",
+                "complete": True,
+                "torch_complete": True,
+                "plan": torch_install_plan(target_id="windows-nvidia-cuda", runtime="cuda").to_json(),
+            }
+        ),
+        encoding="utf-8",
+    )
 
     install_calls: list[tuple[str, Path, bool]] = []
 
@@ -661,7 +639,7 @@ def test_maybe_prepare_cuda_torch_runtime_skips_reinstall_when_explicitly_disabl
     monkeypatch.setattr(desktop_module, "install_torch_sidecar", fake_install_torch_sidecar)
 
     messages: list[str] = []
-    desktop_module.maybe_prepare_cuda_torch_runtime(data_dir, output_func=messages.append)
+    desktop_module.maybe_prepare_torch_runtime(data_dir, output_func=messages.append)
 
     assert install_calls == []
     assert any("skipping reinstall" in message.casefold() for message in messages)
@@ -689,7 +667,7 @@ def test_main_invokes_first_run_learned_runtime_preparation(
     def fake_serve_review_ui(*, db_path: Path, host: str, port: int, open_browser: bool) -> None:
         called["served"] = True
 
-    monkeypatch.setattr(desktop_module, "maybe_prepare_cuda_torch_runtime", fake_prepare_cuda)
+    monkeypatch.setattr(desktop_module, "maybe_prepare_torch_runtime", fake_prepare_cuda)
     monkeypatch.setattr(desktop_module, "maybe_prepare_learned_iqa_runtime", fake_prepare_learned, raising=False)
     monkeypatch.setattr(desktop_module, "serve_review_ui", fake_serve_review_ui)
     monkeypatch.setattr(sys, "argv", ["shotsieve-desktop", "--no-browser"])
@@ -708,7 +686,7 @@ def test_maybe_prepare_learned_iqa_runtime_reports_diagnostic_details_when_post_
     data_dir = tmp_path / "data"
     data_dir.mkdir(parents=True)
     monkeypatch.setenv("SHOTSIEVE_BOOTSTRAP_AUTO_INSTALL_LEARNED_IQA", "1")
-    monkeypatch.setattr(desktop_module, "runtime_target_id_from_executable_name", lambda system_name=None: "windows-nvidia")
+    monkeypatch.setattr(desktop_module, "runtime_target_id_from_executable_name", lambda system_name=None: "windows-nvidia-cuda")
 
     probe_calls = {"count": 0}
 
@@ -750,7 +728,7 @@ def test_maybe_prepare_learned_iqa_runtime_invalidates_hardware_cache_after_succ
     data_dir.mkdir(parents=True)
 
     monkeypatch.setenv("SHOTSIEVE_BOOTSTRAP_AUTO_INSTALL_LEARNED_IQA", "1")
-    monkeypatch.setattr(desktop_module, "runtime_target_id_from_executable_name", lambda system_name=None: "windows-nvidia")
+    monkeypatch.setattr(desktop_module, "runtime_target_id_from_executable_name", lambda system_name=None: "windows-nvidia-cuda")
 
     probe_calls = {"count": 0}
 
@@ -785,9 +763,9 @@ def test_maybe_prepare_learned_iqa_runtime_reuses_torch_install_consent_without_
     data_dir.mkdir(parents=True)
 
     monkeypatch.delenv("SHOTSIEVE_BOOTSTRAP_AUTO_INSTALL_LEARNED_IQA", raising=False)
-    monkeypatch.setattr(desktop_module, "runtime_target_id_from_executable_name", lambda system_name=None: "windows-nvidia")
+    monkeypatch.setattr(desktop_module, "runtime_target_id_from_executable_name", lambda system_name=None: "windows-nvidia-cuda")
     monkeypatch.setattr(desktop_module, "_runtime_has_learned_iqa", lambda: False)
-    monkeypatch.setattr(desktop_module, "_is_interactive_console", lambda: True)
+    monkeypatch.setattr(desktop_module, "is_interactive_console", lambda: True)
 
     confirm_prompts: list[str] = []
 
@@ -795,7 +773,7 @@ def test_maybe_prepare_learned_iqa_runtime_reuses_torch_install_consent_without_
         confirm_prompts.append(prompt)
         return False
 
-    monkeypatch.setattr(desktop_module, "_confirm", fake_confirm)
+    monkeypatch.setattr(desktop_module, "confirm", fake_confirm)
 
     install_calls: list[tuple[str, Path, bool]] = []
 
@@ -832,7 +810,7 @@ def test_main_passes_torch_install_consent_into_learned_iqa_preparation(
 
     learned_flags: list[bool] = []
 
-    monkeypatch.setattr(desktop_module, "maybe_prepare_cuda_torch_runtime", lambda data_dir: True)
+    monkeypatch.setattr(desktop_module, "maybe_prepare_torch_runtime", lambda data_dir: True)
 
     def fake_prepare_learned(data_dir: Path, *, assume_install_consent: bool = False) -> None:
         learned_flags.append(assume_install_consent)
@@ -867,33 +845,3 @@ def test_call_prepare_learned_iqa_runtime_passes_consent_through_kwargs_wrapper(
     desktop_module._call_prepare_learned_iqa_runtime(data_dir, assume_install_consent=True)
 
     assert forwarded_flags == [True]
-
-
-def test_main_supports_legacy_learned_runtime_stub_when_torch_install_returns_true(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    local_app_data = tmp_path / "AppData" / "Local"
-    monkeypatch.setenv("LOCALAPPDATA", str(local_app_data))
-
-    called: dict[str, bool] = {
-        "learned": False,
-        "served": False,
-    }
-
-    monkeypatch.setattr(desktop_module, "maybe_prepare_cuda_torch_runtime", lambda data_dir: True)
-
-    def fake_prepare_learned(data_dir: Path) -> None:
-        called["learned"] = True
-
-    def fake_serve_review_ui(*, db_path: Path, host: str, port: int, open_browser: bool) -> None:
-        called["served"] = True
-
-    monkeypatch.setattr(desktop_module, "maybe_prepare_learned_iqa_runtime", fake_prepare_learned, raising=False)
-    monkeypatch.setattr(desktop_module, "serve_review_ui", fake_serve_review_ui)
-    monkeypatch.setattr(sys, "argv", ["shotsieve-desktop", "--no-browser"])
-
-    desktop_module.main()
-
-    assert called["learned"] is True
-    assert called["served"] is True

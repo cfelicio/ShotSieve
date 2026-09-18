@@ -162,7 +162,6 @@ class TestRouteHandling:
             is_within_any_root=lambda *_args, **_kwargs: True,
             media_path_for_file=lambda *_args, **_kwargs: source_path,
             stable_preview_name=lambda _path: "preview-name",
-            preview_name_candidates=lambda _path: ["preview-name"],
             guess_media_type=lambda _name: (None, None),
             reveal_in_file_manager=fake_reveal_in_file_manager,
         )

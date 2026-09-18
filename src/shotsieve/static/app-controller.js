@@ -433,8 +433,7 @@
         if (!normalized) {
           return null;
         }
-        return modelCatalog.find((entry) => [entry?.canonical_id, ...(Array.isArray(entry?.aliases) ? entry.aliases : [])]
-          .some((alias) => String(alias || "").trim().toLowerCase().replace(/\s+/g, "") === normalized)) || null;
+        return modelCatalog.find((entry) => String(entry?.canonical_id || "").trim().toLowerCase() === normalized) || null;
       };
       const persistedModel = typeof persisted.model === "string" ? persisted.model.trim() : "";
       const persistedModelEntry = catalogModelFor(persistedModel);

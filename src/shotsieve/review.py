@@ -10,7 +10,6 @@ from shotsieve.db import normalize_resolved_path, root_path_filter
 from shotsieve.performance import log_duration, monotonic_seconds
 from shotsieve.review_cache import (
     _PRUNE_MISSING_CACHE_BATCH_SIZE,
-    _allow_legacy_preview_path_fallback,
     _is_within_dir,
     _resolve_ready_preview_path,
     _resolve_source_path_within_roots,
@@ -48,7 +47,6 @@ __all__ = [
     "ThreadPoolExecutor",
     "VALID_DECISION_STATES",
     "_PRUNE_MISSING_CACHE_BATCH_SIZE",
-    "_allow_legacy_preview_path_fallback",
     "_build_after_id_filter",
     "_build_file_filters",
     "_build_format_filters",

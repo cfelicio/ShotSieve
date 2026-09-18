@@ -19,15 +19,29 @@ def test_reset_everything_clears_persisted_ui_state(frontend_server: str) -> Non
     assert 'previewModeSelect.value = state.options?.default_preview_mode || "auto";' not in events_body
 
 
-def test_ui_state_is_scoped_to_database_marker(frontend_server: str) -> None:
-    state_body = urlopen(f"{frontend_server}/app-state.js").read().decode("utf-8")
-    controller_body = urlopen(f"{frontend_server}/app-controller.js").read().decode("utf-8")
+def test_ui_state_is_scoped_to_database_marker(chromium_page) -> None:
+    page, _ = chromium_page
+    page.wait_for_function("() => Boolean(document.body?.dataset?.databasePath)")
 
-    assert "function currentDatabaseMarker()" in state_body
-    assert "documentRef.body?.dataset?.databasePath" in state_body
-    assert "if (!savedDatabase || savedDatabase !== expectedDatabase)" in state_body
-    assert "database: currentDatabaseMarker()," in state_body
-    assert "document.body.dataset.databasePath = options.database || \"\";" in controller_body
+    result = page.evaluate(
+        """
+        () => {
+          const marker = document.body.dataset.databasePath;
+          const key = window.ShotSieveState.UI_STATE_KEY;
+          const store = window.ShotSieveState.createUiStateStore();
+          localStorage.setItem(key, JSON.stringify({ database: "different-db", tab: "compare" }));
+          const rejected = store.loadUiState();
+          localStorage.setItem(key, JSON.stringify({ database: marker, tab: "compare" }));
+          const accepted = store.loadUiState();
+          return { marker, rejected, accepted };
+        }
+        """,
+    )
+
+    assert result["marker"]
+    assert result["rejected"] == {}
+    assert result["accepted"]["database"] == result["marker"]
+    assert result["accepted"]["tab"] == "compare"
 
 
 def test_frontend_boot_retries_a_transient_options_failure(chromium_page) -> None:

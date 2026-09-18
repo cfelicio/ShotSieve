@@ -15,7 +15,8 @@ import zipfile
 
 import pytest
 
-from shotsieve import bootstrap as bootstrap_module
+from shotsieve import bootstrap_assets as bootstrap_module
+from shotsieve import bootstrap_sidecar as sidecar_module
 
 
 def _new_module(name: str) -> Any:
@@ -295,9 +296,9 @@ def test_install_torch_sidecar_uses_embedded_installer(
         embedded_calls.append((runtime, site_packages, force_reinstall))
         return True
 
-    monkeypatch.setattr(bootstrap_module, "_install_torch_sidecar_with_embedded_pip", fake_embedded_install)
+    monkeypatch.setattr(sidecar_module, "_install_torch_sidecar_with_embedded_pip", fake_embedded_install)
 
-    installed = bootstrap_module.install_torch_sidecar(runtime="cuda", site_packages=site_packages)
+    installed = sidecar_module.install_torch_sidecar(runtime="cuda", site_packages=site_packages)
 
     assert installed is True
     assert embedded_calls == [("cuda", site_packages, False)]
@@ -314,9 +315,9 @@ def test_install_learned_iqa_sidecar_uses_embedded_installer(
         embedded_calls.append((runtime, site_packages, force_reinstall))
         return True
 
-    monkeypatch.setattr(bootstrap_module, "_install_learned_iqa_sidecar_with_embedded_pip", fake_embedded_install, raising=False)
+    monkeypatch.setattr(sidecar_module, "_install_learned_iqa_sidecar_with_embedded_pip", fake_embedded_install, raising=False)
 
-    installed = bootstrap_module.install_learned_iqa_sidecar(runtime="cuda", site_packages=site_packages)
+    installed = sidecar_module.install_learned_iqa_sidecar(runtime="cuda", site_packages=site_packages)
 
     assert installed is True
     assert len(embedded_calls) == 1
@@ -350,9 +351,9 @@ def test_install_learned_iqa_sidecar_replaces_old_tree_after_clean_staged_instal
         (site_packages / "transformers" / "fresh-module.py").write_text("fresh", encoding="utf-8")
         return True
 
-    monkeypatch.setattr(bootstrap_module, "_install_learned_iqa_sidecar_with_embedded_pip", fake_embedded_install)
+    monkeypatch.setattr(sidecar_module, "_install_learned_iqa_sidecar_with_embedded_pip", fake_embedded_install)
 
-    installed = bootstrap_module.install_learned_iqa_sidecar(
+    installed = sidecar_module.install_learned_iqa_sidecar(
         runtime="cuda",
         site_packages=site_packages,
         force_reinstall=True,
@@ -381,9 +382,9 @@ def test_embedded_install_learned_iqa_sidecar_installs_expected_packages(
 
     fake_pip_main_module.main = fake_main
     monkeypatch.setitem(sys.modules, "pip._internal.cli.main", fake_pip_main_module)
-    monkeypatch.setattr(bootstrap_module, "_path_has_pyiqa", lambda path: True, raising=False)
+    monkeypatch.setattr(sidecar_module, "path_has_pyiqa", lambda path: True, raising=False)
 
-    installed = bootstrap_module._install_learned_iqa_sidecar_with_embedded_pip(
+    installed = sidecar_module._install_learned_iqa_sidecar_with_embedded_pip(
         runtime="cuda",
         site_packages=site_packages,
     )
@@ -412,9 +413,9 @@ def test_embedded_install_learned_iqa_sidecar_installs_pyiqa_without_deps(
 
     fake_pip_main_module.main = fake_main
     monkeypatch.setitem(sys.modules, "pip._internal.cli.main", fake_pip_main_module)
-    monkeypatch.setattr(bootstrap_module, "_path_has_pyiqa", lambda path: True, raising=False)
+    monkeypatch.setattr(sidecar_module, "path_has_pyiqa", lambda path: True, raising=False)
 
-    installed = bootstrap_module._install_learned_iqa_sidecar_with_embedded_pip(
+    installed = sidecar_module._install_learned_iqa_sidecar_with_embedded_pip(
         runtime="cuda",
         site_packages=site_packages,
     )
@@ -439,9 +440,9 @@ def test_embedded_install_learned_iqa_sidecar_does_not_replace_loaded_torch(
 
     fake_pip_main_module.main = fake_main
     monkeypatch.setitem(sys.modules, "pip._internal.cli.main", fake_pip_main_module)
-    monkeypatch.setattr(bootstrap_module, "_path_has_pyiqa", lambda path: True, raising=False)
+    monkeypatch.setattr(sidecar_module, "path_has_pyiqa", lambda path: True, raising=False)
 
-    installed = bootstrap_module._install_learned_iqa_sidecar_with_embedded_pip(
+    installed = sidecar_module._install_learned_iqa_sidecar_with_embedded_pip(
         runtime="cuda",
         site_packages=site_packages,
     )
@@ -516,13 +517,13 @@ def test_frozen_learned_iqa_install_uses_openai_clip_source_fallback(
 
     monkeypatch.setattr(sidecar_module.sys, "frozen", True, raising=False)
     monkeypatch.setattr(sidecar_module, "_install_openai_clip_source", fake_source_install)
-    monkeypatch.setattr(bootstrap_module, "_load_embedded_pip_main", lambda: fail_if_pip_is_called)
-    monkeypatch.setattr(bootstrap_module, "_patch_distlib_finder_for_frozen", lambda: None)
-    monkeypatch.setattr(bootstrap_module, "_patch_pip_scriptmaker_for_embedded_install", lambda: None)
-    monkeypatch.setattr(bootstrap_module, "_learned_iqa_packages_for_runtime", lambda _runtime: ["openai-clip==1.0.1"])
-    monkeypatch.setattr(bootstrap_module, "_path_has_pyiqa", lambda _path: True)
+    monkeypatch.setattr(sidecar_module, "_load_embedded_pip_main", lambda: fail_if_pip_is_called)
+    monkeypatch.setattr(sidecar_module, "_patch_distlib_finder_for_frozen", lambda: None)
+    monkeypatch.setattr(sidecar_module, "_patch_pip_scriptmaker_for_embedded_install", lambda: None)
+    monkeypatch.setattr(sidecar_module, "_learned_iqa_packages_for_runtime", lambda _runtime: ["openai-clip==1.0.1"])
+    monkeypatch.setattr(sidecar_module, "path_has_pyiqa", lambda _path: True)
 
-    installed = bootstrap_module._install_learned_iqa_sidecar_with_embedded_pip(
+    installed = sidecar_module._install_learned_iqa_sidecar_with_embedded_pip(
         runtime="cuda",
         site_packages=tmp_path,
     )
@@ -546,9 +547,9 @@ def test_embedded_install_learned_iqa_sidecar_installs_opencv_headless(
 
     fake_pip_main_module.main = fake_main
     monkeypatch.setitem(sys.modules, "pip._internal.cli.main", fake_pip_main_module)
-    monkeypatch.setattr(bootstrap_module, "_path_has_pyiqa", lambda path: True, raising=False)
+    monkeypatch.setattr(sidecar_module, "path_has_pyiqa", lambda path: True, raising=False)
 
-    installed = bootstrap_module._install_learned_iqa_sidecar_with_embedded_pip(
+    installed = sidecar_module._install_learned_iqa_sidecar_with_embedded_pip(
         runtime="cuda",
         site_packages=site_packages,
     )
@@ -573,9 +574,9 @@ def test_embedded_install_learned_iqa_sidecar_installs_pyyaml(
 
     fake_pip_main_module.main = fake_main
     monkeypatch.setitem(sys.modules, "pip._internal.cli.main", fake_pip_main_module)
-    monkeypatch.setattr(bootstrap_module, "_path_has_pyiqa", lambda path: True, raising=False)
+    monkeypatch.setattr(sidecar_module, "path_has_pyiqa", lambda path: True, raising=False)
 
-    installed = bootstrap_module._install_learned_iqa_sidecar_with_embedded_pip(
+    installed = sidecar_module._install_learned_iqa_sidecar_with_embedded_pip(
         runtime="cuda",
         site_packages=site_packages,
     )
@@ -600,9 +601,9 @@ def test_embedded_install_learned_iqa_sidecar_installs_sympy(
 
     fake_pip_main_module.main = fake_main
     monkeypatch.setitem(sys.modules, "pip._internal.cli.main", fake_pip_main_module)
-    monkeypatch.setattr(bootstrap_module, "_path_has_pyiqa", lambda path: True, raising=False)
+    monkeypatch.setattr(sidecar_module, "path_has_pyiqa", lambda path: True, raising=False)
 
-    installed = bootstrap_module._install_learned_iqa_sidecar_with_embedded_pip(
+    installed = sidecar_module._install_learned_iqa_sidecar_with_embedded_pip(
         runtime="cuda",
         site_packages=site_packages,
     )
@@ -643,9 +644,9 @@ def test_patch_distlib_finder_for_frozen_registers_loader_type(
         raise ImportError(name)
 
     monkeypatch.setattr(sys, "frozen", True, raising=False)
-    monkeypatch.setattr(bootstrap_module.importlib, "import_module", fake_import_module)
+    monkeypatch.setattr(sidecar_module.importlib, "import_module", fake_import_module)
 
-    bootstrap_module._patch_distlib_finder_for_frozen()
+    sidecar_module._patch_distlib_finder_for_frozen()
 
     assert register_calls
     registered_types = {loader_type for loader_type, _ in register_calls}
@@ -682,12 +683,12 @@ def test_patch_distlib_finder_for_frozen_suppresses_distutils_warning_during_imp
         raise ImportError(name)
 
     monkeypatch.setattr(sys, "frozen", True, raising=False)
-    monkeypatch.setattr(bootstrap_module.importlib, "import_module", fake_import_module)
-    monkeypatch.setattr(bootstrap_module.pkgutil, "get_loader", lambda name: None, raising=False)
+    monkeypatch.setattr(sidecar_module.importlib, "import_module", fake_import_module)
+    monkeypatch.setattr(sidecar_module.pkgutil, "get_loader", lambda name: None, raising=False)
 
     with warnings.catch_warnings(record=True) as recorded:
         warnings.simplefilter("always")
-        bootstrap_module._patch_distlib_finder_for_frozen()
+        sidecar_module._patch_distlib_finder_for_frozen()
 
     assert recorded == []
 
@@ -726,10 +727,10 @@ def test_patch_distlib_finder_for_frozen_registers_pkgutil_loader_type(
         raise ImportError(name)
 
     monkeypatch.setattr(sys, "frozen", True, raising=False)
-    monkeypatch.setattr(bootstrap_module.importlib, "import_module", fake_import_module)
-    monkeypatch.setattr(bootstrap_module.pkgutil, "get_loader", lambda name: PkgutilLoader(), raising=False)
+    monkeypatch.setattr(sidecar_module.importlib, "import_module", fake_import_module)
+    monkeypatch.setattr(sidecar_module.pkgutil, "get_loader", lambda name: PkgutilLoader(), raising=False)
 
-    bootstrap_module._patch_distlib_finder_for_frozen()
+    sidecar_module._patch_distlib_finder_for_frozen()
 
     registered_types = {loader_type for loader_type, _ in register_calls}
     assert DistlibLoader in registered_types
@@ -771,10 +772,10 @@ def test_patch_distlib_finder_for_frozen_wraps_finder_with_resource_fallback(
         raise ImportError(name)
 
     monkeypatch.setattr(sys, "frozen", True, raising=False)
-    monkeypatch.setattr(bootstrap_module.importlib, "import_module", fake_import_module)
-    monkeypatch.setattr(bootstrap_module.pkgutil, "get_loader", lambda name: DistlibLoader(), raising=False)
+    monkeypatch.setattr(sidecar_module.importlib, "import_module", fake_import_module)
+    monkeypatch.setattr(sidecar_module.pkgutil, "get_loader", lambda name: DistlibLoader(), raising=False)
 
-    bootstrap_module._patch_distlib_finder_for_frozen()
+    sidecar_module._patch_distlib_finder_for_frozen()
 
     resolved = fake_resources_module.finder("pip._vendor.distlib")
     assert isinstance(resolved, FakeResourceFinder)
@@ -788,7 +789,7 @@ def test_embedded_install_torch_sidecar_calls_distlib_patch(
     site_packages = tmp_path / "site-packages"
     patch_calls: list[bool] = []
 
-    monkeypatch.setattr(bootstrap_module, "_patch_distlib_finder_for_frozen", lambda: patch_calls.append(True))
+    monkeypatch.setattr(sidecar_module, "_patch_distlib_finder_for_frozen", lambda: patch_calls.append(True))
 
     fake_pip_main_module = _new_module("pip._internal.cli.main")
 
@@ -797,9 +798,9 @@ def test_embedded_install_torch_sidecar_calls_distlib_patch(
 
     fake_pip_main_module.main = fake_main
     monkeypatch.setitem(sys.modules, "pip._internal.cli.main", fake_pip_main_module)
-    monkeypatch.setattr(bootstrap_module, "_path_has_torch", lambda path: True)
+    monkeypatch.setattr(sidecar_module, "path_has_torch", lambda path: True)
 
-    installed = bootstrap_module._install_torch_sidecar_with_embedded_pip(
+    installed = sidecar_module._install_torch_sidecar_with_embedded_pip(
         runtime="cuda",
         site_packages=site_packages,
     )
@@ -812,7 +813,7 @@ def test_patch_pip_scriptmaker_for_embedded_install_disables_launchers(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     fake_wheel_module = _new_module("pip._internal.operations.install.wheel")
-    original_import_module = bootstrap_module.importlib.import_module
+    original_import_module = sidecar_module.importlib.import_module
 
     class FakePipScriptMaker:
         def __init__(self, *args, **kwargs):
@@ -825,9 +826,9 @@ def test_patch_pip_scriptmaker_for_embedded_install_disables_launchers(
             return fake_wheel_module
         return original_import_module(name)
 
-    monkeypatch.setattr(bootstrap_module.importlib, "import_module", fake_import_module)
+    monkeypatch.setattr(sidecar_module.importlib, "import_module", fake_import_module)
 
-    bootstrap_module._patch_pip_scriptmaker_for_embedded_install()
+    sidecar_module._patch_pip_scriptmaker_for_embedded_install()
 
     maker = FakePipScriptMaker()
     assert maker.add_launchers is False
@@ -854,11 +855,11 @@ def test_patch_pip_scriptmaker_for_embedded_install_suppresses_distutils_warning
         )
         return fake_wheel_module
 
-    monkeypatch.setattr(bootstrap_module.importlib, "import_module", fake_import_module)
+    monkeypatch.setattr(sidecar_module.importlib, "import_module", fake_import_module)
 
     with warnings.catch_warnings(record=True) as recorded:
         warnings.simplefilter("always")
-        bootstrap_module._patch_pip_scriptmaker_for_embedded_install()
+        sidecar_module._patch_pip_scriptmaker_for_embedded_install()
 
     assert recorded == []
 
@@ -871,7 +872,7 @@ def test_embedded_install_torch_sidecar_calls_scriptmaker_patch(
     patch_calls: list[bool] = []
 
     monkeypatch.setattr(
-        bootstrap_module,
+        sidecar_module,
         "_patch_pip_scriptmaker_for_embedded_install",
         lambda: patch_calls.append(True),
     )
@@ -883,9 +884,9 @@ def test_embedded_install_torch_sidecar_calls_scriptmaker_patch(
 
     fake_pip_main_module.main = fake_main
     monkeypatch.setitem(sys.modules, "pip._internal.cli.main", fake_pip_main_module)
-    monkeypatch.setattr(bootstrap_module, "_path_has_torch", lambda path: True)
+    monkeypatch.setattr(sidecar_module, "path_has_torch", lambda path: True)
 
-    installed = bootstrap_module._install_torch_sidecar_with_embedded_pip(
+    installed = sidecar_module._install_torch_sidecar_with_embedded_pip(
         runtime="cuda",
         site_packages=site_packages,
     )

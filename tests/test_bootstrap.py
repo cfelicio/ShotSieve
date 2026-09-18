@@ -12,8 +12,8 @@ import warnings
 
 import pytest
 
-from shotsieve import bootstrap as bootstrap_module
-from shotsieve import runtime_support
+from shotsieve import bootstrap_assets as bootstrap_module
+from shotsieve import bootstrap_sidecar
 
 
 def _new_module(name: str) -> Any:
@@ -25,9 +25,9 @@ def _not_found_http_error(url: str) -> urllib.error.HTTPError:
 
 
 def test_coerce_pip_main_return_code_handles_none_int_and_unexpected_values() -> None:
-    assert bootstrap_module._coerce_pip_main_return_code(None) == 0
-    assert bootstrap_module._coerce_pip_main_return_code(3) == 3
-    assert bootstrap_module._coerce_pip_main_return_code(object()) == 1
+    assert bootstrap_sidecar._coerce_pip_main_return_code(None) == 0
+    assert bootstrap_sidecar._coerce_pip_main_return_code(3) == 3
+    assert bootstrap_sidecar._coerce_pip_main_return_code(object()) == 1
 
 
 def test_select_runtime_target_prefers_nvidia_cuda_on_windows_and_linux() -> None:
@@ -53,22 +53,21 @@ def test_select_manifest_asset_returns_target_entry() -> None:
         ]
     }
 
-    asset = bootstrap_module.select_manifest_asset(manifest, "linux-nvidia")
+    asset = bootstrap_module.select_manifest_asset(manifest, "linux-nvidia-cuda")
 
     assert asset["id"] == "linux-nvidia-cuda"
     assert asset["archive_name"] == "ShotSieve-linux-nvidia-cuda-x64.tar.gz"
 
 
-def test_select_manifest_asset_accepts_canonical_target_for_legacy_manifest() -> None:
+def test_select_manifest_asset_rejects_a_legacy_target_manifest() -> None:
     manifest = {
         "assets": [
             {"id": "linux-nvidia", "archive_name": "ShotSieve-linux-nvidia-x64.tar.gz"},
         ]
     }
 
-    asset = bootstrap_module.select_manifest_asset(manifest, "linux-nvidia-cuda")
-
-    assert asset["id"] == "linux-nvidia"
+    with pytest.raises(SystemExit, match="does not include target"):
+        bootstrap_module.select_manifest_asset(manifest, "linux-nvidia-cuda")
 
 
 def test_parse_runtime_asset_accepts_verified_split_parts() -> None:
@@ -129,7 +128,7 @@ def test_default_runtime_root_prefers_repo_local_data_runtime_for_source_checkou
     monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "appdata"))
 
     project_root = tmp_path / "shotsieve-src"
-    module_path = project_root / "src" / "shotsieve" / "bootstrap.py"
+    module_path = project_root / "src" / "shotsieve" / "bootstrap_assets.py"
     module_path.parent.mkdir(parents=True)
     module_path.write_text("# source module\n", encoding="utf-8")
     (project_root / "src" / "shotsieve" / "__init__.py").write_text("", encoding="utf-8")
@@ -285,7 +284,7 @@ def test_maybe_prepare_torch_runtime_skips_when_bundle_already_contains_torch(tm
     def fail_input(_: str) -> str:
         raise AssertionError("input() should not be called when torch is bundled")
 
-    env_updates = bootstrap_module.maybe_prepare_torch_runtime(
+    env_updates = bootstrap_sidecar.maybe_prepare_torch_runtime(
         asset,
         install_dir=install_dir,
         runtime_root=tmp_path / "runtime",
@@ -299,9 +298,23 @@ def test_maybe_prepare_torch_runtime_uses_existing_sidecar_site_packages(tmp_pat
     runtime_root = tmp_path / "runtime"
     install_dir = tmp_path / "install"
     install_dir.mkdir(parents=True)
-    site_packages = bootstrap_module.sidecar_site_packages_dir(runtime_root, "windows-nvidia-cuda")
+    site_packages = bootstrap_sidecar.sidecar_site_packages_dir(runtime_root, "windows-nvidia-cuda")
     (site_packages / "torch").mkdir(parents=True)
     (site_packages / "torch" / "__init__.py").write_text("", encoding="utf-8")
+    (site_packages / ".shotsieve-runtime.json").write_text(
+        json.dumps(
+            {
+                "schema": 1,
+                "kind": "runtime",
+                "complete": True,
+                "torch_complete": True,
+                "plan": bootstrap_sidecar.torch_install_plan(
+                    target_id="windows-nvidia-cuda", runtime="cuda"
+                ).to_json(),
+            }
+        ),
+        encoding="utf-8",
+    )
 
     asset = bootstrap_module.RuntimeAsset(
         id="windows-nvidia-cuda",
@@ -317,7 +330,7 @@ def test_maybe_prepare_torch_runtime_uses_existing_sidecar_site_packages(tmp_pat
     def fail_input(_: str) -> str:
         raise AssertionError("input() should not be called when sidecar torch exists")
 
-    env_updates = bootstrap_module.maybe_prepare_torch_runtime(
+    env_updates = bootstrap_sidecar.maybe_prepare_torch_runtime(
         asset,
         install_dir=install_dir,
         runtime_root=runtime_root,
@@ -345,7 +358,7 @@ def test_maybe_prepare_torch_runtime_auto_installs_when_enabled(
         (site_packages / "torch" / "__init__.py").write_text("", encoding="utf-8")
         return True
 
-    monkeypatch.setattr(bootstrap_module, "install_torch_sidecar", fake_install_torch_sidecar)
+    monkeypatch.setattr(bootstrap_sidecar, "install_torch_sidecar", fake_install_torch_sidecar)
 
     asset = bootstrap_module.RuntimeAsset(
         id="windows-nvidia-cuda",
@@ -358,7 +371,7 @@ def test_maybe_prepare_torch_runtime_auto_installs_when_enabled(
         sha256=None,
     )
 
-    env_updates = bootstrap_module.maybe_prepare_torch_runtime(
+    env_updates = bootstrap_sidecar.maybe_prepare_torch_runtime(
         asset,
         install_dir=install_dir,
         runtime_root=runtime_root,
@@ -367,45 +380,6 @@ def test_maybe_prepare_torch_runtime_auto_installs_when_enabled(
     assert len(calls) == 1
     assert calls[0][0] == "cuda"
     assert "PYTHONPATH" in env_updates
-
-
-def test_bootstrap_runtime_support_wrappers_delegate_to_shared_module(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    calls: list[tuple[str, object]] = []
-
-    monkeypatch.setattr(runtime_support, "path_has_torch", lambda path: calls.append(("torch", path)) or True)
-    monkeypatch.setattr(runtime_support, "path_has_pyiqa", lambda path: calls.append(("pyiqa", path)) or False)
-    monkeypatch.setattr(runtime_support, "parse_env_bool", lambda value: calls.append(("bool", value)) or True)
-    monkeypatch.setattr(runtime_support, "is_interactive_console", lambda: calls.append(("interactive", None)) or False)
-
-    def fake_confirm(prompt: str, *, input_func=input) -> bool:
-        calls.append(("confirm", prompt))
-        return True
-
-    monkeypatch.setattr(runtime_support, "confirm", fake_confirm)
-    monkeypatch.setattr(
-        runtime_support,
-        "compose_pythonpath",
-        lambda *, existing, prepend_path: calls.append(("pythonpath", (existing, prepend_path))) or "shared-pythonpath",
-    )
-
-    assert bootstrap_module._path_has_torch(tmp_path) is True
-    assert bootstrap_module._path_has_pyiqa(tmp_path) is False
-    assert bootstrap_module._parse_env_bool("yes") is True
-    assert bootstrap_module._is_interactive_console() is False
-    assert bootstrap_module._confirm("Install now?") is True
-    assert bootstrap_module._compose_pythonpath(existing="existing", prepend_path=tmp_path) == "shared-pythonpath"
-
-    assert calls == [
-        ("torch", tmp_path),
-        ("pyiqa", tmp_path),
-        ("bool", "yes"),
-        ("interactive", None),
-        ("confirm", "Install now?"),
-        ("pythonpath", ("existing", tmp_path)),
-    ]
 
 
 def test_load_embedded_pip_main_suppresses_distutils_replacement_warning(
@@ -428,11 +402,11 @@ def test_load_embedded_pip_main_suppresses_distutils_replacement_warning(
         )
         return fake_pip_main_module
 
-    monkeypatch.setattr(bootstrap_module.importlib, "import_module", fake_import_module)
+    monkeypatch.setattr(bootstrap_sidecar.importlib, "import_module", fake_import_module)
 
     with warnings.catch_warnings(record=True) as recorded:
         warnings.simplefilter("always")
-        pip_main = bootstrap_module._load_embedded_pip_main()
+        pip_main = bootstrap_sidecar._load_embedded_pip_main()
 
     assert pip_main is fake_main
     assert recorded == []

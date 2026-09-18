@@ -64,12 +64,23 @@ def test_portable_bundle_builder_exposes_runtime_pack_target_plan() -> None:
     assert _string_value(plan["distPath"]).endswith("ShotSieve-linux-nvidia-cuda")
 
 
-def test_portable_bundle_builder_accepts_legacy_target_alias() -> None:
-    plan = run_bundle_plan("linux-nvidia")
-    target = _dict_value(plan["target"])
+def test_portable_bundle_builder_rejects_legacy_target_alias() -> None:
+    completed = subprocess.run(
+        [
+            sys.executable,
+            str(BUNDLE_SCRIPT_PATH),
+            "--target",
+            "linux-nvidia",
+            "--plan",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+        cwd=PROJECT_ROOT,
+    )
 
-    assert target["id"] == "linux-nvidia-cuda"
-    assert _string_value(plan["archivePath"]).endswith("ShotSieve-linux-nvidia-cuda-x64.tar.gz")
+    assert completed.returncode != 0
+    assert "Unknown release target" in completed.stderr
 
 
 def test_portable_bundle_target_plan_uses_typed_plan_contract() -> None:

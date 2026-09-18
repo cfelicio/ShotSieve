@@ -42,41 +42,12 @@ DEVICE_TARGET_ALIASES = {
     "mps": "mps",
     "apple": "apple",
 }
-MODEL_NAME_ALIASES = {
-    "topiq": "topiq_nr",
-    "topiq-nr": "topiq_nr",
-    "topiq_nr": "topiq_nr",
-    "topiq-nr-flive": "topiq_nr-flive",
-    "topiq_nr-flive": "topiq_nr-flive",
-    "topiq_nr_flive": "topiq_nr-flive",
-    "topiq-nr-spaq": "topiq_nr-spaq",
-    "topiq_nr-spaq": "topiq_nr-spaq",
-    "topiq_nr_spaq": "topiq_nr-spaq",
-    "arniqa": "arniqa",
-    "arniqa-spaq": "arniqa-spaq",
-    "arniqa_spaq": "arniqa-spaq",
-    "tres": "tres",
-    "clipiqa": "clipiqa",
-    "quali-clip": "qualiclip",
-    "qualiclip": "qualiclip",
-    "q-realign": "qrealign-mini",
-    "q-realignmini": "qrealign-mini",
-    "qrealign": "qrealign-mini",
-    "qrealignmini": "qrealign-mini",
-    "q-realign-mini": "qrealign-mini",
-    "qrealign-mini": "qrealign-mini",
-    "q-realign_mini": "qrealign-mini",
-    "qrealign_mini": "qrealign-mini",
-    "q-realign-mini-0.8b": "qrealign-mini",
-    "qrealign-mini-0.8b": "qrealign-mini",
-}
 _SUPPORTED_RUNTIME_TARGETS = ("auto", "cpu", "cuda", "rocm", "xpu", "mps", "nvidia", "amd", "intel", "apple")
 
 
 @dataclass(frozen=True, slots=True)
 class LearnedModelSpec:
     canonical_id: str
-    aliases: tuple[str, ...]
     label: str
     description: str
     supported_runtimes: tuple[str, ...]
@@ -92,7 +63,6 @@ class LearnedModelSpec:
 
     def to_payload(self, *, available: bool = False) -> dict[str, object]:
         payload = asdict(self)
-        payload["aliases"] = list(self.aliases)
         payload["supported_runtimes"] = list(self.supported_runtimes)
         payload["resource_labels"] = list(self.resource_labels)
         payload["cache_families"] = list(self.cache_families)
@@ -105,7 +75,6 @@ _COMMON_RUNTIME_POLICY = ("cpu", "cuda", "rocm", "xpu", "mps")
 MODEL_CATALOG = (
     LearnedModelSpec(
         canonical_id="topiq_nr",
-        aliases=("topiq", "topiq_nr", "topiq-nr"),
         label="TOPIQ (Recommended)",
         description="Fast, stable all-rounder for general photo-quality ranking.",
         supported_runtimes=_COMMON_RUNTIME_POLICY,
@@ -119,7 +88,6 @@ MODEL_CATALOG = (
     ),
     LearnedModelSpec(
         canonical_id="clipiqa",
-        aliases=("clipiqa",),
         label="CLIPIQA",
         description="CLIP-based quality scorer for a complementary second opinion.",
         supported_runtimes=_COMMON_RUNTIME_POLICY,
@@ -133,14 +101,6 @@ MODEL_CATALOG = (
     ),
     LearnedModelSpec(
         canonical_id="qrealign-mini",
-        aliases=(
-            "qrealign-mini",
-            "qrealign",
-            "q-realign",
-            "q-realign-mini",
-            "qrealign_mini",
-            "q-realign-mini-0.8b",
-        ),
         label="Q-ReAlign Mini",
         description="Compact Qwen3.5-VL quality judge; higher scores indicate better perceptual quality.",
         supported_runtimes=_COMMON_RUNTIME_POLICY,
@@ -156,9 +116,7 @@ MODEL_CATALOG = (
     ),
 )
 
-# These are derived views of the single product catalog. The old advanced
-# names remain normalizable so historical rows can still be displayed, but
-# they are deliberately absent from the supported product set.
+# These are derived views of the single current product catalog.
 SUPPORTED_MODEL_NAMES = tuple(spec.canonical_id for spec in MODEL_CATALOG)
 MODERN_MODEL_NAMES = SUPPORTED_MODEL_NAMES
 UI_MODEL_CATALOG = SUPPORTED_MODEL_NAMES
@@ -174,8 +132,7 @@ def supported_runtime_targets() -> tuple[str, ...]:
 
 
 def normalize_model_name(model_name: str) -> str:
-    normalized = model_name.strip().casefold().replace(" ", "")
-    return MODEL_NAME_ALIASES.get(normalized, normalized)
+    return model_name.strip().casefold()
 
 
 def is_supported_model_name(model_name: str) -> bool:
@@ -240,7 +197,6 @@ __all__ = [
     "DEVICE_TARGET_ALIASES",
     "MAX_BATCH_SIZES",
     "MODEL_CATALOG",
-    "MODEL_NAME_ALIASES",
     "MODEL_WEIGHT_MB",
     "MODERN_MODEL_NAMES",
     "PER_IMAGE_ACTIVATION_MB",

@@ -296,13 +296,6 @@ const installEvents = eventsModule.createEvents({
   updateResourceProfileDetail: controller.updateResourceProfileDetail,
 });
 
-// String marker compliance for test_frontend_state_reset.py:
-function _testContractMarkers(options) {
-  if (document.body?.dataset) {
-    document.body.dataset.databasePath = options.database || "";
-  }
-}
-
 async function loadQueue() {
   let query = null;
   query = gridController.currentQuery();

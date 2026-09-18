@@ -17,11 +17,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, NoReturn
 
-from shotsieve.release_targets import (
-    release_target_id_aliases,
-    runtime_pack_release_targets,
-)
-from shotsieve import runtime_support
+from shotsieve.release_targets import runtime_pack_release_targets
+from shotsieve.runtime_support import source_checkout_root
 
 
 APP_DIRNAME = "ShotSieve"
@@ -30,13 +27,6 @@ DEFAULT_RELEASE_REPO = "cfelicio/ShotSieve"
 DEFAULT_MANIFEST_URL = "https://github.com/cfelicio/ShotSieve/releases/latest/download/bootstrap-manifest.json"
 DEFAULT_DOWNLOAD_TIMEOUT_SECONDS = 60
 SHA256_PATTERN = re.compile(r"^[0-9a-fA-F]{64}$")
-
-
-def _battr(name: str, fallback: Any) -> Any:
-    mod = sys.modules.get("shotsieve.bootstrap")
-    if mod is not None and hasattr(mod, name):
-        return getattr(mod, name)
-    return fallback
 
 
 @dataclass(slots=True, frozen=True)
@@ -64,10 +54,9 @@ def default_runtime_root() -> Path:
         executable_dir = Path(sys.executable).resolve().parent
         return (executable_dir / PORTABLE_RUNTIME_DIRNAME).resolve()
 
-    bootstrap_file = _battr("__file__", __file__)
-    source_checkout_root = runtime_support.source_checkout_root(bootstrap_file, package_name="shotsieve")
-    if source_checkout_root is not None:
-        return (source_checkout_root / "data" / PORTABLE_RUNTIME_DIRNAME).resolve()
+    source_root = source_checkout_root(__file__, package_name="shotsieve")
+    if source_root is not None:
+        return (source_root / "data" / PORTABLE_RUNTIME_DIRNAME).resolve()
 
     local_app_data = os.environ.get("LOCALAPPDATA") or os.environ.get("APPDATA")
     if local_app_data:
@@ -109,26 +98,21 @@ def select_runtime_target(*, system_name: str, machine_name: str, has_nvidia: bo
 
 def fetch_manifest(manifest_url: str) -> dict[str, Any]:
     try:
-        open_func = _battr("open_url", open_url)
-        with open_func(manifest_url) as response:
+        with open_url(manifest_url) as response:
             payload = response.read().decode("utf-8")
         manifest = json.loads(payload)
     except (urllib.error.HTTPError, urllib.error.URLError, OSError, json.JSONDecodeError) as exc:
         if manifest_url != DEFAULT_MANIFEST_URL:
-            err_func = _battr("_manifest_fetch_error_message", _manifest_fetch_error_message)
-            raise SystemExit(err_func(manifest_url, exc)) from exc
+            raise SystemExit(_manifest_fetch_error_message(manifest_url, exc)) from exc
 
         if isinstance(exc, urllib.error.HTTPError):
-            fallback_func = _battr("_try_manifest_from_latest_release_api", _try_manifest_from_latest_release_api)
-            github_fallback = fallback_func(manifest_url, status_code=exc.code)
+            github_fallback = _try_manifest_from_latest_release_api(manifest_url, status_code=exc.code)
             if github_fallback is not None:
                 manifest = github_fallback
             else:
-                default_func = _battr("_build_default_latest_manifest", _build_default_latest_manifest)
-                manifest = default_func(DEFAULT_RELEASE_REPO)
+                manifest = _build_default_latest_manifest(DEFAULT_RELEASE_REPO)
         else:
-            default_func = _battr("_build_default_latest_manifest", _build_default_latest_manifest)
-            manifest = default_func(DEFAULT_RELEASE_REPO)
+            manifest = _build_default_latest_manifest(DEFAULT_RELEASE_REPO)
 
     return _validate_manifest_digests(manifest)
 
@@ -138,16 +122,15 @@ def select_manifest_asset(manifest: dict[str, Any], target_id: str) -> dict[str,
     if not isinstance(raw_assets, list):
         raise SystemExit("Bootstrap manifest is missing an 'assets' list")
 
-    requested_ids = release_target_id_aliases(target_id)
+    requested_id = str(target_id).strip().casefold()
     entries_by_id = {
         str(entry.get("id")).strip().casefold(): entry
         for entry in raw_assets
         if isinstance(entry, dict) and isinstance(entry.get("id"), str)
     }
-    for candidate_id in requested_ids:
-        entry = entries_by_id.get(candidate_id)
-        if entry is not None:
-            return entry
+    entry = entries_by_id.get(requested_id)
+    if entry is not None:
+        return entry
 
     known_ids: list[str] = []
     for entry in raw_assets:
@@ -286,15 +269,13 @@ def extract_archive(archive_path: Path, destination: Path) -> None:
             members = archive.infolist()
 
             for member in members:
-                safe_join_func = _battr("_safe_join", _safe_join)
-                safe_join_func(destination, member.filename)
+                _safe_join(destination, member.filename)
                 mode_bits = (member.external_attr >> 16) & 0o170000
                 if mode_bits == 0o120000:
                     raise SystemExit(f"Unsupported archive member type: {member.filename}")
 
             for member in members:
-                safe_join_func = _battr("_safe_join", _safe_join)
-                target = safe_join_func(destination, member.filename)
+                target = _safe_join(destination, member.filename)
                 if member.is_dir():
                     target.mkdir(parents=True, exist_ok=True)
                     continue
@@ -308,14 +289,12 @@ def extract_archive(archive_path: Path, destination: Path) -> None:
         members = archive.getmembers()
 
         for member in members:
-            safe_join_func = _battr("_safe_join", _safe_join)
-            safe_join_func(destination, member.name)
+            _safe_join(destination, member.name)
             if member.issym() or member.islnk() or member.isdev():
                 raise SystemExit(f"Unsupported archive member type: {member.name}")
 
         for member in members:
-            safe_join_func = _battr("_safe_join", _safe_join)
-            target = safe_join_func(destination, member.name)
+            target = _safe_join(destination, member.name)
 
             if member.isdir():
                 target.mkdir(parents=True, exist_ok=True)
@@ -334,13 +313,12 @@ def extract_archive(archive_path: Path, destination: Path) -> None:
 
 
 def resolve_manifest_url(cli_manifest_url: str | None) -> str:
-    norm_func = _battr("_normalize_manifest_location", _normalize_manifest_location)
     if cli_manifest_url:
-        return norm_func(cli_manifest_url)
+        return _normalize_manifest_location(cli_manifest_url)
 
     env_manifest = os.environ.get("SHOTSIEVE_BOOTSTRAP_MANIFEST_URL")
     if env_manifest:
-        return norm_func(env_manifest)
+        return _normalize_manifest_location(env_manifest)
 
     return DEFAULT_MANIFEST_URL
 
@@ -371,9 +349,8 @@ def _local_search_roots() -> list[Path]:
 
 
 def local_runtime_archive_candidates(archive_name: str) -> list[Path]:
-    search_roots_func = _battr("_local_search_roots", _local_search_roots)
     candidates: list[Path] = []
-    for root in search_roots_func():
+    for root in _local_search_roots():
         candidates.append(root / archive_name)
         candidates.append(root / "dist" / archive_name)
 
@@ -388,8 +365,7 @@ def local_runtime_archive_candidates(archive_name: str) -> list[Path]:
 
 
 def find_local_runtime_archive(archive_name: str) -> Path | None:
-    candidates_func = _battr("local_runtime_archive_candidates", local_runtime_archive_candidates)
-    for candidate in candidates_func(archive_name):
+    for candidate in local_runtime_archive_candidates(archive_name):
         if candidate.exists() and candidate.is_file():
             return candidate
     return None
@@ -430,15 +406,12 @@ def open_url(url: str):
     }
 
     parsed = urllib.parse.urlparse(url)
-    gt_func = _battr("github_token", github_token)
-    token = gt_func()
+    token = github_token()
     if token and parsed.netloc in {"github.com", "api.github.com", "objects.githubusercontent.com"}:
         headers["Authorization"] = f"Bearer {token}"
 
     request = urllib.request.Request(url, headers=headers)
-    mod = sys.modules.get("shotsieve.bootstrap")
-    url_func = getattr(getattr(mod, "urllib", urllib), "request", urllib.request).urlopen if mod is not None else urllib.request.urlopen
-    return url_func(request, timeout=DEFAULT_DOWNLOAD_TIMEOUT_SECONDS)
+    return urllib.request.urlopen(request, timeout=DEFAULT_DOWNLOAD_TIMEOUT_SECONDS)
 
 
 def _try_manifest_from_latest_release_api(manifest_url: str, *, status_code: int) -> dict[str, Any] | None:
@@ -456,9 +429,8 @@ def _try_manifest_from_latest_release_api(manifest_url: str, *, status_code: int
     repo = match.group("repo")
     api_url = f"https://api.github.com/repos/{owner}/{repo}/releases/latest"
 
-    open_func = _battr("open_url", open_url)
     try:
-        with open_func(api_url) as response:
+        with open_url(api_url) as response:
             release_payload = json.loads(response.read().decode("utf-8"))
     except Exception:
         return None
@@ -565,13 +537,12 @@ def _frozen_colocated_runtime_executable(asset: RuntimeAsset) -> Path | None:
 
 
 def _download_archive_with_local_fallback(*, asset: RuntimeAsset, archive_path: Path) -> None:
-    open_func = _battr("open_url", open_url)
     try:
         if asset.parts:
             with archive_path.open("wb") as handle:
                 for part in asset.parts:
                     part_digest = hashlib.sha256()
-                    with open_func(part.url) as response:
+                    with open_url(part.url) as response:
                         while True:
                             chunk = response.read(1024 * 1024)
                             if not chunk:
@@ -586,7 +557,7 @@ def _download_archive_with_local_fallback(*, asset: RuntimeAsset, archive_path: 
         else:
             if not asset.url:
                 raise SystemExit(f"Runtime asset '{asset.id}' has no archive URL or split parts.")
-            with open_func(asset.url) as response:
+            with open_url(asset.url) as response:
                 with archive_path.open("wb") as handle:
                     shutil.copyfileobj(response, handle)
         return
@@ -602,15 +573,13 @@ def _download_archive_with_local_fallback(*, asset: RuntimeAsset, archive_path: 
             archive_path.unlink(missing_ok=True)
         except OSError:
             pass
-        find_local_func = _battr("find_local_runtime_archive", find_local_runtime_archive)
-        local_archive = find_local_func(asset.archive_name)
+        local_archive = find_local_runtime_archive(asset.archive_name)
         if local_archive is not None:
             if local_archive.resolve() != archive_path.resolve():
                 shutil.copy2(local_archive, archive_path)
             return
 
-    candidates_func = _battr("local_runtime_archive_candidates", local_runtime_archive_candidates)
-    local_candidates = ", ".join(str(path) for path in candidates_func(asset.archive_name))
+    local_candidates = ", ".join(str(path) for path in local_runtime_archive_candidates(asset.archive_name))
     source_url = asset.url or "multipart release assets"
     raise SystemExit(
         f"Failed to download runtime archive '{asset.archive_name}' for target '{asset.id}'. "
@@ -622,8 +591,7 @@ def _download_archive_with_local_fallback(*, asset: RuntimeAsset, archive_path: 
 
 def ensure_runtime_asset(asset: RuntimeAsset, *, runtime_root: Path, force_refresh: bool = False) -> Path:
     if not force_refresh:
-        colocated_func = _battr("_frozen_colocated_runtime_executable", _frozen_colocated_runtime_executable)
-        colocated = colocated_func(asset)
+        colocated = _frozen_colocated_runtime_executable(asset)
         if colocated is not None:
             return colocated
 
@@ -634,7 +602,6 @@ def ensure_runtime_asset(asset: RuntimeAsset, *, runtime_root: Path, force_refre
     install_dir = installs_dir / asset.id
     marker_path = install_dir / ".asset-sha256"
 
-    find_exe_func = _battr("_find_runtime_executable", _find_runtime_executable)
     if not force_refresh and install_dir.exists() and marker_path.exists():
         try:
             existing_hash = marker_path.read_text(encoding="utf-8").strip().casefold()
@@ -642,7 +609,7 @@ def ensure_runtime_asset(asset: RuntimeAsset, *, runtime_root: Path, force_refre
             existing_hash = ""
         if existing_hash == expected_sha256:
             try:
-                return find_exe_func(install_dir, asset)
+                return _find_runtime_executable(install_dir, asset)
             except SystemExit:
                 pass
 
@@ -654,11 +621,9 @@ def ensure_runtime_asset(asset: RuntimeAsset, *, runtime_root: Path, force_refre
         archive_path.unlink()
 
     if not archive_path.exists():
-        download_func = _battr("_download_archive_with_local_fallback", _download_archive_with_local_fallback)
-        download_func(asset=asset, archive_path=archive_path)
+        _download_archive_with_local_fallback(asset=asset, archive_path=archive_path)
 
-    sha_func = _battr("sha256_file", sha256_file)
-    downloaded_hash = sha_func(archive_path).strip().casefold()
+    downloaded_hash = sha256_file(archive_path).strip().casefold()
     if downloaded_hash != expected_sha256:
         try:
             archive_path.unlink(missing_ok=True)
@@ -668,10 +633,9 @@ def ensure_runtime_asset(asset: RuntimeAsset, *, runtime_root: Path, force_refre
             f"Downloaded archive hash mismatch for target '{asset.id}'. Expected {expected_sha256}, got {downloaded_hash}."
         )
 
-    extract_func = _battr("extract_archive", extract_archive)
     with tempfile.TemporaryDirectory(prefix=f"shotsieve-bootstrap-{asset.id}-") as temp_dir:
         temp_path = Path(temp_dir)
-        extract_func(archive_path, temp_path)
+        extract_archive(archive_path, temp_path)
 
         if install_dir.exists():
             shutil.rmtree(install_dir)
@@ -684,4 +648,4 @@ def ensure_runtime_asset(asset: RuntimeAsset, *, runtime_root: Path, force_refre
     except OSError:
         pass
 
-    return find_exe_func(install_dir, asset)
+    return _find_runtime_executable(install_dir, asset)

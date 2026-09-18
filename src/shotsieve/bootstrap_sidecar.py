@@ -22,9 +22,7 @@ import warnings
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
-from typing import Any
 
-from shotsieve import runtime_support
 from shotsieve.dependency_constraints import (
     COMMON_MODEL_REQUIREMENTS,
     PYTORCH_CPU_INDEX_URL,
@@ -35,7 +33,15 @@ from shotsieve.dependency_constraints import (
     TORCH_REQUIREMENTS,
     XPU_TORCH_REQUIREMENTS,
 )
-from shotsieve.release_targets import canonical_release_target_id, release_target_id_aliases
+from shotsieve.release_targets import canonical_release_target_id
+from shotsieve.runtime_support import (
+    compose_pythonpath,
+    confirm,
+    is_interactive_console,
+    parse_env_bool,
+    path_has_pyiqa,
+    path_has_torch,
+)
 
 DEFAULT_TORCH_AUTO_INSTALL_ENV = "SHOTSIEVE_BOOTSTRAP_AUTO_INSTALL_TORCH"
 DEFAULT_TORCH_SITE_PACKAGES_DIRNAME = "site-packages"
@@ -197,13 +203,6 @@ def _install_openai_clip_source(site_packages: Path) -> None:
     (dist_info / "top_level.txt").write_text("clip\n", encoding="utf-8")
 
 
-def _battr(name: str, fallback: Any) -> Any:
-    mod = sys.modules.get("shotsieve.bootstrap")
-    if mod is not None and hasattr(mod, name):
-        return getattr(mod, name)
-    return fallback
-
-
 @contextlib.contextmanager
 def _suppress_distutils_replacement_warning():
     with warnings.catch_warnings():
@@ -233,14 +232,6 @@ def _suppress_embedded_pip_warnings():
 
 def sidecar_site_packages_dir(runtime_root: Path, target_id: str) -> Path:
     return runtime_root / DEFAULT_TORCH_SITE_PACKAGES_DIRNAME / target_id
-
-
-def sidecar_site_packages_candidates(runtime_root: Path, target_id: str) -> tuple[Path, ...]:
-    """Return canonical and legacy sidecar locations, canonical first."""
-    return tuple(
-        sidecar_site_packages_dir(runtime_root, candidate)
-        for candidate in release_target_id_aliases(target_id)
-    )
 
 
 def _target_parts(target_id: str | None, runtime: str | None) -> tuple[str, str, str]:
@@ -382,24 +373,21 @@ def _write_sidecar_state(site_packages: Path, plan: TorchInstallPlan, *, learned
 
 
 def torch_sidecar_is_valid(site_packages: Path, *, target_id: str | None = None, runtime: str | None = None) -> bool:
-    """Reject interrupted/mismatched installs while reading legacy sidecars."""
+    """Reject interrupted or mismatched current-version sidecar installs."""
     if not (site_packages / "torch" / "__init__.py").is_file():
         return False
 
     state = _read_sidecar_state(site_packages)
     if state is None:
-        # Releases before the durable marker existed are accepted for upgrade
-        # compatibility when the package has a real __init__.py.  New writes
-        # always create a marker, so incomplete installs cannot become valid.
-        return True
+        return False
 
     plan = torch_install_plan(target_id=target_id or site_packages.name, runtime=runtime)
     stored_plan = state.get("plan")
     return bool(
         state.get("schema") == SIDECAR_STATE_VERSION
-        and state.get("kind") in {"torch", "runtime"}
+        and state.get("kind") == "runtime"
         and state.get("complete") is True
-        and state.get("torch_complete", state.get("kind") == "torch") is True
+        and state.get("torch_complete") is True
         and isinstance(stored_plan, dict)
         and stored_plan.get("target_id") == plan.target_id
         and stored_plan.get("source_fingerprint") == plan.source_fingerprint
@@ -452,11 +440,6 @@ def _sidecar_install_lock(site_packages: Path):
             lock_path.unlink(missing_ok=True)
 
 
-_runtime_support = runtime_support.shared_runtime_support
-_path_has_torch = _runtime_support.path_has_torch
-_path_has_pyiqa = _runtime_support.path_has_pyiqa
-
-
 def runtime_bundle_contains_torch(install_dir: Path) -> bool:
     candidates = (
         install_dir,
@@ -464,16 +447,10 @@ def runtime_bundle_contains_torch(install_dir: Path) -> bool:
         install_dir / "Lib" / "site-packages",
         install_dir / "lib" / "site-packages",
     )
-    check_func = _battr("_path_has_torch", _path_has_torch)
     for candidate in candidates:
-        if check_func(candidate):
+        if path_has_torch(candidate):
             return True
     return False
-
-
-_parse_env_bool = _runtime_support.parse_env_bool
-_is_interactive_console = _runtime_support.is_interactive_console
-_confirm = _runtime_support.confirm
 
 
 def _torch_install_index_args(runtime: str) -> list[str]:
@@ -488,9 +465,9 @@ def _patch_distlib_finder_for_frozen() -> None:
     if not getattr(sys, "frozen", False):
         return
 
-    imp_mod = _battr("importlib", importlib)
-    pkg_mod = _battr("pkgutil", pkgutil)
-    suppress_func = _battr("_suppress_distutils_replacement_warning", _suppress_distutils_replacement_warning)
+    imp_mod = importlib
+    pkg_mod = pkgutil
+    suppress_func = _suppress_distutils_replacement_warning
 
     try:
         with suppress_func():
@@ -562,8 +539,8 @@ def _patch_distlib_finder_for_frozen() -> None:
 
 
 def _patch_pip_scriptmaker_for_embedded_install() -> None:
-    imp_mod = _battr("importlib", importlib)
-    suppress_func = _battr("_suppress_distutils_replacement_warning", _suppress_distutils_replacement_warning)
+    imp_mod = importlib
+    suppress_func = _suppress_distutils_replacement_warning
     try:
         with suppress_func():
             wheel_module = imp_mod.import_module("pip._internal.operations.install.wheel")
@@ -596,8 +573,8 @@ def _patch_pip_scriptmaker_for_embedded_install() -> None:
 
 
 def _load_embedded_pip_main() -> Callable[[list[str]], object] | None:
-    imp_mod = _battr("importlib", importlib)
-    suppress_func = _battr("_suppress_distutils_replacement_warning", _suppress_distutils_replacement_warning)
+    imp_mod = importlib
+    suppress_func = _suppress_distutils_replacement_warning
     try:
         with suppress_func():
             pip_module = imp_mod.import_module("pip._internal.cli.main")
@@ -644,11 +621,11 @@ def _install_torch_sidecar_with_embedded_pip(
     force_reinstall: bool = False,
     output_func=print,
 ) -> bool | None:
-    suppress_pip = _battr("_suppress_embedded_pip_warnings", _suppress_embedded_pip_warnings)
+    suppress_pip = _suppress_embedded_pip_warnings
     with suppress_pip():
-        p_distlib = _battr("_patch_distlib_finder_for_frozen", _patch_distlib_finder_for_frozen)
-        p_script = _battr("_patch_pip_scriptmaker_for_embedded_install", _patch_pip_scriptmaker_for_embedded_install)
-        p_main = _battr("_load_embedded_pip_main", _load_embedded_pip_main)
+        p_distlib = _patch_distlib_finder_for_frozen
+        p_script = _patch_pip_scriptmaker_for_embedded_install
+        p_main = _load_embedded_pip_main
         p_distlib()
         p_script()
         pip_main = p_main()
@@ -716,11 +693,10 @@ def _install_torch_sidecar_with_embedded_pip(
         stderr_buffer = io.StringIO()
         exception_text: str | None = None
 
-        coerce_func = _battr("_coerce_pip_main_return_code", _coerce_pip_main_return_code)
         try:
             with suppress_pip():
                 with contextlib.redirect_stdout(stdout_buffer), contextlib.redirect_stderr(stderr_buffer):
-                    return_code = coerce_func(pip_main(install_args))
+                    return_code = _coerce_pip_main_return_code(pip_main(install_args))
         except SystemExit as exc:
             code = exc.code
             if isinstance(code, int):
@@ -741,7 +717,7 @@ def _install_torch_sidecar_with_embedded_pip(
         )
         return return_code
 
-    has_torch_func = _battr("_path_has_torch", _path_has_torch)
+    has_torch_func = path_has_torch
     try:
         with _sidecar_install_lock(site_packages):
             # Another process may have completed the exact install while this
@@ -813,8 +789,7 @@ def install_torch_sidecar(
     output_func=print,
     force_reinstall: bool = False,
 ) -> bool:
-    sidecar_func = _battr("_install_torch_sidecar_with_embedded_pip", _install_torch_sidecar_with_embedded_pip)
-    embedded_install_result = sidecar_func(
+    embedded_install_result = _install_torch_sidecar_with_embedded_pip(
         runtime=runtime,
         site_packages=site_packages,
         force_reinstall=force_reinstall,
@@ -976,11 +951,11 @@ def _install_learned_iqa_sidecar_with_embedded_pip(
     force_reinstall: bool = False,
     output_func=print,
 ) -> bool | None:
-    suppress_pip = _battr("_suppress_embedded_pip_warnings", _suppress_embedded_pip_warnings)
+    suppress_pip = _suppress_embedded_pip_warnings
     with suppress_pip():
-        p_distlib = _battr("_patch_distlib_finder_for_frozen", _patch_distlib_finder_for_frozen)
-        p_script = _battr("_patch_pip_scriptmaker_for_embedded_install", _patch_pip_scriptmaker_for_embedded_install)
-        p_main = _battr("_load_embedded_pip_main", _load_embedded_pip_main)
+        p_distlib = _patch_distlib_finder_for_frozen
+        p_script = _patch_pip_scriptmaker_for_embedded_install
+        p_main = _load_embedded_pip_main
         p_distlib()
         p_script()
         pip_main = p_main()
@@ -1070,11 +1045,10 @@ def _install_learned_iqa_sidecar_with_embedded_pip(
             )
             return return_code
 
-        coerce_func = _battr("_coerce_pip_main_return_code", _coerce_pip_main_return_code)
         try:
             with suppress_pip():
                 with contextlib.redirect_stdout(stdout_buffer), contextlib.redirect_stderr(stderr_buffer):
-                    return_code = coerce_func(pip_main(install_args))
+                    return_code = _coerce_pip_main_return_code(pip_main(install_args))
         except SystemExit as exc:
             code = exc.code
             if isinstance(code, int):
@@ -1096,11 +1070,10 @@ def _install_learned_iqa_sidecar_with_embedded_pip(
         return return_code
 
     package_results: dict[str, int] = {}
-    pkg_list_func = _battr("_learned_iqa_packages_for_runtime", _learned_iqa_packages_for_runtime)
-    for package_name in pkg_list_func(runtime):
+    for package_name in _learned_iqa_packages_for_runtime(runtime):
         package_results[package_name] = _run_pip_install(package_name)
 
-    has_pyiqa_func = _battr("_path_has_pyiqa", _path_has_pyiqa)
+    has_pyiqa_func = path_has_pyiqa
     pyiqa_return_code = package_results.get("pyiqa", 1)
     if pyiqa_return_code != 0 and not has_pyiqa_func(site_packages):
         output_func(
@@ -1128,7 +1101,6 @@ def install_learned_iqa_sidecar(
     output_func=print,
     force_reinstall: bool = False,
 ) -> bool:
-    sidecar_func = _battr("_install_learned_iqa_sidecar_with_embedded_pip", _install_learned_iqa_sidecar_with_embedded_pip)
     site_packages = Path(site_packages)
     site_packages.parent.mkdir(parents=True, exist_ok=True)
     embedded_install_result: bool | None = False
@@ -1140,7 +1112,7 @@ def install_learned_iqa_sidecar(
                 staging_dir=staging_dir,
                 runtime=runtime,
             )
-            embedded_install_result = sidecar_func(
+            embedded_install_result = _install_learned_iqa_sidecar_with_embedded_pip(
                 runtime=runtime,
                 # A --target reinstall does not remove files from an older
                 # package version. Build in a clean tree so Transformers and
@@ -1149,7 +1121,7 @@ def install_learned_iqa_sidecar(
                 force_reinstall=force_reinstall,
                 output_func=output_func,
             )
-            if embedded_install_result and _path_has_pyiqa(staging_dir):
+            if embedded_install_result and path_has_pyiqa(staging_dir):
                 _write_sidecar_state(
                     staging_dir,
                     torch_install_plan(target_id=site_packages.name, runtime=runtime),
@@ -1172,9 +1144,6 @@ def install_learned_iqa_sidecar(
     return embedded_install_result
 
 
-_compose_pythonpath = _runtime_support.compose_pythonpath
-
-
 def maybe_prepare_torch_runtime(
     asset,
     *,
@@ -1183,32 +1152,19 @@ def maybe_prepare_torch_runtime(
     input_func=input,
     output_func=print,
 ) -> dict[str, str]:
-    contains_func = _battr("runtime_bundle_contains_torch", runtime_bundle_contains_torch)
-    if contains_func(install_dir):
+    if runtime_bundle_contains_torch(install_dir):
         return {}
 
-    sidecar_candidates_func = _battr("sidecar_site_packages_candidates", sidecar_site_packages_candidates)
-    has_torch_func = _battr("_path_has_torch", _path_has_torch)
-    site_packages = next(
-        (
-            candidate
-            for candidate in sidecar_candidates_func(runtime_root, asset.id)
-            if torch_sidecar_is_valid(candidate, target_id=asset.id, runtime=asset.runtime)
-        ),
-        sidecar_candidates_func(runtime_root, asset.id)[0],
-    )
+    has_torch_func = path_has_torch
+    site_packages = sidecar_site_packages_dir(runtime_root, asset.id)
     if torch_sidecar_is_valid(site_packages, target_id=asset.id, runtime=asset.runtime) and has_torch_func(site_packages):
-        compose_func = _battr("_compose_pythonpath", _compose_pythonpath)
-        return {"PYTHONPATH": compose_func(existing=os.environ.get("PYTHONPATH"), prepend_path=site_packages)}
+        return {"PYTHONPATH": compose_pythonpath(existing=os.environ.get("PYTHONPATH"), prepend_path=site_packages)}
 
-    parse_env_func = _battr("_parse_env_bool", _parse_env_bool)
-    auto_install = parse_env_func(os.environ.get(DEFAULT_TORCH_AUTO_INSTALL_ENV))
+    auto_install = parse_env_bool(os.environ.get(DEFAULT_TORCH_AUTO_INSTALL_ENV))
     if auto_install is None:
-        is_console_func = _battr("_is_interactive_console", _is_interactive_console)
-        if not is_console_func():
+        if not is_interactive_console():
             return {}
-        confirm_func = _battr("_confirm", _confirm)
-        auto_install = confirm_func(
+        auto_install = confirm(
             "PyTorch was not detected for this runtime. Download and install it now? [y/N]: ",
             input_func=input_func,
         )
@@ -1218,10 +1174,8 @@ def maybe_prepare_torch_runtime(
         return {}
 
     output_func("Installing PyTorch runtime dependencies. This may take a few minutes...")
-    install_func = _battr("install_torch_sidecar", install_torch_sidecar)
-    installed = install_func(runtime=asset.runtime, site_packages=site_packages)
+    installed = install_torch_sidecar(runtime=asset.runtime, site_packages=site_packages)
     if not installed:
         return {}
 
-    compose_func = _battr("_compose_pythonpath", _compose_pythonpath)
-    return {"PYTHONPATH": compose_func(existing=os.environ.get("PYTHONPATH"), prepend_path=site_packages)}
+    return {"PYTHONPATH": compose_pythonpath(existing=os.environ.get("PYTHONPATH"), prepend_path=site_packages)}

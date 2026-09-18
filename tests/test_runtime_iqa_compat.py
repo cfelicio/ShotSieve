@@ -333,7 +333,7 @@ def test_qrealign_version_probe_accepts_supported_runtime(monkeypatch: pytest.Mo
     monkeypatch.setattr(learned_iqa_module, "import_pyiqa_runtime", lambda: (FakePyiqa, FakeTorch))
 
     expected_version = "pyiqa:0.1.16:qrealign-mini:cuda:fe1f45a7574c9e9d908875af9f7e90cb946aa19f"
-    assert learned_iqa_module.resolve_learned_model_version("q-realign", device="cuda") == expected_version
+    assert learned_iqa_module.resolve_learned_model_version("qrealign-mini", device="cuda") == expected_version
 
     # Initialization and the lightweight score-cache probe must agree.
     from shotsieve import learned_iqa_backend as backend_module
@@ -358,8 +358,8 @@ def test_model_catalog_contains_only_reviewed_product_models() -> None:
     assert catalog_module.SUPPORTED_MODEL_NAMES == ("topiq_nr", "clipiqa", "qrealign-mini")
     assert [entry["canonical_id"] for entry in catalog_module.model_catalog_payload()] == ["topiq_nr", "clipiqa", "qrealign-mini"]
     assert all(entry["available"] is False for entry in catalog_module.model_catalog_payload())
-    assert catalog_module.validate_model_name(" TOPIQ-NR ") == "topiq_nr"
-    assert catalog_module.validate_model_name("q-realign") == "qrealign-mini"
+    assert catalog_module.validate_model_name(" topiq_nr ") == "topiq_nr"
+    assert catalog_module.validate_model_name("qrealign-mini") == "qrealign-mini"
 
 
 def test_runtime_model_discovery_does_not_readvertise_catalog_on_failure(monkeypatch: pytest.MonkeyPatch) -> None:

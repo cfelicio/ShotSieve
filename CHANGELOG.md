@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Changed
+
+- Removed version-compatibility aliases and facades for retired release targets,
+  sidecar locations and markers, preview names, learned-model names, and runtime
+  helper imports. Fresh downloads now use only the current direct paths.
+
 ### Fixed
 
 - Made schema migrations compatible with standard bare SQLite connections.

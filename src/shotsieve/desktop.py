@@ -10,18 +10,25 @@ import sys
 import traceback
 from pathlib import Path
 
-from shotsieve import runtime_support
-from shotsieve.bootstrap import (
+from shotsieve.bootstrap_sidecar import (
     install_learned_iqa_sidecar,
     install_torch_sidecar,
-    sidecar_site_packages_candidates,
-    sidecar_site_packages_dir,  # noqa: F401 - retained as a compatibility import
+    sidecar_site_packages_dir,
     torch_sidecar_is_valid,
 )
 from shotsieve.learned_iqa import invalidate_hw_cache
 from shotsieve.learned_iqa_runtime import cuda_runtime_is_usable, has_mps, has_rocm, has_xpu
 from shotsieve.model_assets import apply_model_cache_dir, recover_orphaned_preparation
 from shotsieve.release_targets import canonical_release_target_id
+from shotsieve.runtime_support import (
+    compose_pythonpath,
+    confirm,
+    is_interactive_console,
+    parse_env_bool,
+    path_has_pyiqa,
+    path_has_torch,
+    source_checkout_root,
+)
 from shotsieve.web import serve_review_ui
 
 
@@ -45,9 +52,9 @@ def default_data_dir() -> Path:
         executable_dir = Path(sys.executable).resolve().parent
         return (executable_dir / PORTABLE_DATA_DIRNAME).resolve()
 
-    source_checkout_root = runtime_support.source_checkout_root(__file__, package_name="shotsieve")
-    if source_checkout_root is not None:
-        return (source_checkout_root / PORTABLE_DATA_DIRNAME).resolve()
+    source_root = source_checkout_root(__file__, package_name="shotsieve")
+    if source_root is not None:
+        return (source_root / PORTABLE_DATA_DIRNAME).resolve()
 
     local_app_data = os.environ.get("LOCALAPPDATA") or os.environ.get("APPDATA")
     if local_app_data:
@@ -69,39 +76,18 @@ def runtime_target_id_from_executable_name(*, system_name: str | None = None) ->
     else:
         return None
 
-    if "nvidia-cuda" in runtime_name or ("nvidia" in runtime_name and "cuda" in runtime_name):
+    if "nvidia-cuda" in runtime_name:
         return f"{prefix}-nvidia-cuda"
-    if "cuda" in runtime_name:
-        return f"{prefix}-cuda"
-    if "nvidia" in runtime_name:
-        return f"{prefix}-nvidia"
-    if "intel-xpu" in runtime_name or ("intel" in runtime_name and "xpu" in runtime_name):
+    if "intel-xpu" in runtime_name:
         return f"{prefix}-intel-xpu"
-    if "xpu" in runtime_name:
-        return f"{prefix}-xpu"
-    if "intel" in runtime_name:
-        return f"{prefix}-intel"
-    if "amd-rocm" in runtime_name or ("amd" in runtime_name and "rocm" in runtime_name):
+    if "amd-rocm" in runtime_name:
         return f"{prefix}-amd-rocm"
-    if "rocm" in runtime_name:
-        return f"{prefix}-rocm"
-    if "amd" in runtime_name:
-        return f"{prefix}-amd"
-    if prefix == "macos" and ("apple-mps" in runtime_name or "mps" in runtime_name):
-        return "macos-apple-mps" if "apple-mps" in runtime_name else "macos-mps"
+    if prefix == "macos" and "apple-mps" in runtime_name:
+        return "macos-apple-mps"
     if "cpu" in runtime_name:
         return f"{prefix}-cpu"
 
     return None
-
-
-def target_is_cuda_runtime(target_id: str | None) -> bool:
-    normalized = (target_id or "").strip().casefold()
-    return normalized.endswith(("-nvidia-cuda", "-cuda", "-nvidia"))
-
-
-def _resolve_cuda_runtime_target_id(target_id: str | None) -> str | None:
-    return target_id if target_is_cuda_runtime(target_id) else None
 
 
 def _clear_torch_module_cache() -> None:
@@ -245,7 +231,7 @@ def runtime_bundle_has_usable_cuda_torch(*, force_reload: bool = False) -> bool:
 def runtime_bundle_has_usable_torch(target_id: str | None, *, force_reload: bool = False) -> bool:
     """Probe the already-importable runtime for the selected target family."""
     normalized_target = canonical_release_target_id(target_id or "")
-    if normalized_target.endswith(("-nvidia-cuda", "-cuda")):
+    if normalized_target.endswith("-nvidia-cuda"):
         return runtime_bundle_has_usable_cuda_torch(force_reload=force_reload)
 
     if importlib.util.find_spec("torch") is None:
@@ -266,15 +252,6 @@ def runtime_bundle_has_usable_torch(target_id: str | None, *, force_reload: bool
     if runtime == "mps":
         return has_mps(torch_module)
     return True
-
-
-_runtime_support = runtime_support.shared_runtime_support
-_path_has_torch = _runtime_support.path_has_torch
-_path_has_pyiqa = _runtime_support.path_has_pyiqa
-_parse_env_bool = _runtime_support.parse_env_bool
-_is_interactive_console = _runtime_support.is_interactive_console
-_confirm = _runtime_support.confirm
-_compose_pythonpath = _runtime_support.compose_pythonpath
 
 
 def _call_prepare_learned_iqa_runtime(
@@ -310,7 +287,7 @@ def _call_prepare_learned_iqa_runtime(
 
 def _prepend_runtime_pythonpath(path: Path) -> None:
     path_text = str(path)
-    os.environ["PYTHONPATH"] = _compose_pythonpath(existing=os.environ.get("PYTHONPATH"), prepend_path=path)
+    os.environ["PYTHONPATH"] = compose_pythonpath(existing=os.environ.get("PYTHONPATH"), prepend_path=path)
     if path_text not in sys.path:
         sys.path.insert(0, path_text)
 
@@ -331,11 +308,8 @@ def _target_torch_package_is_available(data_dir: Path, target_id: str) -> bool:
         return True
     runtime_root = (data_dir / "runtime").resolve()
     runtime_name = _runtime_name_from_target_id(target_id)
-    return any(
-        torch_sidecar_is_valid(candidate, target_id=target_id, runtime=runtime_name)
-        and _path_has_torch(candidate)
-        for candidate in sidecar_site_packages_candidates(runtime_root, target_id)
-    )
+    site_packages = sidecar_site_packages_dir(runtime_root, target_id)
+    return torch_sidecar_is_valid(site_packages, target_id=target_id, runtime=runtime_name) and path_has_torch(site_packages)
 
 
 def _runtime_has_learned_iqa() -> bool:
@@ -344,15 +318,15 @@ def _runtime_has_learned_iqa() -> bool:
 
 def _runtime_name_from_target_id(target_id: str | None) -> str:
     normalized = (target_id or "").strip().casefold()
-    if normalized.endswith(("-nvidia-cuda", "-cuda", "-nvidia")):
+    if normalized.endswith("-nvidia-cuda"):
         return "cuda"
-    if normalized.endswith(("-intel-xpu", "-xpu", "-intel")):
+    if normalized.endswith("-intel-xpu"):
         return "xpu"
-    if normalized.endswith(("-amd-rocm", "-rocm", "-amd")):
+    if normalized.endswith("-amd-rocm"):
         return "rocm"
     if normalized.endswith("-cpu"):
         return "cpu"
-    if normalized.endswith(("-apple-mps", "-mps")):
+    if normalized.endswith("-apple-mps"):
         return "mps"
     return "default"
 
@@ -392,19 +366,15 @@ def maybe_prepare_learned_iqa_runtime(
         target_id or runtime_target_id_from_executable_name() or _fallback_runtime_target_id()
     )
     runtime_root = (data_dir / "runtime").resolve()
-    sidecar_candidates = sidecar_site_packages_candidates(runtime_root, resolved_target_id)
-    site_packages = next(
-        (candidate for candidate in sidecar_candidates if _path_has_pyiqa(candidate)),
-        sidecar_candidates[0],
-    )
+    site_packages = sidecar_site_packages_dir(runtime_root, resolved_target_id)
 
-    sidecar_has_pyiqa = _path_has_pyiqa(site_packages)
+    sidecar_has_pyiqa = path_has_pyiqa(site_packages)
     if sidecar_has_pyiqa:
         _prepend_runtime_pythonpath(site_packages)
         if _runtime_has_learned_iqa():
             return True
 
-    configured_install = _parse_env_bool(os.environ.get(LEARNED_IQA_AUTO_INSTALL_ENV))
+    configured_install = parse_env_bool(os.environ.get(LEARNED_IQA_AUTO_INSTALL_ENV))
     auto_install = True if force_install else configured_install
     if auto_install is None:
         if assume_install_consent:
@@ -412,7 +382,7 @@ def maybe_prepare_learned_iqa_runtime(
                 "PyTorch runtime was installed for this session. Continuing with learned IQA runtime installation..."
             )
             auto_install = True
-        elif not _is_interactive_console():
+        elif not is_interactive_console():
             if sidecar_has_pyiqa:
                 output_func(
                     "Learned IQA sidecar exists but is unavailable in this session; skipping automatic repair. "
@@ -432,7 +402,7 @@ def maybe_prepare_learned_iqa_runtime(
                 if sidecar_has_pyiqa
                 else "Learned IQA dependencies were not detected. Download and install now? [y/N]: "
             )
-            auto_install = _confirm(prompt, input_func=input_func)
+            auto_install = confirm(prompt, input_func=input_func)
 
     if not auto_install:
         if sidecar_has_pyiqa:
@@ -452,7 +422,7 @@ def maybe_prepare_learned_iqa_runtime(
         output_func=output_func,
         force_reinstall=sidecar_has_pyiqa,
     )
-    if installed and _path_has_pyiqa(site_packages):
+    if installed and path_has_pyiqa(site_packages):
         _prepend_runtime_pythonpath(site_packages)
         invalidate_hw_cache()
         if not _runtime_has_learned_iqa():
@@ -489,20 +459,12 @@ def maybe_prepare_torch_runtime(
         return False
 
     runtime_root = (data_dir / "runtime").resolve()
-    candidates = sidecar_site_packages_candidates(runtime_root, resolved_target_id)
-    site_packages = next(
-        (
-            candidate
-            for candidate in candidates
-            if torch_sidecar_is_valid(candidate, target_id=resolved_target_id, runtime=runtime)
-        ),
-        candidates[0],
-    )
+    site_packages = sidecar_site_packages_dir(runtime_root, resolved_target_id)
     sidecar_has_torch = torch_sidecar_is_valid(
         site_packages,
         target_id=resolved_target_id,
         runtime=runtime,
-    ) and _path_has_torch(site_packages)
+    ) and path_has_torch(site_packages)
     if sidecar_has_torch:
         if runtime == "cuda":
             _prepend_runtime_pythonpath(site_packages)
@@ -512,10 +474,10 @@ def maybe_prepare_torch_runtime(
         if sidecar_usable:
             return False
 
-    configured_install = _parse_env_bool(os.environ.get(TORCH_AUTO_INSTALL_ENV))
+    configured_install = parse_env_bool(os.environ.get(TORCH_AUTO_INSTALL_ENV))
     auto_install = True if force_install else configured_install
     if auto_install is None:
-        if not _is_interactive_console():
+        if not is_interactive_console():
             if sidecar_has_torch:
                 output_func(
                     f"Runtime PyTorch is already installed but {runtime} is unavailable in this session; "
@@ -535,7 +497,7 @@ def maybe_prepare_torch_runtime(
                 if sidecar_has_torch
                 else f"PyTorch was not detected for this {runtime} runtime. Download and install it now? [y/N]: "
             )
-            auto_install = _confirm(prompt, input_func=input_func)
+            auto_install = confirm(prompt, input_func=input_func)
 
     if not auto_install:
         if sidecar_has_torch:
@@ -554,7 +516,7 @@ def maybe_prepare_torch_runtime(
         output_func=output_func,
         force_reinstall=sidecar_has_torch,
     )
-    if installed and _path_has_torch(site_packages):
+    if installed and path_has_torch(site_packages):
         _prepend_runtime_pythonpath(site_packages)
         invalidate_hw_cache()
         if runtime == "cuda":
@@ -570,24 +532,6 @@ def maybe_prepare_torch_runtime(
         return True
 
     return False
-
-
-def maybe_prepare_cuda_torch_runtime(
-    data_dir: Path,
-    *,
-    target_id: str | None = None,
-    force_install: bool = False,
-    input_func=input,
-    output_func=print,
-) -> bool:
-    """Backward-compatible name for target-aware runtime preparation."""
-    return maybe_prepare_torch_runtime(
-        data_dir,
-        target_id=target_id,
-        force_install=force_install,
-        input_func=input_func,
-        output_func=output_func,
-    )
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -615,7 +559,7 @@ def main() -> None:
     data_dir = Path(args.data_dir).expanduser().resolve() if args.data_dir else default_data_dir()
     data_dir.mkdir(parents=True, exist_ok=True)
     recover_orphaned_preparation(data_dir)
-    installed_torch_runtime = maybe_prepare_cuda_torch_runtime(data_dir)
+    installed_torch_runtime = maybe_prepare_torch_runtime(data_dir)
     detected_target = canonical_release_target_id(
         runtime_target_id_from_executable_name() or _fallback_runtime_target_id()
     )

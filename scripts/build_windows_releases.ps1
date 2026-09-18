@@ -27,21 +27,7 @@ function Resolve-AbsolutePath {
 function ConvertTo-CanonicalTargetId {
     param([string]$TargetId)
 
-    $normalized = $TargetId.Trim().ToLowerInvariant()
-    $aliases = @{
-        "windows-nvidia" = "windows-nvidia-cuda"
-        "windows-cuda" = "windows-nvidia-cuda"
-        "windows-intel" = "windows-intel-xpu"
-        "windows-xpu" = "windows-intel-xpu"
-        "windows-amd" = "windows-amd-rocm"
-        "windows-rocm" = "windows-amd-rocm"
-    }
-
-    if ($aliases.ContainsKey($normalized)) {
-        return $aliases[$normalized]
-    }
-
-    return $normalized
+    return $TargetId.Trim().ToLowerInvariant()
 }
 
 function Resolve-PythonCommand {

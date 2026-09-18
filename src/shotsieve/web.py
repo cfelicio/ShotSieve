@@ -42,7 +42,6 @@ from shotsieve.learned_iqa import (
 from shotsieve.preview import (
     MIN_RAW_THUMBNAIL_LONG_EDGE,
     preview_capabilities,
-    preview_name_candidates,
     stable_preview_name,
 )
 from shotsieve.review import (
@@ -360,7 +359,6 @@ def _build_route_dependencies() -> WebRouteDependencies:
         build_config=lambda *args, **kwargs: build_config(*args, **kwargs),
         is_within_any_root=route_is_within_any_root,
         stable_preview_name=lambda path: stable_preview_name(path),
-        preview_name_candidates=lambda path: list(preview_name_candidates(path)),
         guess_media_type=route_guess_media_type,
         utc_now=lambda: utc_now(),
         scan_root=route_scan_root,

@@ -1,15 +1,10 @@
 from __future__ import annotations
 
 import argparse
-import importlib
 import json
 import os
-import pkgutil
 import platform
 import subprocess
-import urllib.error
-import urllib.parse
-import urllib.request
 from pathlib import Path
 from typing import Any
 
@@ -45,73 +40,24 @@ from shotsieve.bootstrap_assets import (
     select_runtime_target,
     sha256_file,
 )
-from shotsieve.bootstrap_sidecar import (
-    DEFAULT_TORCH_AUTO_INSTALL_ENV,
-    DEFAULT_TORCH_SITE_PACKAGES_DIRNAME,
-    DISTUTILS_REPLACEMENT_WARNING_PATTERN,
-    PIP_UNEXPECTED_IMPORT_WARNING_PATTERN,
-    _coerce_pip_main_return_code,
-    _compose_pythonpath,
-    _confirm,
-    _install_learned_iqa_sidecar_with_embedded_pip,
-    _install_torch_sidecar_with_embedded_pip,
-    _is_interactive_console,
-    _learned_iqa_packages_for_runtime,
-    _load_embedded_pip_main,
-    _parse_env_bool,
-    _patch_distlib_finder_for_frozen,
-    _patch_pip_scriptmaker_for_embedded_install,
-    _path_has_pyiqa,
-    _path_has_torch,
-    _suppress_distutils_replacement_warning,
-    _suppress_embedded_pip_warnings,
-    _torch_install_index_args,
-    install_learned_iqa_sidecar,
-    install_torch_sidecar,
-    maybe_prepare_torch_runtime,
-    runtime_bundle_contains_torch,
-    sidecar_site_packages_candidates,
-    sidecar_site_packages_dir,
-    torch_install_plan,
-    torch_sidecar_is_valid,
-)
+from shotsieve import bootstrap_sidecar
 
 __all__ = [
     "APP_DIRNAME",
     "DEFAULT_DOWNLOAD_TIMEOUT_SECONDS",
     "DEFAULT_MANIFEST_URL",
     "DEFAULT_RELEASE_REPO",
-    "DEFAULT_TORCH_AUTO_INSTALL_ENV",
-    "DEFAULT_TORCH_SITE_PACKAGES_DIRNAME",
-    "DISTUTILS_REPLACEMENT_WARNING_PATTERN",
-    "PIP_UNEXPECTED_IMPORT_WARNING_PATTERN",
     "PORTABLE_RUNTIME_DIRNAME",
     "RuntimeAsset",
     "RuntimeAssetPart",
     "_build_default_latest_manifest",
-    "_coerce_pip_main_return_code",
-    "_compose_pythonpath",
-    "_confirm",
     "_download_archive_with_local_fallback",
     "_find_runtime_executable",
     "_frozen_colocated_runtime_executable",
-    "_install_learned_iqa_sidecar_with_embedded_pip",
-    "_install_torch_sidecar_with_embedded_pip",
-    "_is_interactive_console",
-    "_learned_iqa_packages_for_runtime",
-    "_load_embedded_pip_main",
     "_local_search_roots",
     "_manifest_fetch_error_message",
     "_normalize_manifest_location",
-    "_parse_env_bool",
-    "_patch_distlib_finder_for_frozen",
-    "_patch_pip_scriptmaker_for_embedded_install",
-    "_path_has_pyiqa",
-    "_path_has_torch",
     "_safe_join",
-    "_suppress_distutils_replacement_warning",
-    "_suppress_embedded_pip_warnings",
-    "_torch_install_index_args",
     "_try_manifest_from_latest_release_api",
     "build_parser",
     "build_plan",
@@ -122,25 +68,14 @@ __all__ = [
     "fetch_manifest",
     "find_local_runtime_archive",
     "github_token",
-    "importlib",
-    "install_learned_iqa_sidecar",
-    "install_torch_sidecar",
     "local_runtime_archive_candidates",
     "main",
-    "maybe_prepare_torch_runtime",
     "open_url",
     "parse_runtime_asset",
-    "pkgutil",
     "resolve_manifest_url",
-    "runtime_bundle_contains_torch",
     "select_manifest_asset",
     "select_runtime_target",
     "sha256_file",
-    "sidecar_site_packages_dir",
-    "sidecar_site_packages_candidates",
-    "torch_install_plan",
-    "torch_sidecar_is_valid",
-    "urllib",
 ]
 
 
@@ -151,7 +86,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--target",
         default=None,
-        help="Override runtime target id (for example windows-nvidia-cuda; legacy IDs remain accepted)",
+        help="Override runtime target id (for example windows-nvidia-cuda)",
     )
     parser.add_argument("--force-refresh", action="store_true", help="Redownload and reinstall the selected runtime pack")
     parser.add_argument("--print-plan", action="store_true", help="Print resolved bootstrap plan and exit")
@@ -239,7 +174,7 @@ def main() -> None:
 
     runtime_root = Path(plan["runtimeRoot"])
     install_dir = runtime_root / "installs" / runtime_asset.id
-    env_updates = maybe_prepare_torch_runtime(
+    env_updates = bootstrap_sidecar.maybe_prepare_torch_runtime(
         runtime_asset,
         install_dir=install_dir,
         runtime_root=runtime_root,

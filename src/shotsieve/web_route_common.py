@@ -101,7 +101,6 @@ class WebRouteDependencies:
     build_config: Callable[..., Any]
     is_within_any_root: Callable[[Path, list[Path]], bool]
     stable_preview_name: Callable[[Path], str]
-    preview_name_candidates: Callable[[Path], list[str]]
     guess_media_type: Callable[[str], tuple[str | None, str | None]]
     utc_now: Callable[[], str]
     scan_root: Callable[..., Any]
@@ -182,7 +181,6 @@ _FILE_DEPENDENCIES = frozenset({
     "media_path_for_file",
     "optional_string",
     "preview_missing_cache_entries",
-    "preview_name_candidates",
     "read_json_body",
     "required_choice",
     "required_int",

@@ -181,7 +181,7 @@ def generate_preview(
         )
 
     preview_dir.mkdir(parents=True, exist_ok=True)
-    preview_path, stale_preview_paths = preview_output_paths(source_path, preview_dir)
+    preview_path, _ = preview_output_paths(source_path, preview_dir)
 
     stderr_buffer = io.StringIO()
     header_warning: str | None = None
@@ -205,7 +205,6 @@ def generate_preview(
 
                 image.thumbnail(MAX_PREVIEW_SIZE, Image.Resampling.LANCZOS)
                 image.save(preview_path, format="JPEG", quality=85, optimize=False)
-                cleanup_stale_preview_paths(stale_preview_paths)
     except (OSError, UnidentifiedImageError, ValueError) as exc:
         issue_text = _format_decoder_issues(source_path, header_warning, stderr_buffer.getvalue())
         return PreviewResult(
@@ -230,16 +229,6 @@ def generate_preview(
     )
 
 
-def _prepare_standard_preview_image(image: Image.Image) -> Image.Image:
-    """Backward-compatible wrapper for the shared preview conversion policy.
-
-    This private name is not used by ShotSieve itself, but older integrations
-    may import it from the preview module. Keep the shim until a compatibility
-    review explicitly retires that import seam.
-    """
-    return prepare_image_for_rgb(image, apply_exif_orientation=False)
-
-
 def generate_raw_preview(
     source_path: Path,
     preview_dir: Path,
@@ -258,7 +247,7 @@ def generate_raw_preview(
         )
 
     preview_dir.mkdir(parents=True, exist_ok=True)
-    preview_path, stale_preview_paths = preview_output_paths(source_path, preview_dir)
+    preview_path, _ = preview_output_paths(source_path, preview_dir)
 
     stderr_buffer = io.StringIO()
     try:
@@ -284,7 +273,6 @@ def generate_raw_preview(
                     max_decode_pixels=max_decode_pixels,
                 )
                 if result is not None:
-                    cleanup_stale_preview_paths(stale_preview_paths)
                     result.error_text = _format_decoder_issues(
                         source_path,
                         result.error_text,
@@ -335,8 +323,6 @@ def generate_raw_preview(
         width, height = raw_width, raw_height
     image.thumbnail(MAX_PREVIEW_SIZE, Image.Resampling.LANCZOS)
     image.save(preview_path, format="JPEG", quality=85, optimize=False)
-    cleanup_stale_preview_paths(stale_preview_paths)
-
     issue_text = _format_decoder_issues(source_path, stderr_buffer.getvalue())
     _emit_nonfatal_issue(issue_text)
 
@@ -466,49 +452,9 @@ def stable_preview_name(source_path: Path) -> str:
     return sha1(normalize_resolved_path(source_path).encode("utf-8")).hexdigest()
 
 
-def preview_name_candidates(source_path: Path) -> tuple[str, ...]:
-    resolved_path = str(source_path.resolve())
-    hash_inputs = (
-        normalize_resolved_path(source_path),
-        resolved_path,
-        resolved_path.casefold(),
-    )
-    candidates: list[str] = []
-    seen: set[str] = set()
-    for hash_input in hash_inputs:
-        candidate = sha1(hash_input.encode("utf-8")).hexdigest()
-        if candidate in seen:
-            continue
-        seen.add(candidate)
-        candidates.append(candidate)
-    return tuple(candidates)
-
-
 def preview_output_paths(source_path: Path, preview_dir: Path) -> tuple[Path, tuple[Path, ...]]:
     preview_path = preview_dir / f"{stable_preview_name(source_path)}.jpg"
-    stale_candidate_names = stale_preview_cleanup_candidates(source_path)
-    stale_paths = tuple(
-        preview_dir / f"{candidate_name}.jpg"
-        for candidate_name in stale_candidate_names
-        if candidate_name != preview_path.stem
-    )
-    return preview_path, stale_paths
-
-
-def stale_preview_cleanup_candidates(source_path: Path) -> tuple[str, ...]:
-    legacy_name = sha1(str(source_path.resolve()).encode("utf-8")).hexdigest()
-    stable_name = stable_preview_name(source_path)
-    if legacy_name == stable_name:
-        return ()
-    return (legacy_name,)
-
-
-def cleanup_stale_preview_paths(paths: Sequence[Path]) -> None:
-    for path in paths:
-        try:
-            path.unlink(missing_ok=True)
-        except OSError:
-            continue
+    return preview_path, ()
 
 
 def delete_managed_preview_file(
@@ -516,7 +462,6 @@ def delete_managed_preview_file(
     *,
     source_path: str | Path | None = None,
     preview_cache_root: Path | None,
-    allow_path_parent_fallback: bool = False,
     suppress_errors: bool = False,
 ) -> bool:
     if preview_path is None:
@@ -543,18 +488,13 @@ def delete_managed_preview_file(
             raise
 
         if not _is_within_dir(resolved_preview, resolved_root):
-            if not allow_path_parent_fallback:
-                return False
-            resolved_root = resolved_preview.parent
+            return False
 
     cleanup_targets = [resolved_preview]
     if source_path is not None:
         resolved_source = Path(source_path).expanduser().resolve()
-        cleanup_targets = [
-            (resolved_root / f"{candidate_name}.jpg").resolve()
-            for candidate_name in preview_name_candidates(resolved_source)
-        ]
-        if resolved_preview not in cleanup_targets:
+        expected_preview = (resolved_root / f"{stable_preview_name(resolved_source)}.jpg").resolve()
+        if resolved_preview != expected_preview:
             return False
     elif not _looks_like_managed_preview_file(resolved_preview):
         return False

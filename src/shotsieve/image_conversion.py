@@ -30,10 +30,6 @@ DEFAULT_MAX_DECODE_PIXELS = 64_000_000
 MIN_MAX_DECODE_PIXELS = 1_000_000
 MAX_MAX_DECODE_PIXELS = 256_000_000
 
-# Compatibility name retained for integrations that imported the old
-# constant directly.
-MAX_DECODE_PIXELS = DEFAULT_MAX_DECODE_PIXELS
-
 _IMAGE_HEADER_WARNING_LOCK = threading.Lock()
 
 _HIGH_BIT_GRAYSCALE_MODES = {"I;16", "I;16L", "I;16B", "I;16N"}
@@ -49,7 +45,7 @@ class ImageDecodeLimitError(ValueError):
         width: int | None = None,
         height: int | None = None,
         detail: str | None = None,
-        max_pixels: int = MAX_DECODE_PIXELS,
+        max_pixels: int = DEFAULT_MAX_DECODE_PIXELS,
     ) -> None:
         self.path = Path(path)
         self.width = width
@@ -74,7 +70,7 @@ def enforce_decode_budget(
     width: int,
     height: int,
     *,
-    max_pixels: int = MAX_DECODE_PIXELS,
+    max_pixels: int = DEFAULT_MAX_DECODE_PIXELS,
 ) -> None:
     """Reject an image before a conversion can materialize its full pixels."""
     if width < 1 or height < 1:
@@ -194,7 +190,6 @@ __all__ = [
     "DEFAULT_MAX_DECODE_PIXELS",
     "IMAGE_CONVERSION_VERSION",
     "MAX_MAX_DECODE_PIXELS",
-    "MAX_DECODE_PIXELS",
     "MIN_MAX_DECODE_PIXELS",
     "TRANSPARENCY_MATTE",
     "enforce_decode_budget",

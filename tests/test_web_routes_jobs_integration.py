@@ -231,7 +231,7 @@ class TestWebRoutesJobsIntegration:
 
         response = urlopen(Request(
             f"{base_url}/api/models/prepare/start",
-            data=json.dumps({"model": "topiq-nr"}).encode("utf-8"),
+            data=json.dumps({"model": "topiq_nr"}).encode("utf-8"),
             headers={"Content-Type": "application/json"},
             method="POST",
         ))
