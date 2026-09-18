@@ -70,7 +70,10 @@ from shotsieve.bootstrap_sidecar import (
     install_torch_sidecar,
     maybe_prepare_torch_runtime,
     runtime_bundle_contains_torch,
+    sidecar_site_packages_candidates,
     sidecar_site_packages_dir,
+    torch_install_plan,
+    torch_sidecar_is_valid,
 )
 
 __all__ = [
@@ -134,6 +137,9 @@ __all__ = [
     "select_runtime_target",
     "sha256_file",
     "sidecar_site_packages_dir",
+    "sidecar_site_packages_candidates",
+    "torch_install_plan",
+    "torch_sidecar_is_valid",
     "urllib",
 ]
 

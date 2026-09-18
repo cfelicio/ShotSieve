@@ -351,14 +351,14 @@ function New-WindowsTargetBundle {
         [string]$ResolvedBuildRoot
     )
 
-    $cudaTarget = ([string]$Target.torchVariant).ToLowerInvariant() -eq "cuda"
     $hadSkipEnv = Test-Path Env:SHOTSIEVE_SKIP_BUNDLED_TORCH
     $previousSkipEnv = $env:SHOTSIEVE_SKIP_BUNDLED_TORCH
 
-    if ($cudaTarget) {
-        Write-Host "Configuring torchless CUDA bundle packaging for '$($Target.id)'..."
-        $env:SHOTSIEVE_SKIP_BUNDLED_TORCH = "1"
-    }
+    # Every portable target is a torchless runtime pack.  The target-specific
+    # build environment still installs Torch for PyInstaller analysis, but the
+    # final archive must load it from data/runtime/site-packages/<target-id>.
+    Write-Host "Configuring torchless runtime-pack packaging for '$($Target.id)'..."
+    $env:SHOTSIEVE_SKIP_BUNDLED_TORCH = "1"
 
     try {
         & $PythonCommand (Join-Path $ProjectRoot "scripts\build_portable_bundle.py") --target $Target.id --dist-root $ResolvedDistRoot --build-root $ResolvedBuildRoot

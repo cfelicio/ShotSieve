@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import importlib
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -28,6 +29,10 @@ class BundlePlan(TypedDict):
     pyinstallerWorkRoot: str
     distPath: str
     archivePath: str
+
+
+_MODEL_WEIGHT_SUFFIXES = frozenset({".pt", ".pth", ".ckpt", ".safetensors"})
+_TORCH_PACKAGE_NAMES = frozenset({"torch", "torchvision", "torchaudio", "functorch", "triton"})
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -107,6 +112,36 @@ def _prepare_staged_bundle_path(preferred_path: Path) -> Path:
     return _prepare_clean_directory_path(preferred_path, warning_prefix="staged bundle")
 
 
+def bundled_forbidden_paths(bundle_root: Path) -> list[Path]:
+    """Return model files and native Torch package paths in a release bundle."""
+    forbidden: list[Path] = []
+    for path in bundle_root.rglob("*"):
+        if not path.is_file():
+            continue
+        if path.suffix.casefold() in _MODEL_WEIGHT_SUFFIXES:
+            forbidden.append(path)
+            continue
+        relative_parts = {part.casefold() for part in path.relative_to(bundle_root).parts}
+        if relative_parts & _TORCH_PACKAGE_NAMES:
+            forbidden.append(path)
+            continue
+        name = path.name.casefold()
+        if any(name.startswith(package) for package in _TORCH_PACKAGE_NAMES):
+            forbidden.append(path)
+    return forbidden
+
+
+def assert_torchless_bundle(bundle_root: Path) -> None:
+    forbidden = bundled_forbidden_paths(bundle_root)
+    if forbidden:
+        paths = ", ".join(str(path) for path in forbidden[:20])
+        more = "" if len(forbidden) <= 20 else f" (and {len(forbidden) - 20} more)"
+        raise SystemExit(
+            "Portable runtime-pack bundle is not torchless or contains model weights: "
+            f"{paths}{more}"
+        )
+
+
 def build_bundle(target: ReleaseTarget, *, project_root: Path, dist_root: Path, build_root: Path) -> BundlePlan:
     plan = target_plan(target, project_root=project_root, dist_root=dist_root, build_root=build_root)
     pyinstaller_dist_root = Path(plan["pyinstallerDistRoot"])
@@ -132,22 +167,30 @@ def build_bundle(target: ReleaseTarget, *, project_root: Path, dist_root: Path, 
     plan["pyinstallerWorkRoot"] = str(pyinstaller_work_root)
     dist_root.mkdir(parents=True, exist_ok=True)
 
-    subprocess.run(
-        [
-            sys.executable,
-            "-m",
-            "PyInstaller",
-            "--noconfirm",
-            "--clean",
-            "--distpath",
-            str(pyinstaller_dist_root),
-            "--workpath",
-            str(pyinstaller_work_root),
-            str(spec_path),
-        ],
-        check=True,
-        cwd=project_root,
-    )
+    previous_skip_env = os.environ.get("SHOTSIEVE_SKIP_BUNDLED_TORCH")
+    os.environ["SHOTSIEVE_SKIP_BUNDLED_TORCH"] = "1"
+    try:
+        subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "PyInstaller",
+                "--noconfirm",
+                "--clean",
+                "--distpath",
+                str(pyinstaller_dist_root),
+                "--workpath",
+                str(pyinstaller_work_root),
+                str(spec_path),
+            ],
+            check=True,
+            cwd=project_root,
+        )
+    finally:
+        if previous_skip_env is None:
+            os.environ.pop("SHOTSIEVE_SKIP_BUNDLED_TORCH", None)
+        else:
+            os.environ["SHOTSIEVE_SKIP_BUNDLED_TORCH"] = previous_skip_env
 
     source_bundle = pyinstaller_dist_root / "ShotSieve"
     staged_bundle = _prepare_staged_bundle_path(staged_bundle)
@@ -158,6 +201,7 @@ def build_bundle(target: ReleaseTarget, *, project_root: Path, dist_root: Path, 
     if not launcher.exists():
         raise SystemExit(f"Expected launcher '{launcher}' was not created by PyInstaller")
     launcher.rename(staged_bundle / target.executableName)
+    assert_torchless_bundle(staged_bundle)
 
     if archive_path.exists():
         archive_path.unlink()

@@ -153,6 +153,27 @@ Default data location for downloaded bundles:
 
 Installed packages outside a source checkout still fall back to an OS-level app data location (`%LOCALAPPDATA%\ShotSieve` on Windows, falling back to `%APPDATA%` if needed, otherwise `~/.shotsieve`). On any install style, `--data-dir` overrides the default.
 
+### Torchless portable runtime packs
+
+Portable archives no longer bundle PyTorch or model weights. The launcher
+derives its target from its name and, only after interactive consent or an
+explicit `SHOTSIEVE_BOOTSTRAP_AUTO_INSTALL_TORCH=1`, installs the pinned
+CPU/CUDA/XPU/ROCm/MPS runtime into
+`data/runtime/site-packages/<target-id>`. A noninteractive launch does not
+download a runtime by default; offline, declined, or failed setup leaves
+learned-IQA unavailable while Catalog and Review continue to work. Install
+logs and durable sidecar state remain under `data/runtime/`, and interrupted
+or concurrent installs are retried safely.
+
+CPU and CUDA use the repository's pinned PyTorch indexes, XPU uses the pinned
+official XPU index, and Windows/Linux ROCm uses AMD's exact published wheels
+and SDK sources. These paths still require the matching vendor drivers and
+hardware; see [intel-xpu.md](docs/intel-xpu.md),
+[amd-rocm.md](docs/amd-rocm.md), and [building.md](docs/building.md) for
+prerequisites and validation. Apple MPS requires supported Apple Silicon and
+macOS. Model weights are still downloaded separately by **Prepare selected
+model** or on first use and are never part of a release archive.
+
 ## How you use it
 
 The intended workflow is simple and visual:

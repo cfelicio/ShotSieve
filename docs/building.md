@@ -120,12 +120,46 @@ Release manifests are generated from the exact built archives with `scripts/gene
 
 This check covers archives acquired by the bootstrap path. An explicitly supplied or colocated executable in a frozen bundle is a separate trust boundary and is accepted as supplied; the bootstrap does not hash that executable. Verify the containing bundle through its distribution channel when using that path.
 
-Optional AI runtime packages are not downloaded during an ordinary noninteractive `shotsieve-desktop` launch. ShotSieve still opens the catalog and Review UI when learned-IQA support is missing or broken. Interactive launches may prompt before installing the runtime dependencies; deliberate startup automation remains available through the `SHOTSIEVE_BOOTSTRAP_AUTO_INSTALL_*` environment variables. Runtime installation is separate from **Prepare selected model**, which may download model weights and performs the existing first-use validation on CPU-compatible models or the selected accelerator for Q-ReAlign Mini.
+Portable release archives are torchless for every target. The build environment
+still installs the target's pinned Torch stack so PyInstaller can analyze
+imports, but the archive contains no `torch`, `torchvision`, `torchaudio`,
+`functorch`, `triton`, or model-weight files. On first use, the frozen launcher
+identifies its target from its executable name and may install the matching
+runtime into `data/runtime/site-packages/<target-id>`. The sidecar is published
+atomically only after the required package is present; an install lock,
+completion marker, retry-safe staging directory, and `pip-install.log` make
+interrupted or concurrent installs recoverable.
+
+Optional AI runtime packages are not downloaded during an ordinary
+noninteractive `shotsieve-desktop` launch. ShotSieve still opens the catalog
+and Review UI when learned-IQA support is missing or broken. Interactive
+launches may prompt before installing the runtime dependencies; deliberate
+startup automation is available through
+`SHOTSIEVE_BOOTSTRAP_AUTO_INSTALL_TORCH=1` and
+`SHOTSIEVE_BOOTSTRAP_AUTO_INSTALL_LEARNED_IQA=1`. Setting either variable to
+`0`, running offline, declining the prompt, or encountering a failed download
+leaves learned-IQA unavailable without blocking Catalog or Review.
+
+The sidecar plans are target-specific: Windows/Linux CPU use the pinned PyTorch
+CPU index, NVIDIA targets use the pinned cu130 index, Intel XPU targets use
+the pinned XPU index, Linux and Windows AMD targets use AMD's exact ROCm 7.2.1
+wheels/SDK packages, and macOS CPU/MPS targets use the supported default
+PyTorch packages. CUDA requires a compatible NVIDIA driver and wheel
+architecture; XPU and ROCm require the vendor driver/device combinations in
+[intel-xpu.md](./intel-xpu.md) and [amd-rocm.md](./amd-rocm.md); MPS requires
+supported Apple Silicon/macOS hardware. No XPU or ROCm path silently falls
+back to generic PyPI Torch wheels.
+
+Runtime installation is separate from **Prepare selected model**, which may
+download model weights and performs the existing first-use validation on
+CPU-compatible models or the selected accelerator for Q-ReAlign Mini. Model
+weights remain in the configured upstream caches and are never bundled in a
+portable archive.
 
 Startup automation remains available when explicitly configured:
 
-- `SHOTSIEVE_BOOTSTRAP_AUTO_INSTALL_TORCH=1` to auto-install CUDA-sidecar PyTorch without prompting
-- `SHOTSIEVE_BOOTSTRAP_AUTO_INSTALL_TORCH=0` to skip the CUDA-sidecar install step
+- `SHOTSIEVE_BOOTSTRAP_AUTO_INSTALL_TORCH=1` to auto-install the selected target's PyTorch sidecar without prompting
+- `SHOTSIEVE_BOOTSTRAP_AUTO_INSTALL_TORCH=0` to skip the selected target's sidecar install step
 - `SHOTSIEVE_BOOTSTRAP_AUTO_INSTALL_LEARNED_IQA=1` to auto-install learned-IQA dependencies without prompting
 - `SHOTSIEVE_BOOTSTRAP_AUTO_INSTALL_LEARNED_IQA=0` to skip the learned-IQA install step
 
@@ -319,7 +353,7 @@ After all runtime-pack build jobs finish, the release workflow runs `scripts/gen
 
 If a release build succeeds but publishing is interrupted, open the `ci-release`
 workflow under Actions, choose **Run workflow** on `main`, and enter the
-existing tag in `release_tag` (for example, `v0.4.5`). This recovery path
+existing tag in `release_tag` (for example, `v0.4.6`). This recovery path
 rebuilds the artifacts and updates the release for that tag. The publish step
 uses the Node 24-compatible `softprops/action-gh-release` runtime and can be
 rerun without changing the tag.

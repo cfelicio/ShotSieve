@@ -229,15 +229,15 @@ def test_prepare_release_assets_splits_only_oversized_runtime_archives(tmp_path:
         archive_path = source_root / target.id / target.archiveName
         archive_path.parent.mkdir(parents=True)
         archive_path.write_bytes(b"0123456789ABC" if target.id == split_target.id else b"small")
-    (source_root / "python-dist" / "shotsieve-0.4.5.tar.gz").parent.mkdir()
-    (source_root / "python-dist" / "shotsieve-0.4.5.tar.gz").write_bytes(b"sdist")
+    (source_root / "python-dist" / "shotsieve-0.4.6.tar.gz").parent.mkdir()
+    (source_root / "python-dist" / "shotsieve-0.4.6.tar.gz").write_bytes(b"sdist")
 
     published = module.prepare_release_assets(source_root=source_root, output_root=output_root)
 
     split_parts = sorted(output_root.rglob(f"{split_target.archiveName}.part-*"))
     assert [part.read_bytes() for part in split_parts] == [b"0123", b"4567", b"89AB", b"C"]
     assert not (source_root / split_target.id / split_target.archiveName).exists()
-    assert (output_root / "python-dist" / "shotsieve-0.4.5.tar.gz").read_bytes() == b"sdist"
+    assert (output_root / "python-dist" / "shotsieve-0.4.6.tar.gz").read_bytes() == b"sdist"
     assert set(published) == set(output_root.rglob("*")) - {path for path in output_root.rglob("*") if path.is_dir()}
 
 

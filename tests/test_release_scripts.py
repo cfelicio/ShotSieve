@@ -193,6 +193,18 @@ def test_integrated_release_script_marks_cuda_targets_to_skip_bundled_torch() ->
     assert "TargetIds" in script_text
 
 
+def test_every_portable_target_is_built_with_torchless_packaging() -> None:
+    script_text = SCRIPT_PATH.read_text(encoding="utf-8")
+    workflow_text = (PROJECT_ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
+    bundle_text = BUNDLE_SCRIPT_PATH.read_text(encoding="utf-8")
+
+    assert 'Configuring torchless runtime-pack packaging' in script_text
+    assert 'SHOTSIEVE_SKIP_BUNDLED_TORCH: "1"' in workflow_text
+    assert 'os.environ["SHOTSIEVE_SKIP_BUNDLED_TORCH"] = "1"' in bundle_text
+    assert "assert_torchless_bundle" in bundle_text
+    assert ".safetensors" in bundle_text
+
+
 def test_integrated_release_script_has_native_accelerator_install_paths() -> None:
     script_text = SCRIPT_PATH.read_text(encoding="utf-8")
 

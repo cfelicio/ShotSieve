@@ -2,6 +2,23 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.4.6] - 2026-09-17
+
+### Changed
+
+- Portable runtime-pack archives are now torchless for every CPU, CUDA, Intel
+  XPU, AMD ROCm, and Apple MPS target.  PyTorch, torchvision, torchaudio,
+  functorch, and triton are prepared into a target-specific sidecar under
+  `data/runtime/site-packages/<target-id>` on first use or when explicitly
+  enabled.
+- Runtime preparation now uses durable per-target plans, atomic publication,
+  install locks, completion markers, retry-safe staging, and retained pip
+  logs. XPU and ROCm sidecars use their pinned vendor indexes/wheels rather
+  than generic PyPI packages.
+- Catalog and Review remain available when runtime installation is declined,
+  offline, unavailable, or fails. Model weights remain separate downloads and
+  are never bundled in portable archives.
+
 ## [0.4.5] - 2026-09-17
 
 ### Changed

@@ -1,26 +1,47 @@
 from __future__ import annotations
 
 import contextlib
+import errno
 import hashlib
 import importlib
 import io
+import json
 import os
+import platform
 import pkgutil
 import shutil
 import sys
 import tarfile
+import tempfile
+import time
 import traceback
 import urllib.request
 import warnings
 from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any
 
 from shotsieve import runtime_support
-from shotsieve.dependency_constraints import COMMON_MODEL_REQUIREMENTS, TORCH_REQUIREMENTS
+from shotsieve.dependency_constraints import (
+    COMMON_MODEL_REQUIREMENTS,
+    PYTORCH_CPU_INDEX_URL,
+    PYTORCH_CUDA_INDEX_URL,
+    PYTORCH_XPU_INDEX_URL,
+    ROCM_LINUX_PACKAGE_URLS,
+    ROCM_WINDOWS_PACKAGE_URLS,
+    TORCH_REQUIREMENTS,
+    XPU_TORCH_REQUIREMENTS,
+)
+from shotsieve.release_targets import canonical_release_target_id, release_target_id_aliases
 
 DEFAULT_TORCH_AUTO_INSTALL_ENV = "SHOTSIEVE_BOOTSTRAP_AUTO_INSTALL_TORCH"
 DEFAULT_TORCH_SITE_PACKAGES_DIRNAME = "site-packages"
+SIDECAR_STATE_FILENAME = ".shotsieve-runtime.json"
+SIDECAR_LOCK_SUFFIX = ".install.lock"
+SIDECAR_STATE_VERSION = 1
+SIDECAR_LOCK_TIMEOUT_SECONDS = 300.0
+SIDECAR_LOCK_POLL_SECONDS = 0.2
 DISTUTILS_REPLACEMENT_WARNING_PATTERN = r"Setuptools is replacing distutils\..*"
 PIP_UNEXPECTED_IMPORT_WARNING_PATTERN = r"DEPRECATION: Unexpected import of '.*' after pip install started\..*"
 
@@ -55,6 +76,42 @@ _OPENAI_CLIP_SOURCE_URL = (
 _OPENAI_CLIP_SOURCE_SHA256 = "cd40bf2f205c096c49524fcbff484339f793b52afd6e7ffad80a2fe108151721"
 _OPENAI_CLIP_SOURCE_ROOT = "openai-clip-1.0.1"
 _OPENAI_CLIP_DIST_INFO = "openai_clip-1.0.1.dist-info"
+
+
+@dataclass(frozen=True, slots=True)
+class TorchInstallPlan:
+    """The complete source contract for one target's torch sidecar."""
+
+    target_id: str
+    platform: str
+    runtime: str
+    packages: tuple[str, ...]
+    index_args: tuple[str, ...]
+
+    @property
+    def source_fingerprint(self) -> str:
+        payload = json.dumps(
+            {
+                "target_id": self.target_id,
+                "platform": self.platform,
+                "runtime": self.runtime,
+                "packages": self.packages,
+                "index_args": self.index_args,
+            },
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode("utf-8")
+        return hashlib.sha256(payload).hexdigest()
+
+    def to_json(self) -> dict[str, object]:
+        return {
+            "target_id": self.target_id,
+            "platform": self.platform,
+            "runtime": self.runtime,
+            "packages": list(self.packages),
+            "index_args": list(self.index_args),
+            "source_fingerprint": self.source_fingerprint,
+        }
 
 
 def _distribution_name(requirement: str) -> str:
@@ -172,6 +229,223 @@ def sidecar_site_packages_dir(runtime_root: Path, target_id: str) -> Path:
     return runtime_root / DEFAULT_TORCH_SITE_PACKAGES_DIRNAME / target_id
 
 
+def sidecar_site_packages_candidates(runtime_root: Path, target_id: str) -> tuple[Path, ...]:
+    """Return canonical and legacy sidecar locations, canonical first."""
+    return tuple(
+        sidecar_site_packages_dir(runtime_root, candidate)
+        for candidate in release_target_id_aliases(target_id)
+    )
+
+
+def _target_parts(target_id: str | None, runtime: str | None) -> tuple[str, str, str]:
+    raw_target = str(target_id or "").strip().casefold()
+    canonical_target = canonical_release_target_id(raw_target) if raw_target else ""
+    normalized_runtime = str(runtime or "").strip().casefold()
+
+    if canonical_target:
+        if canonical_target.startswith("windows-"):
+            target_platform = "windows"
+        elif canonical_target.startswith("linux-"):
+            target_platform = "linux"
+        elif canonical_target.startswith("macos-"):
+            target_platform = "macos"
+        else:
+            target_platform = platform.system().casefold()
+        if canonical_target.endswith("-nvidia-cuda"):
+            normalized_runtime = "cuda"
+        elif canonical_target.endswith("-intel-xpu"):
+            normalized_runtime = "xpu"
+        elif canonical_target.endswith("-amd-rocm"):
+            normalized_runtime = "rocm"
+        elif canonical_target.endswith("-apple-mps"):
+            normalized_runtime = "mps"
+        elif canonical_target.endswith("-cpu"):
+            normalized_runtime = "cpu"
+    else:
+        target_platform = platform.system().casefold()
+        if target_platform == "darwin":
+            target_platform = "macos"
+
+    if target_platform == "darwin":
+        target_platform = "macos"
+    if not canonical_target:
+        platform_prefix = {
+            "windows": "windows",
+            "linux": "linux",
+            "macos": "macos",
+        }.get(target_platform, target_platform)
+        suffix = {
+            "cuda": "nvidia-cuda",
+            "xpu": "intel-xpu",
+            "rocm": "amd-rocm",
+            "mps": "apple-mps",
+            "cpu": "cpu",
+        }.get(normalized_runtime, "cpu")
+        canonical_target = f"{platform_prefix}-{suffix}"
+
+    return canonical_target, target_platform, normalized_runtime or "cpu"
+
+
+def torch_install_plan(
+    *,
+    target_id: str | None = None,
+    runtime: str | None = None,
+    platform_name: str | None = None,
+) -> TorchInstallPlan:
+    """Resolve the exact pinned torch source for a target.
+
+    The plan is intentionally explicit: direct ROCm URLs and the XPU index
+    are part of the plan, so a missing vendor source is never replaced with a
+    generic PyPI resolution.
+    """
+    resolved_target, target_platform, resolved_runtime = _target_parts(target_id, runtime)
+    if platform_name:
+        target_platform = platform_name.strip().casefold()
+        if target_platform == "darwin":
+            target_platform = "macos"
+
+    if resolved_runtime == "cuda":
+        packages = TORCH_REQUIREMENTS
+        index_args = ("--index-url", PYTORCH_CUDA_INDEX_URL, "--trusted-host", "download.pytorch.org")
+    elif resolved_runtime == "xpu":
+        packages = XPU_TORCH_REQUIREMENTS
+        index_args = (
+            "--index-url",
+            PYTORCH_XPU_INDEX_URL,
+            "--extra-index-url",
+            "https://pypi.org/simple",
+        )
+    elif resolved_runtime == "rocm":
+        if target_platform == "windows":
+            packages = ROCM_WINDOWS_PACKAGE_URLS
+        elif target_platform == "linux":
+            packages = ROCM_LINUX_PACKAGE_URLS
+        else:
+            raise ValueError(f"ROCm is not supported for target platform '{target_platform}'.")
+        index_args = ("--trusted-host", "repo.radeon.com")
+    elif resolved_runtime == "cpu" and target_platform in {"windows", "linux"}:
+        packages = TORCH_REQUIREMENTS
+        index_args = ("--index-url", PYTORCH_CPU_INDEX_URL, "--trusted-host", "download.pytorch.org")
+    elif resolved_runtime in {"cpu", "mps", "default"}:
+        packages = TORCH_REQUIREMENTS
+        index_args = ()
+    else:
+        raise ValueError(f"Unsupported torch runtime '{resolved_runtime}'.")
+
+    return TorchInstallPlan(
+        target_id=resolved_target,
+        platform=target_platform,
+        runtime=resolved_runtime,
+        packages=tuple(packages),
+        index_args=tuple(index_args),
+    )
+
+
+def sidecar_state_path(site_packages: Path) -> Path:
+    return site_packages / SIDECAR_STATE_FILENAME
+
+
+def _read_sidecar_state(site_packages: Path) -> dict[str, object] | None:
+    try:
+        payload = json.loads(sidecar_state_path(site_packages).read_text(encoding="utf-8"))
+    except (FileNotFoundError, OSError, json.JSONDecodeError):
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+def _write_json_atomically(path: Path, payload: dict[str, object]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    temporary.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    os.replace(temporary, path)
+
+
+def _write_sidecar_state(site_packages: Path, plan: TorchInstallPlan, *, learned_iqa: bool = False) -> None:
+    payload = _read_sidecar_state(site_packages) or {}
+    payload.update(
+        {
+            "schema": SIDECAR_STATE_VERSION,
+            "kind": "runtime",
+            "complete": True,
+            "installed_at": time.time(),
+            "plan": plan.to_json(),
+        }
+    )
+    payload["learned_iqa_complete" if learned_iqa else "torch_complete"] = True
+    _write_json_atomically(sidecar_state_path(site_packages), payload)
+
+
+def torch_sidecar_is_valid(site_packages: Path, *, target_id: str | None = None, runtime: str | None = None) -> bool:
+    """Reject interrupted/mismatched installs while reading legacy sidecars."""
+    if not (site_packages / "torch" / "__init__.py").is_file():
+        return False
+
+    state = _read_sidecar_state(site_packages)
+    if state is None:
+        # Releases before the durable marker existed are accepted for upgrade
+        # compatibility when the package has a real __init__.py.  New writes
+        # always create a marker, so incomplete installs cannot become valid.
+        return True
+
+    plan = torch_install_plan(target_id=target_id or site_packages.name, runtime=runtime)
+    stored_plan = state.get("plan")
+    return bool(
+        state.get("schema") == SIDECAR_STATE_VERSION
+        and state.get("kind") in {"torch", "runtime"}
+        and state.get("complete") is True
+        and state.get("torch_complete", state.get("kind") == "torch") is True
+        and isinstance(stored_plan, dict)
+        and stored_plan.get("target_id") == plan.target_id
+        and stored_plan.get("source_fingerprint") == plan.source_fingerprint
+    )
+
+
+@contextlib.contextmanager
+def _sidecar_install_lock(site_packages: Path):
+    """Use an atomic lock file so two launches cannot write one sidecar."""
+    lock_path = site_packages.with_name(f".{site_packages.name}{SIDECAR_LOCK_SUFFIX}")
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    deadline = time.monotonic() + SIDECAR_LOCK_TIMEOUT_SECONDS
+    handle = None
+    while handle is None:
+        try:
+            handle = lock_path.open("x", encoding="utf-8")
+            handle.write(f"pid={os.getpid()}\n")
+            handle.flush()
+        except FileExistsError:
+            # A process killed during a download cannot run the finally block.
+            # Reclaim only a lock whose recorded owner is no longer alive;
+            # active installs continue to block until the normal timeout.
+            try:
+                owner_text = lock_path.read_text(encoding="utf-8")
+                owner_value = owner_text.partition("=")[2].strip()
+                if owner_value:
+                    os.kill(int(owner_value), 0)
+            except (FileNotFoundError, ProcessLookupError):
+                try:
+                    lock_path.unlink(missing_ok=True)
+                except OSError:
+                    pass
+            except ValueError:
+                pass
+            except OSError as exc:
+                if exc.errno == errno.ESRCH:
+                    try:
+                        lock_path.unlink(missing_ok=True)
+                    except OSError:
+                        pass
+            if time.monotonic() >= deadline:
+                raise TimeoutError(f"Timed out waiting for sidecar install lock '{lock_path}'.")
+            time.sleep(SIDECAR_LOCK_POLL_SECONDS)
+    try:
+        yield
+    finally:
+        try:
+            handle.close()
+        finally:
+            lock_path.unlink(missing_ok=True)
+
+
 _runtime_support = runtime_support.shared_runtime_support
 _path_has_torch = _runtime_support.path_has_torch
 _path_has_pyiqa = _runtime_support.path_has_pyiqa
@@ -197,27 +471,11 @@ _confirm = _runtime_support.confirm
 
 
 def _torch_install_index_args(runtime: str) -> list[str]:
-    normalized = runtime.casefold()
-    if normalized == "cuda":
-        return [
-            "--index-url",
-            "https://download.pytorch.org/whl/cu130",
-            "--trusted-host",
-            "download.pytorch.org",
-        ]
-    if normalized == "cpu":
-        return [
-            "--index-url",
-            "https://download.pytorch.org/whl/cpu",
-            "--trusted-host",
-            "download.pytorch.org",
-        ]
-    return []
+    return list(torch_install_plan(runtime=runtime).index_args)
 
 
 def _torch_packages_for_runtime(runtime: str) -> tuple[str, ...]:
-    _ = runtime
-    return TORCH_REQUIREMENTS
+    return torch_install_plan(runtime=runtime).packages
 
 
 def _patch_distlib_finder_for_frozen() -> None:
@@ -352,6 +610,27 @@ def _coerce_pip_main_return_code(result: object) -> int:
     return 1
 
 
+def _commit_staged_sidecar(staging_dir: Path, site_packages: Path) -> None:
+    """Publish a completed install without exposing its partial contents."""
+    previous_dir = site_packages.with_name(f".{site_packages.name}.previous-{os.getpid()}")
+    if previous_dir.exists():
+        shutil.rmtree(previous_dir, ignore_errors=True)
+
+    moved_previous = False
+    try:
+        if site_packages.exists():
+            site_packages.rename(previous_dir)
+            moved_previous = True
+        staging_dir.rename(site_packages)
+    except Exception:
+        if moved_previous and not site_packages.exists() and previous_dir.exists():
+            previous_dir.rename(site_packages)
+        raise
+    finally:
+        if previous_dir.exists():
+            shutil.rmtree(previous_dir, ignore_errors=True)
+
+
 def _install_torch_sidecar_with_embedded_pip(
     *,
     runtime: str,
@@ -370,12 +649,16 @@ def _install_torch_sidecar_with_embedded_pip(
     if pip_main is None:
         return None
 
-    site_packages.mkdir(parents=True, exist_ok=True)
+    site_packages.parent.mkdir(parents=True, exist_ok=True)
     pip_log_path = site_packages / "pip-install.log"
+    site_packages.mkdir(parents=True, exist_ok=True)
     try:
         pip_log_path.touch(exist_ok=True)
     except OSError:
         pass
+
+    plan = torch_install_plan(target_id=site_packages.name, runtime=runtime)
+    staging_dir = Path(tempfile.mkdtemp(prefix=f".{site_packages.name}.install-", dir=site_packages.parent))
 
     def _append_debug_log(
         *,
@@ -407,7 +690,6 @@ def _install_torch_sidecar_with_embedded_pip(
 
     def _run_pip_install(package_names: tuple[str, ...]) -> int:
         package_label = " ".join(package_names)
-        idx_args_func = _battr("_torch_install_index_args", _torch_install_index_args)
         install_args = [
             "install",
             "--disable-pip-version-check",
@@ -417,9 +699,9 @@ def _install_torch_sidecar_with_embedded_pip(
             "--log",
             str(pip_log_path),
             "--target",
-            str(site_packages),
+            str(staging_dir),
             *package_names,
-            *idx_args_func(runtime),
+            *plan.index_args,
         ]
         if force_reinstall:
             install_args.insert(1, "--force-reinstall")
@@ -454,23 +736,68 @@ def _install_torch_sidecar_with_embedded_pip(
         return return_code
 
     has_torch_func = _battr("_path_has_torch", _path_has_torch)
-    torch_return_code = _run_pip_install(_torch_packages_for_runtime(runtime))
-    if torch_return_code != 0:
-        if has_torch_func(site_packages):
-            output_func(
-                "PyTorch installation completed with a non-fatal cleanup issue. "
-                "Continuing with the detected runtime package."
+    try:
+        with _sidecar_install_lock(site_packages):
+            # Another process may have completed the exact install while this
+            # process waited for the lock.
+            if not force_reinstall and torch_sidecar_is_valid(
+                site_packages,
+                target_id=plan.target_id,
+                runtime=plan.runtime,
+            ):
+                return True
+
+            torch_return_code = _run_pip_install(plan.packages)
+            if torch_return_code != 0:
+                output_func(
+                    "PyTorch runtime installation failed with exit code "
+                    f"{torch_return_code}. Check {pip_log_path} for details."
+                )
+                output_func("PyTorch installation failed. The app will continue without learned models.")
+                return False
+
+            if not has_torch_func(staging_dir):
+                output_func(
+                    "PyTorch installation returned success but the staged sidecar is incomplete. "
+                    f"Check {pip_log_path} for details."
+                )
+                return False
+
+            # Keep the durable log inside the published target directory even
+            # though pip itself writes while the target is staged.
+            try:
+                shutil.copy2(pip_log_path, staging_dir / "pip-install.log")
+            except OSError:
+                pass
+            _write_sidecar_state(staging_dir, plan)
+            _commit_staged_sidecar(staging_dir, site_packages)
+            state = _read_sidecar_state(site_packages) or {}
+            stored_plan = state.get("plan")
+            return bool(
+                has_torch_func(site_packages)
+                and state.get("schema") == SIDECAR_STATE_VERSION
+                and state.get("complete") is True
+                and isinstance(stored_plan, dict)
+                and stored_plan.get("source_fingerprint") == plan.source_fingerprint
             )
-            return True
-
-        output_func(
-            "PyTorch runtime installation failed with exit code "
-            f"{torch_return_code}. Check {pip_log_path} for details."
-        )
-        output_func("PyTorch installation failed. The app will continue without GPU-accelerated learned models.")
+    except TimeoutError as exc:
+        output_func(f"PyTorch runtime installation is already in progress: {exc}")
         return False
-
-    return has_torch_func(site_packages)
+    except Exception:
+        output_func(
+            "PyTorch runtime installation failed unexpectedly. "
+            f"Check {pip_log_path} for details."
+        )
+        try:
+            with pip_log_path.open("a", encoding="utf-8", errors="replace") as log_file:
+                log_file.write("--- sidecar bootstrap exception ---\n")
+                log_file.write(traceback.format_exc())
+        except OSError:
+            pass
+        return False
+    finally:
+        if staging_dir.exists():
+            shutil.rmtree(staging_dir, ignore_errors=True)
 
 
 def install_torch_sidecar(
@@ -679,12 +1006,23 @@ def install_learned_iqa_sidecar(
     force_reinstall: bool = False,
 ) -> bool:
     sidecar_func = _battr("_install_learned_iqa_sidecar_with_embedded_pip", _install_learned_iqa_sidecar_with_embedded_pip)
-    embedded_install_result = sidecar_func(
-        runtime=runtime,
-        site_packages=site_packages,
-        force_reinstall=force_reinstall,
-        output_func=output_func,
-    )
+    try:
+        with _sidecar_install_lock(site_packages):
+            embedded_install_result = sidecar_func(
+                runtime=runtime,
+                site_packages=site_packages,
+                force_reinstall=force_reinstall,
+                output_func=output_func,
+            )
+            if embedded_install_result and _path_has_pyiqa(site_packages):
+                _write_sidecar_state(
+                    site_packages,
+                    torch_install_plan(target_id=site_packages.name, runtime=runtime),
+                    learned_iqa=True,
+                )
+    except TimeoutError as exc:
+        output_func(f"Learned IQA installation is already in progress: {exc}")
+        return False
     if embedded_install_result is None:
         output_func(
             "Bundled pip runtime installer is unavailable in this build. "
@@ -710,10 +1048,17 @@ def maybe_prepare_torch_runtime(
     if contains_func(install_dir):
         return {}
 
-    sidecar_dir_func = _battr("sidecar_site_packages_dir", sidecar_site_packages_dir)
+    sidecar_candidates_func = _battr("sidecar_site_packages_candidates", sidecar_site_packages_candidates)
     has_torch_func = _battr("_path_has_torch", _path_has_torch)
-    site_packages = sidecar_dir_func(runtime_root, asset.id)
-    if has_torch_func(site_packages):
+    site_packages = next(
+        (
+            candidate
+            for candidate in sidecar_candidates_func(runtime_root, asset.id)
+            if torch_sidecar_is_valid(candidate, target_id=asset.id, runtime=asset.runtime)
+        ),
+        sidecar_candidates_func(runtime_root, asset.id)[0],
+    )
+    if torch_sidecar_is_valid(site_packages, target_id=asset.id, runtime=asset.runtime) and has_torch_func(site_packages):
         compose_func = _battr("_compose_pythonpath", _compose_pythonpath)
         return {"PYTHONPATH": compose_func(existing=os.environ.get("PYTHONPATH"), prepend_path=site_packages)}
 

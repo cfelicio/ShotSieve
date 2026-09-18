@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       release_tag:
-        description: Existing or new version tag to publish (for example, v0.4.5)
+        description: Existing or new version tag to publish (for example, v0.4.6)
         required: true
         type: string
 
@@ -221,7 +221,10 @@ jobs:
 
       - name: Build portable bundle
         env:
-          SHOTSIEVE_SKIP_BUNDLED_TORCH: ${{ matrix.torchVariant == 'cuda' && '1' || '' }}
+          # All portable archives are torchless.  Torch remains installed in
+          # the build environment so PyInstaller can analyze learned-IQA
+          # imports, but it is excluded from the published archive.
+          SHOTSIEVE_SKIP_BUNDLED_TORCH: "1"
         run: |
           python scripts/build_portable_bundle.py --target ${{ matrix.id }}
 
@@ -248,6 +251,13 @@ jobs:
           if ($bundledWeights) {
             $paths = ($bundledWeights | ForEach-Object { $_.FullName }) -join ", "
             throw "Model weight files must not be bundled in a portable release: $paths"
+          }
+
+          $bundledTorch = Get-ChildItem -LiteralPath $plan.distPath -Recurse -File |
+            Where-Object { $_.FullName -match '(?i)(\\|/)(torch|torchvision|torchaudio|functorch|triton)(\\|/)' -or $_.Name -match '(?i)^(torch|torchvision|torchaudio|functorch|triton)' }
+          if ($bundledTorch) {
+            $paths = ($bundledTorch | ForEach-Object { $_.FullName }) -join ", "
+            throw "PyTorch packages and native libraries must not be bundled in a portable release: $paths"
           }
 
           & $launcher --help | Out-Null
