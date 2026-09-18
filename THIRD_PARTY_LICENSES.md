@@ -16,7 +16,7 @@ files, and any base model can have different terms. The exact package versions
 used by a release must be taken from that release's target constraints and
 audited before publication. The current tested model integration selection is
 `pyiqa==0.1.16`, `timm==1.0.29`, `huggingface-hub==1.31.0`,
-`transformers==5.17.0`, and `openai-clip==1.0.1`; supported targets use
+`transformers==5.14.1`, and `openai-clip==1.0.1`; supported targets use
 `torch==2.14.0` and `torchvision==0.29.0`. The retired legacy GPU package and
 target are not part of the supported dependency or release matrix. The
 AMD targets use AMD-published ROCm 7.2.1 Torch wheels documented in

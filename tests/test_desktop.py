@@ -443,6 +443,28 @@ def test_learned_iqa_runtime_diagnostic_suggests_sympy_package(
     assert "suggested package: sympy" in diagnostic
 
 
+def test_learned_iqa_runtime_diagnostic_probes_qrealign_transformers_import(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(desktop_module.importlib.util, "find_spec", lambda name: object() if name == "pyiqa" else None)
+
+    def fake_import_module(name: str):
+        if name == "pyiqa":
+            return object()
+        if name == "transformers":
+            raise RuntimeError(
+                "Could not import module 'AutoModelForImageTextToText'. Are this object's requirements defined correctly?"
+            )
+        raise ImportError(name)
+
+    monkeypatch.setattr(desktop_module.importlib, "import_module", fake_import_module)
+
+    diagnostic = desktop_module._learned_iqa_runtime_import_diagnostic()
+
+    assert diagnostic is not None
+    assert "AutoModelForImageTextToText" in diagnostic
+
+
 def test_runtime_has_learned_iqa_refreshes_import_caches_before_detection(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -459,6 +481,8 @@ def test_runtime_has_learned_iqa_refreshes_import_caches_before_detection(
     def fake_import_module(name: str):
         if name == "pyiqa" and state["invalidated"]:
             return object()
+        if name == "transformers" and state["invalidated"]:
+            return SimpleNamespace(AutoModelForImageTextToText=object())
         raise ImportError(name)
 
     monkeypatch.setattr(desktop_module.importlib, "invalidate_caches", fake_invalidate_caches)
@@ -481,6 +505,8 @@ def test_runtime_has_learned_iqa_clears_stale_module_cache_before_import(
         return object() if name == "pyiqa" else None
 
     def fake_import_module(name: str):
+        if name == "transformers":
+            return SimpleNamespace(AutoModelForImageTextToText=object())
         if name != "pyiqa":
             raise ImportError(name)
         if "pyiqa" in sys.modules and sys.modules.get("pyiqa") is None:

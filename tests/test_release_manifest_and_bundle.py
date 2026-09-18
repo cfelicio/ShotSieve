@@ -115,7 +115,7 @@ def test_release_constraints_file_exists_with_required_pins() -> None:
     assert "pyiqa==0.1.16" in constraints_text
     assert "timm==1.0.29" in constraints_text
     assert "huggingface-hub==1.31.0" in constraints_text
-    assert "transformers==5.17.0" in constraints_text
+    assert "transformers==5.14.1" in constraints_text
     assert "openai-clip==1.0.1" in constraints_text
 
     torch_constraints = (PROJECT_ROOT / "scripts" / "release-constraints-torch.txt").read_text(encoding="utf-8")

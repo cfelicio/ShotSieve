@@ -123,8 +123,15 @@ def _clear_pyiqa_module_cache() -> None:
             sys.modules.pop(module_name, None)
 
 
+def _clear_transformers_module_cache() -> None:
+    for module_name in list(sys.modules):
+        if module_name == "transformers" or module_name.startswith("transformers."):
+            sys.modules.pop(module_name, None)
+
+
 def _learned_iqa_runtime_import_diagnostic() -> str | None:
     _clear_pyiqa_module_cache()
+    _clear_transformers_module_cache()
 
     try:
         importlib.invalidate_caches()
@@ -144,6 +151,30 @@ def _learned_iqa_runtime_import_diagnostic() -> str | None:
     except Exception as exc:
         details: list[str] = [f"{type(exc).__name__}: {exc}"]
 
+        missing_module_name = getattr(exc, "name", None)
+        if isinstance(missing_module_name, str) and missing_module_name:
+            module_root = missing_module_name.split(".", 1)[0].casefold()
+            suggested_package = LEARNED_IQA_MISSING_MODULE_PACKAGE_HINTS.get(module_root)
+            if suggested_package:
+                details.append(
+                    f"missing module '{missing_module_name}' (suggested package: {suggested_package})"
+                )
+            else:
+                details.append(f"missing module '{missing_module_name}'")
+
+        trace_text = traceback.format_exc(limit=6).strip()
+        if trace_text:
+            details.append(trace_text)
+        return " | ".join(details)
+
+    try:
+        transformers_module = importlib.import_module("transformers")
+        # Q-ReAlign imports this lazy Transformers class only when its model is
+        # constructed. Probe it here so a stale or internally inconsistent
+        # sidecar is repaired before the user reaches model preparation.
+        getattr(transformers_module, "AutoModelForImageTextToText")
+    except Exception as exc:
+        details = [f"{type(exc).__name__}: {exc}"]
         missing_module_name = getattr(exc, "name", None)
         if isinstance(missing_module_name, str) and missing_module_name:
             module_root = missing_module_name.split(".", 1)[0].casefold()

@@ -7,7 +7,10 @@ COMMON_MODEL_REQUIREMENTS = (
     "pyiqa==0.1.16",
     "timm==1.0.29",
     "huggingface-hub==1.31.0",
-    "transformers==5.17.0",
+    # Keep the earlier Q-ReAlign-compatible pin;
+    # newer Transformers releases can expose the class while failing its
+    # deferred module import.
+    "transformers==5.14.1",
     "openai-clip==1.0.1",
     "accelerate==1.15.0",
     "sentencepiece==0.2.2",
