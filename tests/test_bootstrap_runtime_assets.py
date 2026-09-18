@@ -3,6 +3,7 @@ from __future__ import annotations
 from email.message import Message
 import hashlib
 import io
+import json
 import sys
 import types
 from pathlib import Path
@@ -318,7 +319,44 @@ def test_install_learned_iqa_sidecar_uses_embedded_installer(
     installed = bootstrap_module.install_learned_iqa_sidecar(runtime="cuda", site_packages=site_packages)
 
     assert installed is True
-    assert embedded_calls == [("cuda", site_packages, False)]
+    assert len(embedded_calls) == 1
+    assert embedded_calls[0][0] == "cuda"
+    assert embedded_calls[0][1] != site_packages
+    assert embedded_calls[0][2] is False
+
+
+def test_install_learned_iqa_sidecar_replaces_old_tree_after_clean_staged_install(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    site_packages = tmp_path / "site-packages"
+    site_packages.mkdir(parents=True)
+    (site_packages / "transformers").mkdir()
+    (site_packages / "transformers" / "stale-module.py").write_text("stale", encoding="utf-8")
+
+    def fake_embedded_install(*, runtime: str, site_packages: Path, force_reinstall: bool = False, output_func=print):
+        assert runtime == "cuda"
+        assert force_reinstall is True
+        (site_packages / "pyiqa").mkdir(parents=True)
+        (site_packages / "pyiqa" / "__init__.py").write_text("", encoding="utf-8")
+        (site_packages / "transformers").mkdir()
+        (site_packages / "transformers" / "fresh-module.py").write_text("fresh", encoding="utf-8")
+        return True
+
+    monkeypatch.setattr(bootstrap_module, "_install_learned_iqa_sidecar_with_embedded_pip", fake_embedded_install)
+
+    installed = bootstrap_module.install_learned_iqa_sidecar(
+        runtime="cuda",
+        site_packages=site_packages,
+        force_reinstall=True,
+    )
+
+    assert installed is True
+    assert not (site_packages / "transformers" / "stale-module.py").exists()
+    assert (site_packages / "transformers" / "fresh-module.py").read_text(encoding="utf-8") == "fresh"
+    state = json.loads((site_packages / ".shotsieve-runtime.json").read_text(encoding="utf-8"))
+    assert state["plan"]["target_id"] == site_packages.name
+    assert state["learned_iqa_complete"] is True
 
 
 def test_embedded_install_learned_iqa_sidecar_installs_expected_packages(

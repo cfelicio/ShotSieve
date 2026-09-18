@@ -291,7 +291,10 @@ def test_initialize_backend_restores_prior_cudnn_benchmark_value_when_metric_cre
     )
     backend = types.SimpleNamespace()
 
-    with pytest.raises(backend_module.LearnedBackendUnavailableError, match="metric init failed"):
+    def fail_metric(*_args, **_kwargs):
+        raise RuntimeError("metric init failed") from ModuleNotFoundError("No module named 'torchvision'")
+
+    with pytest.raises(backend_module.LearnedBackendUnavailableError, match="caused by ModuleNotFoundError: No module named 'torchvision'"):
         backend_module.initialize_backend(
             backend,
             "topiq_nr",
@@ -304,7 +307,7 @@ def test_initialize_backend_restores_prior_cudnn_benchmark_value_when_metric_cre
                 display_device="cuda:0",
                 tensor_device="cuda:0",
             ),
-            create_metric_safely_fn=lambda pyiqa, model_name, *, device: (_ for _ in ()).throw(RuntimeError("metric init failed")),
+            create_metric_safely_fn=fail_metric,
         )
 
     assert fake_torch.backends.cudnn.benchmark is False

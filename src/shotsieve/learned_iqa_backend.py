@@ -99,6 +99,20 @@ def release_learned_backend(backend: object) -> None:
             return
 
 
+def _exception_chain_text(exc: BaseException) -> str:
+    """Retain the real lazy-import cause behind generic backend exceptions."""
+    parts: list[str] = []
+    current: BaseException | None = exc
+    seen: set[int] = set()
+    while current is not None and id(current) not in seen and len(parts) < 4:
+        seen.add(id(current))
+        text = f"{type(current).__name__}: {current}"
+        if text not in parts:
+            parts.append(text)
+        current = current.__cause__ or current.__context__
+    return " | caused by ".join(parts)
+
+
 def create_metric_safely(pyiqa_module, model_name: str, *, device, configure_runtime_noise_controls_fn, install_runtime_warning_filters_fn):
     configure_runtime_noise_controls_fn()
     metric_options = {}
@@ -267,7 +281,7 @@ def initialize_backend(backend, model_name: str, *, device: str | None = None, i
     except Exception as exc:
         _restore_cudnn_benchmark(backend)
         raise LearnedBackendUnavailableError(
-            f"Failed to initialize learned IQA model '{canonical_model_name}': {exc}"
+            f"Failed to initialize learned IQA model '{canonical_model_name}': {_exception_chain_text(exc)}"
         ) from exc
 
     backend.name = canonical_model_name

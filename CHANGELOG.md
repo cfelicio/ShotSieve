@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.4.8] - 2026-09-18
+
+### Fixed
+
+- Rebuilt learned-IQA repairs in a clean staging directory before atomically
+  replacing the sidecar, preventing mixed Transformers versions from breaking
+  Q-ReAlign lazy imports.
+- Preserved chained dependency and import causes in learned-model
+  initialization errors.
+
 ## [0.4.7] - 2026-09-18
 
 ### Fixed

@@ -1010,23 +1010,34 @@ def install_learned_iqa_sidecar(
     force_reinstall: bool = False,
 ) -> bool:
     sidecar_func = _battr("_install_learned_iqa_sidecar_with_embedded_pip", _install_learned_iqa_sidecar_with_embedded_pip)
+    site_packages = Path(site_packages)
+    site_packages.parent.mkdir(parents=True, exist_ok=True)
+    embedded_install_result: bool | None = False
+    staging_dir = Path(tempfile.mkdtemp(prefix=f".{site_packages.name}.learned-install-", dir=site_packages.parent))
     try:
         with _sidecar_install_lock(site_packages):
             embedded_install_result = sidecar_func(
                 runtime=runtime,
-                site_packages=site_packages,
+                # A --target reinstall does not remove files from an older
+                # package version. Build in a clean tree so Transformers and
+                # its lazy-import modules cannot be mixed across versions.
+                site_packages=staging_dir,
                 force_reinstall=force_reinstall,
                 output_func=output_func,
             )
-            if embedded_install_result and _path_has_pyiqa(site_packages):
+            if embedded_install_result and _path_has_pyiqa(staging_dir):
                 _write_sidecar_state(
-                    site_packages,
+                    staging_dir,
                     torch_install_plan(target_id=site_packages.name, runtime=runtime),
                     learned_iqa=True,
                 )
+                _commit_staged_sidecar(staging_dir, site_packages)
     except TimeoutError as exc:
         output_func(f"Learned IQA installation is already in progress: {exc}")
         return False
+    finally:
+        if staging_dir.exists():
+            shutil.rmtree(staging_dir, ignore_errors=True)
     if embedded_install_result is None:
         output_func(
             "Bundled pip runtime installer is unavailable in this build. "
