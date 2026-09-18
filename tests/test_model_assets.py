@@ -53,7 +53,7 @@ class _Backend:
     def __init__(self, calls: list[tuple[str, object]]) -> None:
         self.calls = calls
 
-    def score_paths(self, paths, *, batch_size, resource_profile):
+    def score_paths(self, paths, *, batch_size, resource_profile, max_decode_pixels=None):
         self.calls.append(("score", (list(paths), batch_size, resource_profile)))
         return [_Result()]
 
@@ -149,7 +149,7 @@ def test_prepare_model_failure_persists_diagnostic_after_validation_work(tmp_pat
     calls: list[tuple[str, object]] = []
 
     class FailingBackend(_Backend):
-        def score_paths(self, paths, *, batch_size, resource_profile):
+        def score_paths(self, paths, *, batch_size, resource_profile, max_decode_pixels=None):
             calls.append(("score", list(paths)))
             error = OSError(errno.ENOSPC, "No space left on device")
             raise error

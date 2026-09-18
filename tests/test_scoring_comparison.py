@@ -58,7 +58,7 @@ def test_compare_learned_models_returns_side_by_side_rows(tmp_path: Path, monkey
             self._score = score
             self._confidence = confidence
 
-        def score_paths(self, image_paths, *, batch_size: int = 4, resource_profile: str | None = None):
+        def score_paths(self, image_paths, *, batch_size: int = 4, resource_profile: str | None = None, max_decode_pixels: int | None = None):
             return [LearnedScoreResult(raw_score=self._score / 100.0, normalized_score=self._score, confidence=self._confidence) for _ in image_paths]
 
     initialize_database(db_path)
@@ -109,7 +109,7 @@ def test_compare_learned_models_reports_failed_results_without_fake_scores(tmp_p
         name = "topiq_nr"
         model_version = "fake:topiq_nr"
 
-        def score_paths(self, image_paths, *, batch_size: int = 4, resource_profile: str | None = None):
+        def score_paths(self, image_paths, *, batch_size: int = 4, resource_profile: str | None = None, max_decode_pixels: int | None = None):
             return [
                 LearnedScoreResult(
                     raw_score=None,
@@ -159,7 +159,7 @@ def test_compare_learned_models_counts_failed_files_once_when_multiple_models_fa
             self.name = model_name
             self.model_version = f"fake:{model_name}"
 
-        def score_paths(self, image_paths, *, batch_size: int = 4, resource_profile: str | None = None):
+        def score_paths(self, image_paths, *, batch_size: int = 4, resource_profile: str | None = None, max_decode_pixels: int | None = None):
             return [
                 LearnedScoreResult(
                     raw_score=None,
@@ -209,7 +209,7 @@ def test_compare_learned_models_releases_backend_before_loading_next(tmp_path: P
             self.name = model_name
             self.model_version = f"fake:{model_name}"
 
-        def score_paths(self, image_paths, *, batch_size: int = 4, resource_profile: str | None = None):
+        def score_paths(self, image_paths, *, batch_size: int = 4, resource_profile: str | None = None, max_decode_pixels: int | None = None):
             return [LearnedScoreResult(raw_score=0.75, normalized_score=75.0, confidence=80.0) for _ in image_paths]
 
         def close(self) -> None:
@@ -252,7 +252,7 @@ def test_compare_learned_models_reports_progress_per_model_and_chunk(tmp_path: P
             self.model_version = f"fake:{model_name}"
             self._score = score
 
-        def score_paths(self, image_paths, *, batch_size: int = 4, resource_profile: str | None = None):
+        def score_paths(self, image_paths, *, batch_size: int = 4, resource_profile: str | None = None, max_decode_pixels: int | None = None):
             return [LearnedScoreResult(raw_score=self._score / 100.0, normalized_score=self._score, confidence=88.0) for _ in image_paths]
 
     progress_updates: list[AnalysisProgress] = []
@@ -310,7 +310,7 @@ def test_compare_learned_models_reports_truncation_contract_when_max_rows_caps_r
         name = "topiq_nr"
         model_version = "fake:topiq_nr"
 
-        def score_paths(self, image_paths, *, batch_size: int = 4, resource_profile: str | None = None):
+        def score_paths(self, image_paths, *, batch_size: int = 4, resource_profile: str | None = None, max_decode_pixels: int | None = None):
             return [
                 LearnedScoreResult(raw_score=0.82, normalized_score=82.0, confidence=91.0)
                 for _ in image_paths
@@ -355,7 +355,7 @@ def test_compare_learned_models_can_keep_backends_loaded(tmp_path: Path) -> None
             self.name = model_name
             self.model_version = f"fake:{model_name}"
 
-        def score_paths(self, image_paths, *, batch_size: int = 4, resource_profile: str | None = None):
+        def score_paths(self, image_paths, *, batch_size: int = 4, resource_profile: str | None = None, max_decode_pixels: int | None = None):
             return [LearnedScoreResult(raw_score=0.75, normalized_score=75.0, confidence=80.0) for _ in image_paths]
 
         def close(self) -> None:
@@ -403,10 +403,10 @@ def test_compare_learned_models_emits_preview_phase_zero_progress_before_paralle
         name = "topiq_nr"
         model_version = "fake:topiq_nr"
 
-        def score_paths(self, image_paths, *, batch_size: int = 4, resource_profile: str | None = None):
+        def score_paths(self, image_paths, *, batch_size: int = 4, resource_profile: str | None = None, max_decode_pixels: int | None = None):
             return [LearnedScoreResult(raw_score=0.83, normalized_score=83.0, confidence=92.0) for _ in image_paths]
 
-    def fake_generate_previews_parallel(source_paths, generated_preview_dir: Path, *, max_workers=None, progress_callback=None, raw_preview_mode="auto"):
+    def fake_generate_previews_parallel(source_paths, generated_preview_dir: Path, *, max_workers=None, progress_callback=None, raw_preview_mode="auto", max_decode_pixels=64_000_000):
         assert source_paths == [tiff_path]
         assert generated_preview_dir == preview_dir
         assert progress_callback is not None

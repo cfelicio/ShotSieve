@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-import inspect
 from pathlib import Path
 import time
 from typing import Callable, Protocol, Sequence, runtime_checkable
@@ -31,54 +30,13 @@ def _score_backend_paths(
     resource_profile: str | None,
     max_decode_pixels: int = DEFAULT_MAX_DECODE_PIXELS,
 ) -> list[LearnedScoreResult]:
-    """Score paths while preserving compatibility with older integrations."""
-    score_paths = backend.score_paths
-    try:
-        parameters = inspect.signature(score_paths).parameters.values()
-        accepts_budget = any(
-            parameter.name == "max_decode_pixels"
-            or parameter.kind == inspect.Parameter.VAR_KEYWORD
-            for parameter in parameters
-        )
-    except (TypeError, ValueError):
-        accepts_budget = True
-
-    kwargs = {
-        "batch_size": batch_size,
-        "resource_profile": resource_profile,
-    }
-    if accepts_budget:
-        kwargs["max_decode_pixels"] = max_decode_pixels
-    return score_paths(image_paths, **kwargs)
-
-
-def _generate_previews_with_budget(
-    source_paths: Sequence[Path],
-    preview_dir: Path,
-    *,
-    max_workers: int,
-    progress_callback: Callable[[int, int], None] | None,
-    raw_preview_mode: str,
-    max_decode_pixels: int,
-) -> list[PreviewResult]:
-    """Generate previews while preserving the older callback signature."""
-    kwargs = {
-        "max_workers": max_workers,
-        "progress_callback": progress_callback,
-        "raw_preview_mode": raw_preview_mode,
-    }
-    try:
-        parameters = inspect.signature(generate_previews_parallel).parameters.values()
-        accepts_budget = any(
-            parameter.name == "max_decode_pixels"
-            or parameter.kind == inspect.Parameter.VAR_KEYWORD
-            for parameter in parameters
-        )
-    except (TypeError, ValueError):
-        accepts_budget = True
-    if accepts_budget:
-        kwargs["max_decode_pixels"] = max_decode_pixels
-    return generate_previews_parallel(source_paths, preview_dir, **kwargs)
+    """Score paths through the current learned-backend interface."""
+    return backend.score_paths(
+        image_paths,
+        batch_size=batch_size,
+        resource_profile=resource_profile,
+        max_decode_pixels=max_decode_pixels,
+    )
 
 
 def _detect_vram_lazy() -> int | None:
@@ -568,7 +526,7 @@ def _prepare_analysis_candidates(
         preview_start_callback(len(pc_paths))
 
     effective_workers = preview_workers or _default_preview_workers(resource_profile)
-    preview_results = _generate_previews_with_budget(
+    preview_results = generate_previews_parallel(
         pc_paths,
         preview_dir,
         max_workers=effective_workers,

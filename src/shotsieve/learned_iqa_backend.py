@@ -3,7 +3,6 @@ from __future__ import annotations
 from contextlib import AbstractContextManager, ExitStack, contextmanager, redirect_stderr, redirect_stdout
 from dataclasses import dataclass
 import gc
-import inspect
 import io
 import logging
 import os
@@ -24,6 +23,7 @@ from .learned_iqa_catalog import (
     validate_model_name,
 )
 from .learned_iqa_runtime import LearnedRuntimeUnavailableError
+from .image_conversion import DEFAULT_MAX_DECODE_PIXELS
 
 
 log = logging.getLogger(__name__)
@@ -314,17 +314,6 @@ def close_backend(backend, *, gc_module: _GcModuleLike = gc) -> None:
     gc_module.collect()
 
 
-def _supports_keyword(callable_obj, keyword: str) -> bool:
-    try:
-        parameters = inspect.signature(callable_obj).parameters.values()
-    except (TypeError, ValueError):
-        return True
-    return any(
-        parameter.name == keyword or parameter.kind == inspect.Parameter.VAR_KEYWORD
-        for parameter in parameters
-    )
-
-
 def score_paths(backend, image_paths: Sequence[Path], *, batch_size: int = DEFAULT_BATCH_SIZE, resource_profile: str | None = None, recommended_cpu_workers_fn, max_batch_sizes=None, load_batch_tensor_fn, arrays_to_tensor_fn, load_single_image_fn, result_cls=LearnedScoreResult, log_module=log, max_decode_pixels: int | None = None) -> list[LearnedScoreResult]:
     from concurrent.futures import Future, ThreadPoolExecutor
 
@@ -336,25 +325,27 @@ def score_paths(backend, image_paths: Sequence[Path], *, batch_size: int = DEFAU
     runtime = getattr(backend, "runtime", None)
     use_channels_last = runtime in {"cpu", "cuda", "rocm"}
     allow_prefetch_overlap = runtime != "cpu"
-    load_batch_accepts_budget = _supports_keyword(load_batch_tensor_fn, "max_decode_pixels")
-    load_single_accepts_budget = _supports_keyword(load_single_image_fn, "max_decode_pixels")
+    effective_max_decode_pixels = (
+        DEFAULT_MAX_DECODE_PIXELS if max_decode_pixels is None else max_decode_pixels
+    )
 
     def load_batch(paths):
-        kwargs = {
-            "image_size": backend.input_size,
-            "torch_module": backend._torch,
-            "tensor_device": backend.tensor_device,
-            "executor": load_pool,
-            "use_channels_last": use_channels_last,
-        }
-        if load_batch_accepts_budget and max_decode_pixels is not None:
-            kwargs["max_decode_pixels"] = max_decode_pixels
-        return load_batch_tensor_fn(paths, **kwargs)
+        return load_batch_tensor_fn(
+            paths,
+            image_size=backend.input_size,
+            torch_module=backend._torch,
+            tensor_device=backend.tensor_device,
+            executor=load_pool,
+            use_channels_last=use_channels_last,
+            max_decode_pixels=effective_max_decode_pixels,
+        )
 
     def load_single(path):
-        if load_single_accepts_budget and max_decode_pixels is not None:
-            return load_single_image_fn(path, backend.input_size, max_decode_pixels=max_decode_pixels)
-        return load_single_image_fn(path, backend.input_size)
+        return load_single_image_fn(
+            path,
+            backend.input_size,
+            max_decode_pixels=effective_max_decode_pixels,
+        )
 
     with ThreadPoolExecutor(max_workers=pool_workers) as load_pool:
         prefetch_futures: list[Future] | None = None

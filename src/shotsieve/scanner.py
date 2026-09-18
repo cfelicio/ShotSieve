@@ -1,6 +1,5 @@
 import concurrent.futures
 import fnmatch
-import inspect
 import os
 import stat
 from collections.abc import Callable, Iterable, Sequence
@@ -20,29 +19,6 @@ from shotsieve.db import (
 from shotsieve.image_conversion import DEFAULT_MAX_DECODE_PIXELS, IMAGE_CONVERSION_VERSION
 from shotsieve.models import ScanRunDiagnostic, ScanSummary
 from shotsieve.preview import generate_preview
-
-
-def _generate_preview_with_budget(
-    path: Path,
-    preview_dir: Path,
-    *,
-    raw_preview_mode: str,
-    max_decode_pixels: int,
-):
-    """Call preview generators across the legacy integration seam."""
-    kwargs = {"raw_preview_mode": raw_preview_mode}
-    try:
-        parameters = inspect.signature(generate_preview).parameters.values()
-        accepts_budget = any(
-            parameter.name == "max_decode_pixels"
-            or parameter.kind == inspect.Parameter.VAR_KEYWORD
-            for parameter in parameters
-        )
-    except (TypeError, ValueError):
-        accepts_budget = True
-    if accepts_budget:
-        kwargs["max_decode_pixels"] = max_decode_pixels
-    return generate_preview(path, preview_dir, **kwargs)
 
 
 def canonical_path_key(path: Path) -> str:
@@ -995,7 +971,7 @@ def gather_file_metadata(
 
     if generate_previews:
         # Previews are CPU intensive, but generate_preview handles its own errors
-        preview = _generate_preview_with_budget(
+        preview = generate_preview(
             path,
             preview_dir,
             raw_preview_mode=raw_preview_mode,

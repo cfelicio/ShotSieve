@@ -135,7 +135,7 @@ def test_scan_regenerates_legacy_preview_conversion_without_touching_review_stat
 
         calls: list[Path] = []
 
-        def regenerate(path: Path, generated_preview_dir: Path, *, raw_preview_mode: str = "auto"):
+        def regenerate(path: Path, generated_preview_dir: Path, *, raw_preview_mode: str = "auto", max_decode_pixels: int = 64_000_000):
             calls.append(path)
             return preview_module.PreviewResult(
                 path=str(Path(row["preview_path"])),
@@ -176,7 +176,7 @@ def test_scoring_rescores_when_image_conversion_version_is_legacy(tmp_path: Path
         name = "topiq_nr"
         model_version = "fake:conversion"
 
-        def score_paths(self, image_paths, *, batch_size: int = 4, resource_profile: str | None = None):
+        def score_paths(self, image_paths, *, batch_size: int = 4, resource_profile: str | None = None, max_decode_pixels: int | None = None):
             score = next(score_values)
             return [
                 LearnedScoreResult(

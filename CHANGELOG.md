@@ -12,6 +12,9 @@ All notable changes to this project will be documented in this file.
 - Removed proven frontend no-ops: the discarded `addLogEntry` injection, unused
   score-card/status-pill hooks, and the unused score-sort hook. The composed
   Review "Open File" callback remains wired directly.
+- Removed legacy `inspect.signature` forwarding for `max_decode_pixels` in
+  scanner, preview, scoring, and learned-IQA loading. Current internal
+  signatures now receive the decode budget directly.
 
 ### Fixed
 

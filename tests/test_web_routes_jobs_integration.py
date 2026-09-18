@@ -213,7 +213,7 @@ class TestWebRoutesJobsIntegration:
         class Backend:
             runtime = "cpu"
 
-            def score_paths(self, paths, *, batch_size, resource_profile):
+            def score_paths(self, paths, *, batch_size, resource_profile, max_decode_pixels=None):
                 return [Result()]
 
             def close(self):
@@ -263,7 +263,7 @@ class TestWebRoutesJobsIntegration:
         class Backend:
             runtime = "cpu"
 
-            def score_paths(self, paths, *, batch_size, resource_profile):
+            def score_paths(self, paths, *, batch_size, resource_profile, max_decode_pixels=None):
                 raise RuntimeError("Hub request https://example.test/model?token=secret failed")
 
             def close(self):

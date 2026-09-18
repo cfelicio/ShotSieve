@@ -40,7 +40,7 @@ def test_score_paths_only_enables_channels_last_for_cpu_and_cuda_runtimes() -> N
             max_batch_sizes={"topiq_nr": 2},
             load_batch_tensor_fn=lambda paths, *, use_channels_last=False, **kwargs: calls.append(("load", runtime, tuple(paths), use_channels_last)) or object(),
             arrays_to_tensor_fn=lambda arrays, *, use_channels_last=False, **kwargs: calls.append(("prefetch", runtime, tuple(arrays), use_channels_last)) or object(),
-            load_single_image_fn=lambda path, image_size: path,
+            load_single_image_fn=lambda path, image_size, max_decode_pixels=64_000_000: path,
         )
 
         assert calls == [
@@ -87,7 +87,7 @@ def test_score_paths_disables_next_batch_prefetch_on_cpu_but_keeps_it_for_accele
             max_batch_sizes={"topiq_nr": 1},
             load_batch_tensor_fn=lambda paths, *, use_channels_last=False, **kwargs: calls.append(("load", runtime, tuple(paths), use_channels_last)) or object(),
             arrays_to_tensor_fn=lambda arrays, *, use_channels_last=False, **kwargs: calls.append(("prefetch", runtime, tuple(arrays), use_channels_last)) or object(),
-            load_single_image_fn=lambda path, image_size: f"decoded:{path.name}",
+            load_single_image_fn=lambda path, image_size, max_decode_pixels=64_000_000: f"decoded:{path.name}",
         )
 
         assert calls == expected_calls

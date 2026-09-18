@@ -35,7 +35,7 @@ listed rollback boundary.
 | **WI-01** | **Completed — retain** | P1 | **Direct correctness fixes** | Bare SQLite migration rows, worker-start lock release, composed **Open original**, reset profile detail, and two documentation corrections. No new reusable production abstraction was introduced. | Completed: 718 passed, 1 skipped; Ruff passed. |
 | **WI-02** | **Completed — retain** | P2 | **Delete version-compatibility code** | Remove only code that supports an old install, old target/launcher ID, old sidecar location/marker, old preview name, old model alias, or old public/private helper name. Make current-version direct paths the only path. Do not add replacement adapters. | Completed: 710 passed, 1 skipped; Ruff passed. Type tools unavailable. |
 | **WI-03** | **Completed - retain** | P3 | **Delete proven frontend no-ops** | Remove no-op `addLogEntry`, unused score-card/status-pill hooks, and the unused score-sort hook. Keep the now-working direct Open-original callback. Do **not** add module registries or startup validation frameworks. | Completed: 157 frontend/static/accessibility/responsive tests; 57 browser tests passed with one transient shell-ready timeout whose isolated rerun passed; Ruff passed; full pytest 711 passed, 1 skipped. Type tools unavailable. |
-| **WI-04** | Proposed | P3 | **Remove legacy signature fallback dispatch** | Replace `inspect.signature` compatibility forwarding for `max_decode_pixels` with direct current signatures, then delete the unused fallback branches and imports. Do not introduce a generic callback helper. | Scanner, preview, scoring, and runtime-helper tests. |
+| **WI-04** | **Completed - retain** | P3 | **Remove legacy signature fallback dispatch** | Replace `inspect.signature` compatibility forwarding for `max_decode_pixels` with direct current signatures, then delete the unused fallback branches and imports. Do not introduce a generic callback helper. | Completed: baseline scanner/preview/scoring/runtime-helper set 101 passed; expanded focused set 225 passed; final runtime-focused check 30 passed; Ruff passed; full pytest 711 passed, 1 skipped in 233.85s. Type tools unavailable. |
 | **WI-05** | Parked | P4 | **Simplify runtime-asset publication only if first-install evidence fails** | Do not add previous-version backup/restore or upgrade recovery. Current checksum and staging behavior is sufficient unless a reproducible *fresh-install* corruption case appears. | Reproduce first; do not write speculative tests or recovery code. |
 | **WI-06** | Rejected | — | **Central target-install plan emitter** | Keep the existing explicit Python, PowerShell, and Actions install commands. A shared plan parser/emitter would add more code and shell failure modes than it removes for one maintainer. | None. Update the few explicit commands together when pins change. |
 | **WI-07** | Rejected | — | **Release-asset preservation flag** | Keep intentional source-archive deletion in release-only tooling. Local release inputs are disposable and a fresh build/download is the recovery path. Do not add a flag, confirmation protocol, or retained-artifact policy. | Existing release-script tests. |
@@ -130,9 +130,37 @@ tests**, with **1 skipped**, in **237.12s**. Type verification was not run
 because neither `mypy` nor `pyright` is installed and no type-check command is
 configured.
 
+### WI-04 implementation review
+
+**Decision: retain the direct current-version calls; no rollback is recommended.**
+
+- Scanner and preview now call the current preview signatures directly, including
+  `max_decode_pixels` for both single-file and pooled generation.
+- Scoring now forwards the decode budget directly to the current backend and
+  preview interfaces. The repeated backend call remains a small domain-specific
+  wrapper; no generic callback helper was introduced.
+- Learned-IQA batch and single-image loading now receive the current decode
+  budget signature directly. A missing optional budget still resolves to the
+  existing default budget, preserving the current public behavior without
+  probing a callable's signature.
+- Removed the signature-probing paths, the unused `inspect`
+  imports, the scanner compatibility wrapper, and the backend keyword-probe
+  helper. Updated test doubles to implement the current internal signatures.
+
+Focused verification before behavior changes: the scanner, preview, scoring,
+and runtime-helper baseline passed **101 tests** using a workspace-local
+pytest basetemp because the host temp root denied enumeration. After the
+production deletion and test-double updates, the expanded scanner/preview/
+scoring/comparison/runtime/helper/media/model/review/job batch passed
+**225 tests**. Final verification: `python -m ruff check src tests` passed;
+the full `python -m pytest -q --basetemp .pytest-tmp-wi04-full-final` suite passed
+**711 tests**, with **1 skipped**, in **233.85s**. Type verification was not
+run because neither `mypy` nor `pyright` is installed and no type-check
+command is configured in `pyproject.toml`.
+
 ### New-session starter prompt
 
-> Continue ShotSieve cleanup using `report.md` as the source of truth. Work on **WI-04 only**: remove legacy `inspect.signature` compatibility forwarding for `max_decode_pixels` and call the current internal signatures directly. Do not introduce a generic callback helper. Verify scanner, preview, scoring, and runtime-helper behavior after each deletion batch, then run Ruff and the full pytest suite. Update the WI-04 status and completion notes with the exact checks run.
+> Continue ShotSieve cleanup using `report.md` as the source of truth. WI-04 is complete and retained. Work on WI-05 only if a reproducible fresh-install corruption case is available; do not add speculative upgrade recovery or compatibility helpers.
 
 ### WI-01 completion notes
 
@@ -406,7 +434,7 @@ commands readable and update them together when pins change.
 |---|---|---|---|
 | Release target ID, platform, runtime, launcher/archive names | `release_targets.py`, suffix parsing in desktop/sidecar, alias map in PowerShell | `release_targets.py` | Keep explicit launcher parsing at the edge; add a target lookup for canonical target metadata and have PowerShell query it instead of duplicating aliases. |
 | Torch package versions/indexes/AMD URLs | `dependency_constraints.py`, sidecar planner, Actions, PowerShell, CPU smoke | `dependency_constraints.py` + `torch_install_plan()` | Highest-value consolidation: consume an emitted plan in build/CI tooling. |
-| Optional `max_decode_pixels` compatibility dispatch | scanner, scoring, preview, learned backend | A tiny compatibility-call helper, if legacy signatures remain supported | Medium-value only; preserve the safe optimistic fallback. |
+| Optional `max_decode_pixels` compatibility dispatch | scanner, scoring, preview, learned backend | Current internal signatures in those modules | Completed in WI-04; direct calls now forward the budget without signature probing. |
 | Runtime availability and hardware cache | `learned_iqa_runtime.py` and re-exporting façade `learned_iqa.py` | `learned_iqa_runtime.py` | Keep the façade aliases for compatibility. Do not consolidate by removing monkeypatchable exports. |
 | File-operation result shape/retry semantics | models, export, review cache, route adapters, frontend operation-result module | `models.FileOperationResult` / `FileOperationSummary` server-side and operation-results JS client-side | Already appropriately centralized at each side of the HTTP boundary. Keep the two representations distinct. |
 | Review filters, listing, count, revisions, and selections | `review_filters.py`, `review.py`, web route common/review | `review_filters.py` for predicate construction | Already a good consolidation. Do not reintroduce duplicated route-specific filters. |
@@ -435,8 +463,8 @@ facades unless a current-version defect cannot be fixed directly.
   testable batches. Prefer deleting its tests rather than retaining a shim.
 2. **WI-03:** remove proven frontend no-ops directly; do not replace them with
   logging, registries, or another indirection layer.
-3. **WI-04:** remove `max_decode_pixels` legacy signature probing and call the
-  current internal interfaces directly.
+3. **WI-04:** completed; retain the direct current-version calls and their
+  focused regressions.
 4. Stop after each item and measure the maintenance benefit. WI-05 through
   WI-08 are intentionally not planned without a new current-version problem.
 
@@ -503,9 +531,9 @@ Then follow `docs/intel-xpu.md` or `docs/amd-rocm.md` for a native tensor operat
 
 ## Final assessment
 
-WI-01 is lean and should remain. Future work should remove code, not create
-more recovery or metadata machinery: start with WI-02, then WI-03 and WI-04
-only if each deletion has a clear current-version benefit. Preserve current-run
+WI-01 through WI-04 are lean and should remain. Future work should remove
+code, not create more recovery or metadata machinery: consider WI-05 only if
+fresh-install evidence establishes a current problem. Preserve current-run
 photo, filesystem, database, decoding, and cancellation safeguards; discard
 upgrade and compatibility mechanisms that are no longer part of the product
 contract.

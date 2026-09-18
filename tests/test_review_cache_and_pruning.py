@@ -40,7 +40,7 @@ class FakeLearnedBackend:
     name = "topiq_nr"
     model_version = "fake:topiq_nr"
 
-    def score_paths(self, image_paths, *, batch_size: int = 4, resource_profile: str | None = None):
+    def score_paths(self, image_paths, *, batch_size: int = 4, resource_profile: str | None = None, max_decode_pixels: int | None = None):
         return [LearnedScoreResult(raw_score=0.82, normalized_score=82.0, confidence=91.0) for _ in image_paths]
 
 

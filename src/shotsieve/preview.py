@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import io
-import inspect
 import os
 import sys
 import tempfile
@@ -600,19 +599,12 @@ def generate_previews_parallel(
         return []
 
     if total == 1:
-        kwargs = {"raw_preview_mode": raw_preview_mode}
-        try:
-            parameters = inspect.signature(generate_preview).parameters.values()
-            accepts_budget = any(
-                parameter.name == "max_decode_pixels"
-                or parameter.kind == inspect.Parameter.VAR_KEYWORD
-                for parameter in parameters
-            )
-        except (TypeError, ValueError):
-            accepts_budget = True
-        if accepts_budget:
-            kwargs["max_decode_pixels"] = max_decode_pixels
-        result = generate_preview(source_paths[0], preview_dir, **kwargs)
+        result = generate_preview(
+            source_paths[0],
+            preview_dir,
+            raw_preview_mode=raw_preview_mode,
+            max_decode_pixels=max_decode_pixels,
+        )
         if progress_callback is not None:
             progress_callback(1, 1)
         return [result]

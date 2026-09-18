@@ -26,7 +26,7 @@ def test_score_accepts_the_current_qrealign_mini_model(tmp_path: Path) -> None:
         model_version = "fake:qrealign-mini:cuda"
         runtime = "cuda"
 
-        def score_paths(self, image_paths, *, batch_size: int = 1, resource_profile: str | None = None):
+        def score_paths(self, image_paths, *, batch_size: int = 1, resource_profile: str | None = None, max_decode_pixels: int | None = None):
             return [LearnedScoreResult(raw_score=3.8, normalized_score=70.0, confidence=88.0) for _ in image_paths]
 
     initialize_database(db_path)
@@ -113,7 +113,7 @@ def test_score_defaults_to_ai_only_when_backend_unspecified(tmp_path: Path) -> N
         name = "topiq_nr"
         model_version = "fake:topiq_nr"
 
-        def score_paths(self, image_paths, *, batch_size: int = 4, resource_profile: str | None = None):
+        def score_paths(self, image_paths, *, batch_size: int = 4, resource_profile: str | None = None, max_decode_pixels: int | None = None):
             return [LearnedScoreResult(raw_score=0.82, normalized_score=82.0, confidence=91.0) for _ in image_paths]
 
     initialize_database(db_path)
@@ -160,7 +160,7 @@ def test_score_populates_learned_columns_with_backend(tmp_path: Path) -> None:
         name = "topiq_nr"
         model_version = "fake:topiq_nr"
 
-        def score_paths(self, image_paths, *, batch_size: int = 4, resource_profile: str | None = None):
+        def score_paths(self, image_paths, *, batch_size: int = 4, resource_profile: str | None = None, max_decode_pixels: int | None = None):
             return [LearnedScoreResult(raw_score=0.82, normalized_score=82.0, confidence=91.0) for _ in image_paths]
 
     initialize_database(db_path)
@@ -210,7 +210,7 @@ def test_score_refreshes_when_switching_backends(tmp_path: Path) -> None:
         name = "topiq_nr"
         model_version = "fake:topiq_nr"
 
-        def score_paths(self, image_paths, *, batch_size: int = 4, resource_profile: str | None = None):
+        def score_paths(self, image_paths, *, batch_size: int = 4, resource_profile: str | None = None, max_decode_pixels: int | None = None):
             return [LearnedScoreResult(raw_score=0.9, normalized_score=90.0, confidence=88.0) for _ in image_paths]
 
     initialize_database(db_path)
@@ -236,7 +236,7 @@ def test_score_refreshes_when_switching_backends(tmp_path: Path) -> None:
             name = "clipiqa"
             model_version = "fake:clipiqa"
 
-            def score_paths(self, image_paths, *, batch_size: int = 4, resource_profile: str | None = None):
+            def score_paths(self, image_paths, *, batch_size: int = 4, resource_profile: str | None = None, max_decode_pixels: int | None = None):
                 return [LearnedScoreResult(raw_score=0.9, normalized_score=90.0, confidence=88.0) for _ in image_paths]
 
         summary = score_files(
@@ -268,14 +268,14 @@ def test_score_refreshes_when_model_version_changes(tmp_path: Path) -> None:
         name = "topiq_nr"
         model_version = "fake:v1"
 
-        def score_paths(self, image_paths, *, batch_size: int = 4, resource_profile: str | None = None):
+        def score_paths(self, image_paths, *, batch_size: int = 4, resource_profile: str | None = None, max_decode_pixels: int | None = None):
             return [LearnedScoreResult(raw_score=0.82, normalized_score=82.0, confidence=91.0) for _ in image_paths]
 
     class SecondBackend:
         name = "topiq_nr"
         model_version = "fake:v2"
 
-        def score_paths(self, image_paths, *, batch_size: int = 4, resource_profile: str | None = None):
+        def score_paths(self, image_paths, *, batch_size: int = 4, resource_profile: str | None = None, max_decode_pixels: int | None = None):
             return [LearnedScoreResult(raw_score=0.63, normalized_score=63.0, confidence=88.0) for _ in image_paths]
 
     initialize_database(db_path)
@@ -327,7 +327,7 @@ def test_score_skips_unchanged_rows_without_backend_reinitialization(tmp_path: P
         name = "topiq_nr"
         model_version = "fake:stable"
 
-        def score_paths(self, image_paths, *, batch_size: int = 4, resource_profile: str | None = None):
+        def score_paths(self, image_paths, *, batch_size: int = 4, resource_profile: str | None = None, max_decode_pixels: int | None = None):
             return [LearnedScoreResult(raw_score=0.82, normalized_score=82.0, confidence=91.0) for _ in image_paths]
 
     def fail_if_reinitialized(model_name: str):
@@ -374,14 +374,14 @@ def test_score_rescores_unchanged_rows_when_version_resolver_fails(tmp_path: Pat
         name = "topiq_nr"
         model_version = "fake:stable"
 
-        def score_paths(self, image_paths, *, batch_size: int = 4, resource_profile: str | None = None):
+        def score_paths(self, image_paths, *, batch_size: int = 4, resource_profile: str | None = None, max_decode_pixels: int | None = None):
             return [LearnedScoreResult(raw_score=0.82, normalized_score=82.0, confidence=91.0) for _ in image_paths]
 
     class RefreshBackend:
         name = "topiq_nr"
         model_version = "fake:stable"
 
-        def score_paths(self, image_paths, *, batch_size: int = 4, resource_profile: str | None = None):
+        def score_paths(self, image_paths, *, batch_size: int = 4, resource_profile: str | None = None, max_decode_pixels: int | None = None):
             return [LearnedScoreResult(raw_score=0.61, normalized_score=61.0, confidence=90.0) for _ in image_paths]
 
     def fail_version_probe(model_name: str):
@@ -433,14 +433,14 @@ def test_score_rescores_unchanged_rows_when_default_version_probe_fails(tmp_path
         name = "topiq_nr"
         model_version = "fake:stable"
 
-        def score_paths(self, image_paths, *, batch_size: int = 4, resource_profile: str | None = None):
+        def score_paths(self, image_paths, *, batch_size: int = 4, resource_profile: str | None = None, max_decode_pixels: int | None = None):
             return [LearnedScoreResult(raw_score=0.82, normalized_score=82.0, confidence=91.0) for _ in image_paths]
 
     class RefreshBackend:
         name = "topiq_nr"
         model_version = "fake:stable"
 
-        def score_paths(self, image_paths, *, batch_size: int = 4, resource_profile: str | None = None):
+        def score_paths(self, image_paths, *, batch_size: int = 4, resource_profile: str | None = None, max_decode_pixels: int | None = None):
             return [LearnedScoreResult(raw_score=0.57, normalized_score=57.0, confidence=87.0) for _ in image_paths]
 
     def fail_default_probe(model_name: str, device: str | None = None):
@@ -492,14 +492,14 @@ def test_score_rewrites_legacy_rows_missing_source_fingerprints(tmp_path: Path) 
         name = "topiq_nr"
         model_version = "fake:stable"
 
-        def score_paths(self, image_paths, *, batch_size: int = 4, resource_profile: str | None = None):
+        def score_paths(self, image_paths, *, batch_size: int = 4, resource_profile: str | None = None, max_decode_pixels: int | None = None):
             return [LearnedScoreResult(raw_score=0.82, normalized_score=82.0, confidence=91.0) for _ in image_paths]
 
     class RefreshBackend:
         name = "topiq_nr"
         model_version = "fake:stable"
 
-        def score_paths(self, image_paths, *, batch_size: int = 4, resource_profile: str | None = None):
+        def score_paths(self, image_paths, *, batch_size: int = 4, resource_profile: str | None = None, max_decode_pixels: int | None = None):
             return [LearnedScoreResult(raw_score=0.58, normalized_score=58.0, confidence=89.0) for _ in image_paths]
 
     initialize_database(db_path)
@@ -554,7 +554,7 @@ def test_score_refreshes_when_source_file_changes(tmp_path: Path) -> None:
         name = "topiq_nr"
         model_version = "fake:topiq_nr"
 
-        def score_paths(self, image_paths, *, batch_size: int = 4, resource_profile: str | None = None):
+        def score_paths(self, image_paths, *, batch_size: int = 4, resource_profile: str | None = None, max_decode_pixels: int | None = None):
             score = next(score_values)
             return [LearnedScoreResult(raw_score=score / 100.0, normalized_score=score, confidence=91.0) for _ in image_paths]
 
@@ -617,14 +617,14 @@ def test_score_removes_stale_score_row_when_rescore_fails(tmp_path: Path) -> Non
         name = "topiq_nr"
         model_version = "fake:v1"
 
-        def score_paths(self, image_paths, *, batch_size: int = 4, resource_profile: str | None = None):
+        def score_paths(self, image_paths, *, batch_size: int = 4, resource_profile: str | None = None, max_decode_pixels: int | None = None):
             return [LearnedScoreResult(raw_score=0.82, normalized_score=82.0, confidence=91.0) for _ in image_paths]
 
     class FailingBackend:
         name = "topiq_nr"
         model_version = "fake:v2"
 
-        def score_paths(self, image_paths, *, batch_size: int = 4, resource_profile: str | None = None):
+        def score_paths(self, image_paths, *, batch_size: int = 4, resource_profile: str | None = None, max_decode_pixels: int | None = None):
             return [
                 LearnedScoreResult(
                     raw_score=None,
@@ -677,7 +677,7 @@ def test_score_removes_stale_score_row_when_preview_refresh_fails_without_fallba
     raw_path = photo_dir / "sample.cr2"
     raw_path.write_bytes(b"fake-raw")
 
-    def fake_generate_previews_parallel(source_paths, generated_preview_dir: Path, *, max_workers=None, progress_callback=None, raw_preview_mode="auto"):
+    def fake_generate_previews_parallel(source_paths, generated_preview_dir: Path, *, max_workers=None, progress_callback=None, raw_preview_mode="auto", max_decode_pixels=64_000_000):
         assert source_paths == [raw_path]
         assert generated_preview_dir == preview_dir
         assert raw_preview_mode == "auto"
@@ -766,7 +766,7 @@ def test_score_files_releases_backend_after_scoring(tmp_path: Path) -> None:
         name = "topiq_nr"
         model_version = "fake:topiq_nr"
 
-        def score_paths(self, image_paths, *, batch_size: int = 4, resource_profile: str | None = None):
+        def score_paths(self, image_paths, *, batch_size: int = 4, resource_profile: str | None = None, max_decode_pixels: int | None = None):
             return [LearnedScoreResult(raw_score=0.82, normalized_score=82.0, confidence=91.0) for _ in image_paths]
 
         def close(self) -> None:
