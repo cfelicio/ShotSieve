@@ -2,6 +2,9 @@ from __future__ import annotations
 
 from urllib.request import urlopen
 
+from test_frontend_accessibility import _open_review_tab
+
+
 def test_reset_everything_clears_persisted_ui_state(frontend_server: str) -> None:
     state_body = urlopen(f"{frontend_server}/app-state.js").read().decode("utf-8")
     events_body = urlopen(f"{frontend_server}/app-events.js").read().decode("utf-8")
@@ -216,6 +219,51 @@ def test_public_workflow_facade_preserves_library_and_review_behavior(chromium_p
     assert result["openedFile"] is True
     assert result["scanStarted"] is True
     assert result["scoreStarted"] is True
+
+
+def test_open_original_review_action_uses_composed_workflow(chromium_page) -> None:
+    page, _ = chromium_page
+    opened: list[dict[str, object]] = []
+
+    def fulfill_open(route) -> None:
+        opened.append(route.request.post_data_json)
+        route.fulfill(status=200, content_type="application/json", body='{"opened":true}')
+
+    page.route("**/api/files/open", fulfill_open)
+    try:
+        _open_review_tab(page)
+        with page.expect_response("**/api/files/open") as response_info:
+            page.locator("#open-original").click()
+        assert response_info.value.ok
+    finally:
+        page.unroute("**/api/files/open", fulfill_open)
+
+    assert len(opened) == 1
+    assert isinstance(opened[0].get("file_id"), int)
+
+
+def test_full_reset_refreshes_resource_profile_detail(chromium_page) -> None:
+    page, _ = chromium_page
+    page.get_by_role("tab", name="Settings").click()
+    page.evaluate(
+        """
+        () => {
+          window.confirm = () => true;
+          document.getElementById("resource-profile-detail").textContent = "stale profile detail";
+        }
+        """
+    )
+
+    page.locator("#clear-all-cache").click()
+    page.wait_for_function(
+        """
+        () => document.getElementById("resource-profile-select")?.value === "normal"
+          && document.getElementById("resource-profile-detail")?.textContent !== "stale profile detail"
+        """,
+        timeout=10000,
+    )
+
+    assert page.locator("#resource-profile-detail").inner_text() != "stale profile detail"
 
 
 def test_load_queue_keeps_query_available_after_page_clamp_retry(frontend_server: str) -> None:

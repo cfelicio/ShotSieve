@@ -4,7 +4,7 @@ ShotSieve is a local-first photo culling app for people who want AI help without
 
 <img width="1844" height="1251" alt="image" src="https://github.com/user-attachments/assets/31cb0d90-6ec9-4e2e-88f9-9ecfbaecdca6" />
 
-## Release 0.4.0 highlights
+## Release 0.4 series highlights
 
 Release 0.4.0 established ShotSieve's current learned-IQA lineup and runtime
 direction. The 0.4.x fixes are recorded in [CHANGELOG.md](CHANGELOG.md).

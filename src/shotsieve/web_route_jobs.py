@@ -427,7 +427,11 @@ def start_scan_job(handler: Any, context: WebRouteContext, payload: dict[str, ob
     })
 
     worker = partial(_run_scan_job, context, request, scan_registry, job_id)
-    deps.thread_factory(target=worker, daemon=True).start()
+    try:
+        deps.thread_factory(target=worker, daemon=True).start()
+    except Exception:
+        context.operation_lock.release()
+        raise
     _route(context, "send_json", send_json)(handler, {"job_id": job_id, "status": "running"})
 
 
@@ -501,7 +505,11 @@ def start_score_job(handler: Any, context: WebRouteContext, payload: dict[str, o
         finally:
             context.operation_lock.release()
 
-    deps.thread_factory(target=run_score_job, daemon=True).start()
+    try:
+        deps.thread_factory(target=run_score_job, daemon=True).start()
+    except Exception:
+        context.operation_lock.release()
+        raise
     _route(context, "send_json", send_json)(handler, {"job_id": job_id, "status": "running"})
 
 
@@ -675,7 +683,11 @@ def start_compare_job(handler: Any, context: WebRouteContext, payload: dict[str,
         finally:
             context.operation_lock.release()
 
-    deps.thread_factory(target=run_compare_job, daemon=True).start()
+    try:
+        deps.thread_factory(target=run_compare_job, daemon=True).start()
+    except Exception:
+        context.operation_lock.release()
+        raise
     _route(context, "send_json", send_json)(handler, {"job_id": job_id, "status": "running"})
 
 

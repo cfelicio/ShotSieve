@@ -2,6 +2,21 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+### Fixed
+
+- Made schema migrations compatible with standard bare SQLite connections.
+- Released the analysis operation lock when scan, score, or compare worker
+  startup fails before the worker can release it.
+- Wired the Review “Open File” action through the composed workflow facade.
+- Refreshed the resource-profile detail after a full cache reset.
+
+### Documentation
+
+- Renamed the README release heading to cover the 0.4 series and corrected the
+  malformed AMD ROCm Windows prerequisite bullet.
+
 ## [0.4.10] - 2026-09-18
 
 ### Fixed

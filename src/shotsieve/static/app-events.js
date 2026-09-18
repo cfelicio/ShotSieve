@@ -45,6 +45,7 @@
       renderLibraryRoots,
       installDecisionCsvEvents,
       loadAnalysisDiagnostics,
+      updateResourceProfileDetail,
     } = deps;
 
     const TAB_KEYS = new Set(["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Home", "End"]);

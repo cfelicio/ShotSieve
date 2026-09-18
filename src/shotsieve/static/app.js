@@ -138,7 +138,7 @@ const gridController = window.ShotSieveGrid.createGridController({
   handleError: (err) => console.error(err),
   scoreCard: () => "",
   statusPill: () => "",
-  openOriginalFile: async () => {},
+  openOriginalFile: (...args) => workflowsHolder.openOriginalFile(...args),
 });
 
 const workflowsHolder = {};
@@ -293,6 +293,7 @@ const installEvents = eventsModule.createEvents({
   renderLibraryRoots,
   installDecisionCsvEvents,
   loadAnalysisDiagnostics: controller.loadAnalysisDiagnostics,
+  updateResourceProfileDetail: controller.updateResourceProfileDetail,
 });
 
 // String marker compliance for test_frontend_state_reset.py:

@@ -89,6 +89,109 @@ def test_operation_job_launcher_owns_shared_lifecycle(monkeypatch, tmp_path: Pat
     assert status["summary"] == {"result": {"done": True}}
 
 
+class _ThreadStartFailure:
+    def start(self) -> None:
+        raise RuntimeError("thread start failed")
+
+
+def _worker_start_failure_context(tmp_path: Path, operation_lock: threading.Lock, dependencies: object, registry: JobRegistry, *, kind: str):
+    from shotsieve.web_route_common import WebRouteContext
+
+    return WebRouteContext(
+        db_path=tmp_path / f"{kind}.db",
+        operation_lock=operation_lock,
+        scan_registry=registry if kind == "scan" else None,
+        score_registry=registry if kind == "score" else None,
+        compare_registry=registry if kind == "compare" else None,
+        max_request_body_size=1024,
+        static_dir=tmp_path,
+        media_mime_fallbacks={},
+        dependencies=dependencies,
+    )
+
+
+def test_scan_job_releases_operation_lock_if_worker_start_fails(monkeypatch, tmp_path: Path) -> None:
+    from shotsieve import web_route_jobs
+
+    operation_lock = threading.Lock()
+    registry = JobRegistry()
+    dependencies = SimpleNamespace(
+        parse_scan_request=lambda _payload: {
+            "roots": [tmp_path],
+            "preview_dir": None,
+            "extensions": None,
+            "limit": None,
+            "offset": 0,
+            "recursive": True,
+            "rescan_all": False,
+            "generate_previews": False,
+            "preview_mode": "auto",
+            "files_total_hint": 0,
+            "resource_profile": None,
+            "ignore_rules": [],
+            "max_decode_pixels": 64_000_000,
+        },
+        thread_factory=lambda **_kwargs: _ThreadStartFailure(),
+    )
+    context = _worker_start_failure_context(tmp_path, operation_lock, dependencies, registry, kind="scan")
+    monkeypatch.setattr(web_route_jobs, "try_acquire_operation_lock", lambda _handler, ctx: ctx.operation_lock.acquire(blocking=False))
+
+    with pytest.raises(RuntimeError, match="thread start failed"):
+        web_route_jobs.start_scan_job(SimpleNamespace(), context, {})
+
+    assert not operation_lock.locked()
+
+
+def test_score_job_releases_operation_lock_if_worker_start_fails(monkeypatch, tmp_path: Path) -> None:
+    from shotsieve import web_route_jobs
+
+    operation_lock = threading.Lock()
+    registry = JobRegistry()
+    dependencies = SimpleNamespace(
+        optional_string=lambda value: value if isinstance(value, str) else None,
+        require_learned_runtime=lambda **_kwargs: None,
+        thread_factory=lambda **_kwargs: _ThreadStartFailure(),
+    )
+    context = _worker_start_failure_context(tmp_path, operation_lock, dependencies, registry, kind="score")
+    monkeypatch.setattr(web_route_jobs, "try_acquire_operation_lock", lambda _handler, ctx: ctx.operation_lock.acquire(blocking=False))
+
+    with pytest.raises(RuntimeError, match="thread start failed"):
+        web_route_jobs.start_score_job(SimpleNamespace(), context, {})
+
+    assert not operation_lock.locked()
+
+
+def test_compare_job_releases_operation_lock_if_worker_start_fails(monkeypatch, tmp_path: Path) -> None:
+    from shotsieve import web_route_jobs
+
+    operation_lock = threading.Lock()
+    registry = JobRegistry()
+    dependencies = SimpleNamespace(
+        optional_string=lambda value: value if isinstance(value, str) else None,
+        default_batch_size=lambda: 4,
+        parse_compare_request=lambda _payload, *, default_batch_size: {
+            "models": ["topiq_nr", "clipiqa"],
+            "limit": None,
+            "offset": 0,
+            "root": None,
+            "device": "cpu",
+            "batch_size": default_batch_size,
+            "compare_chunk_size": 4,
+            "max_decode_pixels": 64_000_000,
+            "resource_profile": None,
+        },
+        require_learned_runtime=lambda **_kwargs: None,
+        thread_factory=lambda **_kwargs: _ThreadStartFailure(),
+    )
+    context = _worker_start_failure_context(tmp_path, operation_lock, dependencies, registry, kind="compare")
+    monkeypatch.setattr(web_route_jobs, "try_acquire_operation_lock", lambda _handler, ctx: ctx.operation_lock.acquire(blocking=False))
+
+    with pytest.raises(RuntimeError, match="thread start failed"):
+        web_route_jobs.start_compare_job(SimpleNamespace(), context, {})
+
+    assert not operation_lock.locked()
+
+
 class TestRouteHandlingAsync:
     def test_score_start_fails_fast_when_learned_iqa_runtime_missing(self, tmp_path: Path, monkeypatch):
         from http.server import ThreadingHTTPServer

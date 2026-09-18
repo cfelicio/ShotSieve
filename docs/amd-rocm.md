@@ -19,7 +19,7 @@ run is treated as evidence.
   Linux distributions and kernels. This is a selected list, not all Radeon
   cards or all `gfx` architectures.
 - **Windows is optional and narrower:** the documented 7.2.1 PyTorch path is
--  for explicitly listed Radeon/Ryzen hardware, Python 3.12, and the required
+  for explicitly listed Radeon/Ryzen hardware, Python 3.12, and the required
   AMD graphics driver. AMD documents PyTorch on Windows for this path, not the
   complete Linux ROCm framework stack; do not infer Windows support for other
   ROCm frameworks or arbitrary AMD GPUs.

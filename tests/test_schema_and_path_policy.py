@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from shotsieve.db import connect, initialize_database, root_path_filter
+from shotsieve.db import apply_schema_migrations, connect, initialize_database, root_path_filter
 from shotsieve.preview import preview_output_paths, stable_preview_name
 from shotsieve.scanner import canonical_path_key
 from shotsieve.schema import SCHEMA_SQL
@@ -70,6 +70,35 @@ def test_initialize_database_adds_analysis_diagnostic_columns_to_existing_files_
         columns = {row["name"] for row in connection.execute("PRAGMA table_info(files)").fetchall()}
 
     assert {"analysis_status", "analysis_error", "last_analysis_time"}.issubset(columns)
+
+
+def test_apply_schema_migrations_accepts_bare_sqlite_connection() -> None:
+    connection = sqlite3.connect(":memory:")
+    try:
+        connection.executescript(
+            """
+            CREATE TABLE files (id INTEGER PRIMARY KEY, path TEXT NOT NULL, path_key TEXT NOT NULL);
+            CREATE TABLE scores (file_id INTEGER PRIMARY KEY);
+            CREATE TABLE scan_runs (id INTEGER PRIMARY KEY);
+            """
+        )
+
+        apply_schema_migrations(connection)
+        apply_schema_migrations(connection)
+
+        expected_columns = {
+            "files": {"analysis_status", "analysis_error", "last_analysis_time", "preview_conversion_version"},
+            "scores": {"learned_confidence", "source_modified_time", "source_size_bytes", "image_conversion_version"},
+            "scan_runs": {"files_removed"},
+        }
+        for table_name, expected in expected_columns.items():
+            columns = {
+                row[1]
+                for row in connection.execute(f"PRAGMA table_info({table_name})").fetchall()
+            }
+            assert expected.issubset(columns)
+    finally:
+        connection.close()
 
 
 def test_canonical_path_key_preserves_case_on_case_sensitive_platform(

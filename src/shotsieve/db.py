@@ -192,7 +192,7 @@ def _persist_scan_diagnostic_after_rollback(
 def apply_schema_migrations(connection: sqlite3.Connection) -> None:
     for table_name, migrations in SCHEMA_MIGRATIONS.items():
         columns = {
-            row["name"]
+            row[1]
             for row in connection.execute(f"PRAGMA table_info({table_name})").fetchall()
         }
         for column_name, sql in migrations.items():
