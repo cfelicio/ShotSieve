@@ -54,10 +54,13 @@ def _is_torch_test_asset(entry):
 def _without_torch_test_assets(entries):
     return [entry for entry in entries if not _is_torch_test_asset(entry)]
 
-# Collect difficult dependencies using collect_all
-difficult_packages = ["pyiqa", "numpy", "PIL", "fastapi", "uvicorn", "jinja2", "icecream", "setuptools", "pip"]
+# Collect difficult dependencies using collect_all.  Learned IQA is a
+# sidecar-only dependency for torchless runtime packs; collecting pyiqa here
+# would make PyInstaller follow its Torch imports and pull Torch back into the
+# portable archive.  Keep the full set for legacy/non-torchless builds.
+difficult_packages = ["numpy", "PIL", "fastapi", "uvicorn", "jinja2", "icecream", "setuptools", "pip"]
 if not skip_bundled_torch:
-    difficult_packages.extend(["torch", "torchvision"])
+    difficult_packages.extend(["pyiqa", "torch", "torchvision"])
 
 for pkg in difficult_packages:
     try:
