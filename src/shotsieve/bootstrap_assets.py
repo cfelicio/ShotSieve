@@ -633,15 +633,15 @@ def ensure_runtime_asset(asset: RuntimeAsset, *, runtime_root: Path, force_refre
             f"Downloaded archive hash mismatch for target '{asset.id}'. Expected {expected_sha256}, got {downloaded_hash}."
         )
 
-    with tempfile.TemporaryDirectory(prefix=f"shotsieve-bootstrap-{asset.id}-") as temp_dir:
+    with tempfile.TemporaryDirectory(prefix=f"shotsieve-bootstrap-{asset.id}-", dir=installs_dir) as temp_dir:
         temp_path = Path(temp_dir)
         extract_archive(archive_path, temp_path)
+        _find_runtime_executable(temp_path, asset)
+        (temp_path / ".asset-sha256").write_text(expected_sha256, encoding="utf-8")
 
         if install_dir.exists():
             shutil.rmtree(install_dir)
         shutil.move(str(temp_path), str(install_dir))
-
-    marker_path.write_text(expected_sha256, encoding="utf-8")
 
     try:
         archive_path.unlink(missing_ok=True)

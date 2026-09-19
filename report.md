@@ -36,7 +36,7 @@ listed rollback boundary.
 | **WI-02** | **Completed — retain** | P2 | **Delete version-compatibility code** | Remove only code that supports an old install, old target/launcher ID, old sidecar location/marker, old preview name, old model alias, or old public/private helper name. Make current-version direct paths the only path. Do not add replacement adapters. | Completed: 710 passed, 1 skipped; Ruff passed. Type tools unavailable. |
 | **WI-03** | **Completed - retain** | P3 | **Delete proven frontend no-ops** | Remove no-op `addLogEntry`, unused score-card/status-pill hooks, and the unused score-sort hook. Keep the now-working direct Open-original callback. Do **not** add module registries or startup validation frameworks. | Completed: 157 frontend/static/accessibility/responsive tests; 57 browser tests passed with one transient shell-ready timeout whose isolated rerun passed; Ruff passed; full pytest 711 passed, 1 skipped. Type tools unavailable. |
 | **WI-04** | **Completed - retain** | P3 | **Remove legacy signature fallback dispatch** | Replace `inspect.signature` compatibility forwarding for `max_decode_pixels` with direct current signatures, then delete the unused fallback branches and imports. Do not introduce a generic callback helper. | Completed: baseline scanner/preview/scoring/runtime-helper set 101 passed; expanded focused set 225 passed; final runtime-focused check 30 passed; Ruff passed; full pytest 711 passed, 1 skipped in 233.85s. Type tools unavailable. |
-| **WI-05** | Parked | P4 | **Simplify runtime-asset publication only if first-install evidence fails** | Do not add previous-version backup/restore or upgrade recovery. Current checksum and staging behavior is sufficient unless a reproducible *fresh-install* corruption case appears. | Reproduce first; do not write speculative tests or recovery code. |
+| **WI-05** | **Completed — retain** | P4 | **Simplify runtime-asset publication after first-install evidence** | Extract runtime archives on the destination volume, validate the launcher before publication, and write the checksum marker in staging. Do not add previous-version backup/restore or upgrade recovery. | Completed: reproducible fresh-install invalid-layout case; focused baseline 70 passed, post-change 71 passed; Ruff passed; full pytest 712 passed, 1 skipped. Type tools unavailable. |
 | **WI-06** | Rejected | — | **Central target-install plan emitter** | Keep the existing explicit Python, PowerShell, and Actions install commands. A shared plan parser/emitter would add more code and shell failure modes than it removes for one maintainer. | None. Update the few explicit commands together when pins change. |
 | **WI-07** | Rejected | — | **Release-asset preservation flag** | Keep intentional source-archive deletion in release-only tooling. Local release inputs are disposable and a fresh build/download is the recovery path. Do not add a flag, confirmation protocol, or retained-artifact policy. | Existing release-script tests. |
 | **WI-08** | Rejected | — | **Module registry and extra partial-result UX** | Classic script ordering is adequate for a single app shell. The current missing-cache behavior is truthful enough; do not add registry plumbing or per-root presentation state without a user-visible failure. | None. |
@@ -158,9 +158,31 @@ the full `python -m pytest -q --basetemp .pytest-tmp-wi04-full-final` suite pass
 run because neither `mypy` nor `pyright` is installed and no type-check
 command is configured in `pyproject.toml`.
 
+### WI-05 implementation review
+
+**Decision: retain the direct fresh-install publication fix; no upgrade recovery was added.**
+
+- A checksum-valid archive with the expected launcher missing reproduced the
+  first-install failure: the old code moved the invalid extraction into
+  `installs/<target>`, wrote `.asset-sha256`, and only then raised the missing
+  executable error.
+- Runtime archives now extract into a temporary directory under the destination
+  `installs` directory, validate the expected launcher while still staged, and
+  write the checksum marker before moving the staged directory into place. An
+  invalid fresh archive therefore leaves no published target install.
+- No previous-version backup, restore, or compatibility path was introduced.
+
+Focused verification before the behavior change passed **70 tests**. The
+focused runtime/bootstrap/release set after the change passed **71 tests**,
+including the reproduced invalid-layout regression. `python -m ruff check src
+tests` passed. The full `python -m pytest -q --basetemp .pytest-tmp-wi05-full`
+suite passed **712 tests**, with **1 skipped**, in **231.72s**. Type verification
+was not run because neither `mypy` nor `pyright` is installed and no type-check
+command is configured in `pyproject.toml`.
+
 ### New-session starter prompt
 
-> Continue ShotSieve cleanup using `report.md` as the source of truth. WI-04 is complete and retained. Work on WI-05 only if a reproducible fresh-install corruption case is available; do not add speculative upgrade recovery or compatibility helpers.
+> Continue ShotSieve cleanup using `report.md` as the source of truth. WI-01 through WI-05 are complete and retained. Do not add upgrade recovery or compatibility helpers without a newly recorded work item.
 
 ### WI-01 completion notes
 
@@ -259,19 +281,22 @@ current priority and supersedes the original recommendation where necessary.
 
 **Protective tests:** extend `tests/test_schema_and_path_policy.py` with a bare connection containing legacy `files`, `scores`, and `scan_runs` tables; run the helper twice and assert required columns exist both times. The current test at `45-64` exercises the product initializer but not the generic helper.
 
-### Parked (WI-05) — Runtime archive publication rollback
+### Completed in WI-05 — Runtime archive publication safety
 
-**Evidence:** `ensure_runtime_asset()` extracts into a temporary directory but does not call `_find_runtime_executable()` until after it removes `install_dir` and moves the extraction (`src/shotsieve/bootstrap_assets.py:623-687`, especially `677-687`). The move is also not a same-directory staged swap with restoration of the previous install.
+**Evidence:** A checksum-valid archive containing only `readme.txt` reproduced a
+fresh-install failure: `ensure_runtime_asset()` published the extracted tree and
+`.asset-sha256` before `_find_runtime_executable()` reported the missing
+launcher. The regression is covered by
+`tests/test_bootstrap_runtime_assets.py`.
 
-**Concrete problem:** a checksum-valid archive with a wrong layout/missing executable, a cross-volume move failure, a full disk, or an interruption can remove an existing working runtime before the replacement is known good. The next start may have neither a launchable old runtime nor a valid new one.
+**Fix:** `ensure_runtime_asset()` stages under `runtime_root / "installs"`,
+validates the expected executable before publication, and writes the digest
+marker in staging. A malformed fresh-install archive is rejected without
+creating `installs/<target>`. Previous-version backup/restore and upgrade
+recovery remain intentionally out of scope.
 
-**Small fix:** stage under `runtime_root / "installs"` on the destination volume; extract; validate the expected executable in staging; write the marker in staging; rename existing install to a retained previous directory; rename staging into place; restore previous if publication fails; delete previous only after successful validation/publication. Preserve checksum verification and archive-member traversal protections.
-
-**What becomes easier:** forced refresh and release upgrades are retryable without turning a recoverable bad asset into a broken installation.
-
-**Risk and rollback:** medium because Windows directory rename rules and antivirus locks require careful handling. Keep the old behavior behind the same function boundary and add tests for each rename failure before enabling deletion of the previous directory.
-
-**Protective tests:** `tests/test_bootstrap_runtime_assets.py:29-253` already covers digest failures, local archive fallback, split download, and successful extraction. Add (1) malformed-but-correctly-hashed archive layout leaves the old install untouched, (2) simulated publish rename failure restores the old executable, and (3) a successful refresh removes the previous directory.
+**Verification:** The pre-change focused set passed 70 tests; the post-change
+set passed 71; Ruff passed; and the full suite passed 712 tests with 1 skip.
 
 ### Resolved in WI-01 — The composed **Open original** action
 
@@ -465,8 +490,10 @@ facades unless a current-version defect cannot be fixed directly.
   logging, registries, or another indirection layer.
 3. **WI-04:** completed; retain the direct current-version calls and their
   focused regressions.
-4. Stop after each item and measure the maintenance benefit. WI-05 through
-  WI-08 are intentionally not planned without a new current-version problem.
+4. **WI-05:** completed; retain destination-volume staging and pre-publication
+  launcher validation. Do not add previous-version backup/restore.
+5. Stop after each item and measure the maintenance benefit. WI-06 through
+  WI-08 remain rejected or intentionally parked.
 
 ## K. Verification commands
 
@@ -531,9 +558,8 @@ Then follow `docs/intel-xpu.md` or `docs/amd-rocm.md` for a native tensor operat
 
 ## Final assessment
 
-WI-01 through WI-04 are lean and should remain. Future work should remove
-code, not create more recovery or metadata machinery: consider WI-05 only if
-fresh-install evidence establishes a current problem. Preserve current-run
+WI-01 through WI-05 are lean and should remain. Future work should remove
+code, not create more recovery or metadata machinery. Preserve current-run
 photo, filesystem, database, decoding, and cancellation safeguards; discard
 upgrade and compatibility mechanisms that are no longer part of the product
 contract.

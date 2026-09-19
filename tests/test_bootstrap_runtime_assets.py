@@ -217,6 +217,32 @@ def test_ensure_runtime_asset_rejects_mismatched_archive_before_extraction(
     assert not (tmp_path / "installs" / asset.id).exists()
 
 
+def test_ensure_runtime_asset_does_not_publish_valid_archive_with_missing_executable(
+    tmp_path: Path,
+) -> None:
+    archive_name = "ShotSieve-windows-cpu-x64.zip"
+    archive_path = tmp_path / "downloads" / archive_name
+    archive_path.parent.mkdir(parents=True)
+    with zipfile.ZipFile(archive_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr("ShotSieve-windows-cpu/readme.txt", "not a launcher")
+
+    asset = bootstrap_module.RuntimeAsset(
+        id="windows-cpu",
+        platform="windows",
+        runtime="cpu",
+        url="https://example.invalid/runtime.zip",
+        archive_name=archive_name,
+        executable_name="ShotSieve-CPU.exe",
+        variant_folder_name="ShotSieve-windows-cpu",
+        sha256=bootstrap_module.sha256_file(archive_path),
+    )
+
+    with pytest.raises(SystemExit, match="executable 'ShotSieve-CPU.exe' was not found"):
+        bootstrap_module.ensure_runtime_asset(asset, runtime_root=tmp_path)
+
+    assert not (tmp_path / "installs" / asset.id).exists()
+
+
 def test_ensure_runtime_asset_prefers_colocated_frozen_runtime_executable(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

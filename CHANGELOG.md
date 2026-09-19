@@ -23,6 +23,9 @@ All notable changes to this project will be documented in this file.
   startup fails before the worker can release it.
 - Wired the Review “Open File” action through the composed workflow facade.
 - Refreshed the resource-profile detail after a full cache reset.
+- Validated runtime-pack launchers in destination-volume staging before
+  publication and wrote checksum markers before publication, so a checksum-valid
+  archive with an invalid fresh-install layout is not left as a marked install.
 
 ### Documentation
 
