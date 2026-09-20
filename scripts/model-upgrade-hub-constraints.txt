@@ -1,0 +1,3 @@
+# Qualification profile: upgrade Hub only; keep production Transformers.
+huggingface-hub==1.32.0
+transformers==5.14.1

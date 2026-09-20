@@ -1,23 +1,17 @@
-name: ci-release
+name: preview-build
 
 on:
   push:
-    tags:
-      - v*
+    branches:
+      - 0.5.x
   workflow_dispatch:
-    inputs:
-      release_tag:
-        description: Existing or new version tag to publish (for example, v0.4.6)
-        required: true
-        type: string
 
 concurrency:
-  group: ci-release-${{ github.ref }}
+  group: preview-build-${{ github.ref }}
   cancel-in-progress: true
 
 permissions:
-  contents: write
-  actions: write
+  contents: read
 
 env:
   PYTHONUNBUFFERED: "1"
@@ -28,6 +22,7 @@ jobs:
   test:
     name: test-${{ matrix.os }}-py${{ matrix.python-version }}
     runs-on: ${{ matrix.os }}
+    if: github.ref == 'refs/heads/0.5.x'
     strategy:
       fail-fast: false
       matrix:
@@ -66,9 +61,10 @@ jobs:
       - name: Run test suite
         run: python -m pytest -q
 
-  prepare-release-matrix:
-    name: prepare-release-matrix
+  prepare-preview-matrix:
+    name: prepare-preview-matrix
     runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/0.5.x'
 
     outputs:
       runtime_matrix: ${{ steps.runtime-matrix.outputs.matrix }}
@@ -83,7 +79,7 @@ jobs:
           python-version: "3.12"
 
       - id: runtime-matrix
-        name: Export runtime pack release matrix
+        name: Export runtime pack build matrix
         shell: bash
         run: |
           echo 'matrix<<EOF' >> "$GITHUB_OUTPUT"
@@ -100,48 +96,19 @@ jobs:
           PY
           echo 'EOF' >> "$GITHUB_OUTPUT"
 
-  build-python-dist:
-    name: build-python-dist
-    runs-on: ubuntu-latest
-    needs: test
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v5
-
-      - name: Set up Python
-        uses: actions/setup-python@v6
-        with:
-          python-version: "3.12"
-          cache: pip
-
-      - name: Build sdist and wheel
-        run: |
-          python -m pip install --upgrade pip build
-          python -m build
-
-      - name: Upload Python distributions
-        if: ${{ github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/v') }}
-        uses: actions/upload-artifact@v6
-        with:
-          name: python-dist
-          path: dist/*
-          if-no-files-found: error
-          retention-days: 3
-
   build-tier1-portable-bundles:
     name: build-${{ matrix.id }}
     runs-on: ${{ matrix.runsOn }}
-    if: ${{ github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/v') }}
+    if: github.ref == 'refs/heads/0.5.x'
     needs:
       - test
-      - prepare-release-matrix
+      - prepare-preview-matrix
     env:
       PIP_NO_CACHE_DIR: "1"
       PIP_DISABLE_PIP_VERSION_CHECK: "1"
     strategy:
       fail-fast: false
-      matrix: ${{ fromJson(needs.prepare-release-matrix.outputs.runtime_matrix) }}
+      matrix: ${{ fromJson(needs.prepare-preview-matrix.outputs.runtime_matrix) }}
 
     steps:
       - name: Checkout
@@ -224,17 +191,13 @@ jobs:
           python -m pip install -e ".[${{ join(matrix.extras, ',') }}]" -c ${{ env.RELEASE_CONSTRAINTS }} -c ${{ matrix.constraintsFile }}
           python -m pip install pyinstaller -c ${{ env.RELEASE_CONSTRAINTS }} -c ${{ matrix.constraintsFile }}
 
-      - name: Check resolved release requirements
+      - name: Check resolved build requirements
         run: python -m pip check
 
       - name: Build portable bundle
         env:
-          # All portable archives are torchless.  Torch remains installed in
-          # the build environment so PyInstaller can analyze learned-IQA
-          # imports, but it is excluded from the published archive.
           SHOTSIEVE_SKIP_BUNDLED_TORCH: "1"
-        run: |
-          python scripts/build_portable_bundle.py --target ${{ matrix.id }}
+        run: python scripts/build_portable_bundle.py --target ${{ matrix.id }}
 
       - name: Export portable bundle plan
         shell: pwsh
@@ -270,86 +233,10 @@ jobs:
 
           & $launcher --help | Out-Null
 
-      - name: Upload portable bundle artifact
+      - name: Upload preview bundle artifact
         uses: actions/upload-artifact@v6
         with:
-          name: ${{ matrix.id }}-portable-bundle
+          name: ${{ matrix.id }}-preview-build
           path: dist/${{ matrix.archiveName }}
           if-no-files-found: error
-          retention-days: 3
-
-  publish-release:
-    name: publish-release
-    runs-on: ubuntu-latest
-    needs:
-      - build-python-dist
-      - build-tier1-portable-bundles
-    if: ${{ github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/v') }}
-    env:
-      RELEASE_TAG: ${{ inputs.release_tag || github.ref_name }}
-
-    steps:
-      - name: Checkout release tooling
-        uses: actions/checkout@v5
-
-      - name: Download all build artifacts
-        uses: actions/download-artifact@v7
-        with:
-          path: release-assets
-
-      - name: Set up Python for release asset preparation
-        uses: actions/setup-python@v6
-        with:
-          python-version: "3.12"
-
-      - name: Prepare release assets within GitHub size limits
-        run: |
-          python scripts/prepare_release_assets.py \
-            --source-root release-assets \
-            --output-root release-publish
-
-      - name: Generate checksummed bootstrap manifest
-        run: |
-          python scripts/generate_bootstrap_manifest.py \
-            --archive-root release-publish \
-            --output release-publish/bootstrap-manifest.json \
-            --release-tag "${RELEASE_TAG}" \
-            --repository "${GITHUB_REPOSITORY}"
-
-      - name: Publish GitHub release
-        uses: softprops/action-gh-release@v3.0.3
-        with:
-          tag_name: ${{ inputs.release_tag || github.ref_name }}
-          files: |
-            release-publish/bootstrap-manifest.json
-            release-publish/**/*.whl
-            release-publish/**/*.zip
-            release-publish/**/*.tar.gz
-            release-publish/**/*.part-*
-          generate_release_notes: true
-
-      - name: Delete workflow artifacts after publishing release
-        if: ${{ success() }}
-        uses: actions/github-script@v8
-        with:
-          script: |
-            const { owner, repo } = context.repo;
-            const run_id = context.runId;
-            const artifacts = await github.paginate(
-              github.rest.actions.listWorkflowRunArtifacts,
-              {
-                owner,
-                repo,
-                run_id,
-                per_page: 100,
-              }
-            );
-
-            for (const artifact of artifacts) {
-              await github.rest.actions.deleteArtifact({
-                owner,
-                repo,
-                artifact_id: artifact.id,
-              });
-              core.info(`Deleted artifact: ${artifact.name}`);
-            }
+          retention-days: 7

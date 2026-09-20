@@ -14,14 +14,14 @@ The entries below identify the current supported product boundary. They are
 not a blanket permission for every upstream asset: package code, checkpoint
 files, and any base model can have different terms. The exact package versions
 used by a release must be taken from that release's target constraints and
-audited before publication. The current tested model integration selection is
-`pyiqa==0.1.16`, `timm==1.0.29`, `huggingface-hub==1.31.0`,
-`transformers==5.14.1`, and `openai-clip==1.0.1`; supported targets use
-`torch==2.14.0` and `torchvision==0.29.0`. The retired legacy GPU package and
-target are not part of the supported dependency or release matrix. The
-AMD targets use AMD-published ROCm 7.2.1 Torch wheels documented in
-`docs/amd-rocm.md`; those wheels and the ROCm runtime must be audited under
-AMD's applicable terms.
+audited before publication. The current learned-IQA pins include
+`pyiqa==0.1.16`, `facexlib==0.3.0`, `timm==1.0.29`,
+`huggingface-hub==1.31.0`, `transformers==5.14.1`, `openai-clip==1.0.1`,
+`accelerate==1.15.0`, `sentencepiece==0.2.2`, and `einops==0.8.2`.
+Supported CPU, CUDA, and MPS targets use `torch==2.14.0` and
+`torchvision==0.29.0`; the XPU and ROCm targets use their separate target
+constraints. The retired legacy GPU package and target are not part of the
+supported dependency or release matrix.
 
 ---
 
@@ -60,20 +60,23 @@ ShotSieve product catalog.
 
 - **Model card:** [Q-Future Q-ReAlign Mini 0.8B](https://huggingface.co/q-future/Q-ReAlign-Mini-0.8B)
 - **Repository:** [Q-Future/Q-ReAlign](https://github.com/Q-Future/Q-ReAlign)
-- **PyIQA metric:** `qrealign-mini` in `pyiqa==0.1.16`; its `qrealign` alias also selects Mini
+- **PyIQA metric:** `qrealign-mini` in `pyiqa==0.1.16`; ShotSieve exposes
+  only the catalog name `qrealign-mini` for new runs
 - **Checkpoint:** `q-future/Q-ReAlign-Mini-0.8B`, about 2.21 GB of safetensors
 - **Pinned model revision:** `fe1f45a7574c9e9d908875af9f7e90cb946aa19f` (model-card commit)
 - **Model-card license:** Apache-2.0, as declared by the checkpoint repository
 - **Base model:** Qwen3.5-VL (`qwen3_5`); review the [Qwen3.5 source and license](https://github.com/QwenLM/Qwen3.5) and the exact base-model terms before redistribution or commercial use
 - **Terms boundary:** the Q-ReAlign checkpoint, Qwen3.5-VL base/model terms, Q-ReAlign implementation, PyIQA code, and downloaded tokenizer/processor assets are separate review boundaries. ShotSieve does not bundle any of them.
-- **Runtime boundary:** the initial product size is Mini only, with a ShotSieve batch maximum of four. CPU and accelerator execution are exposed through the model/runtime compatibility catalog, but each target still requires the fresh online/offline evidence in `manualsteps.md` before it is claimed as validated.
+- **Runtime boundary:** the initial product size is Mini only, with a ShotSieve batch maximum of four. CPU and accelerator execution are exposed through the model/runtime compatibility catalog, but each target requires fresh online/offline model-smoke evidence using the relevant runtime guide before it is claimed as validated.
 
-## AMD ROCm source track
+## AMD ROCm track
 
 - **Pinned validation family:** AMD ROCm 7.2.1 PyTorch wheels, Python 3.12;
   see `scripts/source-constraints-rocm.txt` and `docs/amd-rocm.md`
-- **Distribution:** AMD-published wheels and system ROCm/AMDGPU components;
-  not included in ShotSieve runtime packs
+- **Distribution:** AMD-published wheels and system ROCm/AMDGPU components. The
+  Windows/Linux runtime packs advertise this track and install the matching
+  wheels as target-specific sidecars; the wheels and system components are not
+  inside the ShotSieve archive.
 - **Terms:** review the [ROCm license and disclaimers](https://rocm.docs.amd.com/en/latest/about/license.html), AMD driver terms, and the exact wheel metadata before redistribution or commercial use
 - **Support boundary:** Linux-first, exact GPU/OS/driver/Python matrix only;
   Windows PyTorch support is optional and narrower than the Linux stack
@@ -89,7 +92,7 @@ inspect all license/notice files in the staged bundle, and verify that no
 weights are present. A minimal metadata check is:
 
 ```bash
-python -m pip show pyiqa torch torchvision timm huggingface-hub transformers Pillow numpy
+python -m pip show pyiqa facexlib torch torchvision timm huggingface-hub transformers openai-clip accelerate sentencepiece einops Pillow numpy
 ```
 
 Handle missing optional packages explicitly; the command reports warnings for

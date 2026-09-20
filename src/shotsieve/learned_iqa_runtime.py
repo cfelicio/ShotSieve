@@ -205,8 +205,13 @@ def cuda_runtime_status(torch_module, *, allow_hip: bool = False) -> tuple[bool,
             return False, "CUDA is unavailable in the installed Torch runtime"
 
         version = getattr(torch_module, "version", None)
-        if not allow_hip and getattr(version, "hip", None):
-            return False, "the installed Torch runtime is a HIP/ROCm build, not an NVIDIA CUDA build"
+        if getattr(version, "hip", None):
+            if not allow_hip:
+                return False, "the installed Torch runtime is a HIP/ROCm build, not an NVIDIA CUDA build"
+            # HIP reuses torch.cuda, but reports AMD gfx architectures, not
+            # NVIDIA SMs. Visibility is the ROCm availability check here;
+            # actual kernel/model support still requires a hardware smoke test.
+            return True, None
 
         get_arch_list = getattr(cuda, "get_arch_list", None)
         get_device_capability = getattr(cuda, "get_device_capability", None)
@@ -584,7 +589,7 @@ def detect_gpu_vram_mb(*, torch_module=None, import_module=importlib.import_modu
         torch_module = None
 
     if torch_module is not None:
-        if has_cuda(torch_module):
+        if has_cuda(torch_module) or has_rocm(torch_module):
             cuda = getattr(torch_module, "cuda", None)
             get_device_properties = getattr(cuda, "get_device_properties", None)
             if callable(get_device_properties):
@@ -701,7 +706,7 @@ def _runtime_status_text_from_torch_import(*, import_module=importlib.import_mod
     try:
         torch_module = import_module("torch")
     except Exception:
-        return DEFAULT_RUNTIME_STATUS_TEXT
+        torch_module = None
 
     try:
         statuses = runtime_statuses(torch_module=torch_module, import_module=import_module, system_name=system_name)
@@ -714,7 +719,7 @@ def _runtime_status_text_from_torch_import(*, import_module=importlib.import_mod
 def unavailable_backend_payload(*, status: str, error: str | None = None, resource_profile: str | None = None, import_module=importlib.import_module, system_name: str | None = None) -> dict[str, object]:
     catalog = ",".join(supported_learned_models())
     runtime_targets = ",".join(supported_runtime_targets())
-    auto_priority = ",".join(auto_runtime_order())
+    auto_priority = ",".join(auto_runtime_order(system_name))
     vendor_aliases = "nvidia->cuda,amd->rocm(with validated HIP build),intel->xpu,apple->mps"
     runtime_status_text = _runtime_status_text_from_torch_import(import_module=import_module, system_name=system_name)
     hw = detect_hardware_capabilities()
@@ -759,6 +764,9 @@ def configure_runtime_noise_controls() -> None:
         # and uses more disk, but it works without Developer Mode or elevation.
         os.environ.setdefault("HF_HUB_DISABLE_SYMLINKS", "1")
         os.environ.setdefault("HF_HUB_DISABLE_SYMLINKS_WARNING", "1")
+        # Hub 1.32 adds a cache-wide Xet blob store that links files across
+        # repositories. Keep Windows on the same privilege-free copy policy.
+        os.environ.setdefault("HF_HUB_DISABLE_SHARED_BLOBS", "1")
 
         # Respect a Hub import that happened before this function was called.
         # The Hub reads these environment variables at import time, so update
@@ -768,6 +776,15 @@ def configure_runtime_noise_controls() -> None:
             try:
                 setattr(hub_constants, "HF_HUB_DISABLE_SYMLINKS", True)
                 setattr(hub_constants, "HF_HUB_DISABLE_SYMLINKS_WARNING", True)
+                if hasattr(hub_constants, "HF_HUB_DISABLE_SHARED_BLOBS"):
+                    shared_blobs_setting = os.environ.get(
+                        "HF_HUB_DISABLE_SHARED_BLOBS", ""
+                    ).strip().casefold()
+                    setattr(
+                        hub_constants,
+                        "HF_HUB_DISABLE_SHARED_BLOBS",
+                        shared_blobs_setting in {"1", "true", "yes", "on"},
+                    )
             except Exception:
                 pass
 

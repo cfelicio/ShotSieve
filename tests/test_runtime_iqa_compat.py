@@ -138,6 +138,7 @@ def test_runtime_noise_controls_set_env_and_logger_levels(monkeypatch) -> None:
     monkeypatch.delenv("HF_HUB_DISABLE_PROGRESS_BARS", raising=False)
     monkeypatch.delenv("HF_HUB_DISABLE_SYMLINKS", raising=False)
     monkeypatch.delenv("HF_HUB_DISABLE_SYMLINKS_WARNING", raising=False)
+    monkeypatch.delenv("HF_HUB_DISABLE_SHARED_BLOBS", raising=False)
     monkeypatch.delenv("TRANSFORMERS_VERBOSITY", raising=False)
     monkeypatch.delenv("TOKENIZERS_PARALLELISM", raising=False)
 
@@ -150,8 +151,36 @@ def test_runtime_noise_controls_set_env_and_logger_levels(monkeypatch) -> None:
     if os.name == "nt":
         assert os.environ.get("HF_HUB_DISABLE_SYMLINKS") == "1"
         assert os.environ.get("HF_HUB_DISABLE_SYMLINKS_WARNING") == "1"
+        assert os.environ.get("HF_HUB_DISABLE_SHARED_BLOBS") == "1"
     assert logging.getLogger("pyiqa").getEffectiveLevel() >= logging.WARNING
     assert logging.getLogger("huggingface_hub").getEffectiveLevel() >= logging.ERROR
+
+
+def test_windows_noise_controls_update_loaded_hub_shared_blob_policy(monkeypatch) -> None:
+    import os
+
+    from shotsieve import learned_iqa_runtime
+
+    constants = types.SimpleNamespace(
+        HF_HUB_DISABLE_SYMLINKS=False,
+        HF_HUB_DISABLE_SYMLINKS_WARNING=False,
+        HF_HUB_DISABLE_SHARED_BLOBS=False,
+    )
+    monkeypatch.setattr(learned_iqa_runtime.os, "name", "nt")
+    monkeypatch.setitem(sys.modules, "huggingface_hub.constants", constants)
+    for env_name in (
+        "HF_HUB_DISABLE_SYMLINKS",
+        "HF_HUB_DISABLE_SYMLINKS_WARNING",
+        "HF_HUB_DISABLE_SHARED_BLOBS",
+    ):
+        monkeypatch.delenv(env_name, raising=False)
+
+    learned_iqa_runtime.configure_runtime_noise_controls()
+
+    assert os.environ["HF_HUB_DISABLE_SHARED_BLOBS"] == "1"
+    assert constants.HF_HUB_DISABLE_SYMLINKS is True
+    assert constants.HF_HUB_DISABLE_SYMLINKS_WARNING is True
+    assert constants.HF_HUB_DISABLE_SHARED_BLOBS is True
 
 
 def test_runtime_warning_filter_suppresses_known_noisy_messages() -> None:

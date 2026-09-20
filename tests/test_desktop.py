@@ -9,7 +9,7 @@ from typing import cast
 
 import shotsieve.desktop as desktop_module
 import pytest
-from shotsieve.bootstrap_sidecar import torch_install_plan
+from shotsieve.bootstrap_sidecar import SIDECAR_STATE_VERSION, torch_install_plan
 
 
 def test_desktop_parser_accepts_optional_model_cache_dir() -> None:
@@ -162,6 +162,11 @@ def test_runtime_target_id_from_executable_name_ignores_a_legacy_nvidia_launcher
     (
         ("ShotSieve-Intel-XPU.exe", "windows-intel-xpu", "xpu"),
         ("ShotSieve-AMD-ROCm.exe", "windows-amd-rocm", "rocm"),
+        (
+            "ShotSieve-AMD-ROCm10-GFX1103.exe",
+            "windows-amd-rocm10-gfx1103",
+            "rocm",
+        ),
     ),
 )
 def test_experimental_windows_gpu_launcher_names_select_native_runtime(
@@ -567,7 +572,7 @@ def test_maybe_prepare_torch_runtime_repairs_sidecar_when_explicitly_requested(
     (site_packages / ".shotsieve-runtime.json").write_text(
         json.dumps(
             {
-                "schema": 1,
+                "schema": SIDECAR_STATE_VERSION,
                 "kind": "runtime",
                 "complete": True,
                 "torch_complete": True,
@@ -618,7 +623,7 @@ def test_maybe_prepare_torch_runtime_skips_reinstall_when_explicitly_disabled(
     (site_packages / ".shotsieve-runtime.json").write_text(
         json.dumps(
             {
-                "schema": 1,
+                "schema": SIDECAR_STATE_VERSION,
                 "kind": "runtime",
                 "complete": True,
                 "torch_complete": True,

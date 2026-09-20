@@ -15,10 +15,32 @@ All notable changes to this project will be documented in this file.
 - Removed legacy `inspect.signature` forwarding for `max_decode_pixels` in
   scanner, preview, scoring, and learned-IQA loading. Current internal
   signatures now receive the decode budget directly.
+- Added separate Windows/Linux ROCm 10.0 `gfx1103` candidate targets using the
+  stable AMD index and the published PyTorch 2.13 / TorchVision 0.28 package
+  pair. The existing ROCm 7.2.1 targets remain unchanged.
+- Added a `0.5.x` preview-build workflow that runs tests and builds the portable
+  target matrix into seven-day Actions artifacts without publishing a GitHub
+  Release.
 
 ### Fixed
 
+- Fixed frozen Windows ROCm dependency resolution by assembling AMD's
+  SHA-256-verified pure-Python `rocm` source into a local wheel. Pip can now
+  resolve Torch's `rocm[libraries]` requirement together with AMD's pinned SDK
+  wheels without launching the frozen executable as a PEP 517 build process.
+- Corrected ROCm device detection to accept AMD `gfx` architectures through
+  PyTorch's HIP-backed CUDA API, and use PyTorch's device memory properties for
+  ROCm VRAM sizing.
+- Preserved already-imported Torch modules during sidecar re-probes. Removing
+  their Python cache entries cannot unload native libraries and made a later
+  re-import unsafe.
 - Made schema migrations compatible with standard bare SQLite connections.
+- Fixed torchless XPU sidecar installation by resolving the Intel native
+  runtime dependencies instead of suppressing all Torch dependencies. The
+  launcher now exposes sidecar DLL directories to Windows and repairs older
+  incomplete sidecars automatically.
+- Preserved the Windows copy-based Hugging Face cache policy with Hub 1.32's
+  new shared-blob cache, including when Hub constants were imported earlier.
 - Released the analysis operation lock when scan, score, or compare worker
   startup fails before the worker can release it.
 - Wired the Review “Open File” action through the composed workflow facade.
@@ -31,6 +53,16 @@ All notable changes to this project will be documented in this file.
 
 - Renamed the README release heading to cover the 0.4 series and corrected the
   malformed AMD ROCm Windows prerequisite bullet.
+- Clarified that ShotSieve's ROCm 7.2.1 pin does not cover the Radeon 780M,
+  while AMD's newer ROCm 10.0 matrix lists a separate `gfx1103` path.
+- Added a coordinated dependency-freshness review: current CUDA/XPU/MPS Torch
+  pins, the ROCm 10.0/TheRock migration candidate, known newer model-library
+  releases, and a staged validation plan.
+- Added a manual dependency-upgrade qualification workflow for isolated Hub
+  1.32.0, Transformers 5.17.0, and combined profiles while retaining the
+  production pins, plus regression tests for runtime constraint-file pin drift.
+- Documented the ROCm 10 `gfx1103` candidate install, its current AMD OS/driver
+  boundary, and the remaining physical-GPU validation checklist.
 
 ## [0.4.10] - 2026-09-18
 

@@ -64,6 +64,60 @@ def test_portable_bundle_builder_exposes_runtime_pack_target_plan() -> None:
     assert _string_value(plan["distPath"]).endswith("ShotSieve-linux-nvidia-cuda")
 
 
+def test_rocm10_candidate_bundles_its_local_selector_wheel(tmp_path: Path) -> None:
+    module_name = "build_portable_bundle_rocm10_selector"
+    spec = importlib.util.spec_from_file_location(module_name, BUNDLE_SCRIPT_PATH)
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    from shotsieve.release_targets import runtime_pack_release_targets
+
+    target = next(
+        target for target in runtime_pack_release_targets()
+        if target.id == "windows-amd-rocm10-gfx1103"
+    )
+    build_root = tmp_path / "build"
+    selector_dir = build_root / target.id / "rocm-selector-wheel"
+    selector_dir.mkdir(parents=True)
+    selector_wheel = selector_dir / "rocm-10.0.0-py3-none-any.whl"
+    selector_wheel.write_bytes(b"wheel")
+    staged_bundle = tmp_path / "staged"
+    staged_bundle.mkdir()
+
+    module._bundle_rocm10_selector_wheel(
+        target,
+        build_root=build_root,
+        staged_bundle=staged_bundle,
+    )
+
+    bundled_wheel = staged_bundle / "data" / "runtime" / "wheels" / selector_wheel.name
+    assert bundled_wheel.read_bytes() == b"wheel"
+
+
+def test_rocm10_candidate_bundle_requires_one_selector_wheel(tmp_path: Path) -> None:
+    module_name = "build_portable_bundle_rocm10_selector_missing"
+    spec = importlib.util.spec_from_file_location(module_name, BUNDLE_SCRIPT_PATH)
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    from shotsieve.release_targets import runtime_pack_release_targets
+
+    target = next(
+        target for target in runtime_pack_release_targets()
+        if target.id == "windows-amd-rocm10-gfx1103"
+    )
+    with pytest.raises(SystemExit, match=r"Expected exactly one rocm-10\.0\.0-\*\.whl"):
+        module._bundle_rocm10_selector_wheel(
+            target,
+            build_root=tmp_path / "build",
+            staged_bundle=tmp_path / "staged",
+        )
+
+
 def test_portable_bundle_builder_rejects_legacy_target_alias() -> None:
     completed = subprocess.run(
         [

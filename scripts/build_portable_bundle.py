@@ -32,6 +32,8 @@ class BundlePlan(TypedDict):
 
 _MODEL_WEIGHT_SUFFIXES = frozenset({".pt", ".pth", ".ckpt", ".safetensors"})
 _TORCH_PACKAGE_NAMES = frozenset({"torch", "torchvision", "torchaudio", "functorch", "triton"})
+_ROCM10_GFX1103_TORCH_VARIANT = "rocm10-gfx1103"
+_ROCM10_SELECTOR_WHEEL_PATTERN = "rocm-10.0.0-*.whl"
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -141,6 +143,29 @@ def assert_torchless_bundle(bundle_root: Path) -> None:
         )
 
 
+def _bundle_rocm10_selector_wheel(
+    target: ReleaseTarget,
+    *,
+    build_root: Path,
+    staged_bundle: Path,
+) -> None:
+    """Bundle the prebuilt ROCm selector wheel needed by frozen pip."""
+    if getattr(target, "torchVariant", None) != _ROCM10_GFX1103_TORCH_VARIANT:
+        return
+
+    wheel_source_dir = build_root / target.id / "rocm-selector-wheel"
+    wheels = sorted(wheel_source_dir.glob(_ROCM10_SELECTOR_WHEEL_PATTERN))
+    if len(wheels) != 1:
+        raise SystemExit(
+            f"Expected exactly one {_ROCM10_SELECTOR_WHEEL_PATTERN} in "
+            f"'{wheel_source_dir}' for target '{target.id}'."
+        )
+
+    wheel_destination_dir = staged_bundle / "data" / "runtime" / "wheels"
+    wheel_destination_dir.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(wheels[0], wheel_destination_dir / wheels[0].name)
+
+
 def build_bundle(target: ReleaseTarget, *, project_root: Path, dist_root: Path, build_root: Path) -> BundlePlan:
     plan = target_plan(target, project_root=project_root, dist_root=dist_root, build_root=build_root)
     pyinstaller_dist_root = Path(plan["pyinstallerDistRoot"])
@@ -200,6 +225,11 @@ def build_bundle(target: ReleaseTarget, *, project_root: Path, dist_root: Path, 
     if not launcher.exists():
         raise SystemExit(f"Expected launcher '{launcher}' was not created by PyInstaller")
     launcher.rename(staged_bundle / target.executableName)
+    _bundle_rocm10_selector_wheel(
+        target,
+        build_root=build_root,
+        staged_bundle=staged_bundle,
+    )
     assert_torchless_bundle(staged_bundle)
 
     if archive_path.exists():

@@ -1,0 +1,5 @@
+# AMD stable ROCm 10.0.0 TheRock track for gfx1103 (Radeon 780M).
+# Python 3.12 wheels are published for Windows and Linux.
+torch==2.13.0+rocm10.0.0
+torchvision==0.28.0+rocm10.0.0
+rocm==10.0.0

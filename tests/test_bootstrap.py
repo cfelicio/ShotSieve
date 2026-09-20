@@ -3,6 +3,7 @@ from __future__ import annotations
 from email.message import Message
 import io
 import json
+import os
 import sys
 import types
 from pathlib import Path
@@ -14,6 +15,7 @@ import pytest
 
 from shotsieve import bootstrap_assets as bootstrap_module
 from shotsieve import bootstrap_sidecar
+from shotsieve import runtime_support
 
 
 def _new_module(name: str) -> Any:
@@ -28,6 +30,32 @@ def test_coerce_pip_main_return_code_handles_none_int_and_unexpected_values() ->
     assert bootstrap_sidecar._coerce_pip_main_return_code(None) == 0
     assert bootstrap_sidecar._coerce_pip_main_return_code(3) == 3
     assert bootstrap_sidecar._coerce_pip_main_return_code(object()) == 1
+
+
+def test_runtime_sidecar_dll_paths_include_target_library_bin_and_torch_lib(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sidecar = tmp_path / "windows-intel-xpu"
+    library_bin = sidecar / "Library" / "bin"
+    torch_lib = sidecar / "torch" / "lib"
+    rocm_core_bin = sidecar / "_rocm_sdk_core" / "bin"
+    rocm_libraries_bin = sidecar / "_rocm_sdk_libraries" / "bin"
+    library_bin.mkdir(parents=True)
+    torch_lib.mkdir(parents=True)
+    rocm_core_bin.mkdir(parents=True)
+    rocm_libraries_bin.mkdir(parents=True)
+    monkeypatch.setattr(runtime_support.sys, "platform", "win32")
+
+    existing = os.pathsep.join(["existing-a", str(torch_lib), "existing-b"])
+    composed = runtime_support.compose_runtime_dll_path(existing=existing, sidecar_path=sidecar)
+
+    parts = composed.split(os.pathsep)
+    assert parts[:3] == [str(sidecar.resolve()), str(library_bin.resolve()), str(torch_lib.resolve())]
+    assert parts.count(str(torch_lib)) == 1
+    assert str(rocm_core_bin.resolve()) in parts
+    assert str(rocm_libraries_bin.resolve()) in parts
+    assert parts[-2:] == ["existing-a", "existing-b"]
 
 
 def test_select_runtime_target_prefers_nvidia_cuda_on_windows_and_linux() -> None:
@@ -304,7 +332,7 @@ def test_maybe_prepare_torch_runtime_uses_existing_sidecar_site_packages(tmp_pat
     (site_packages / ".shotsieve-runtime.json").write_text(
         json.dumps(
             {
-                "schema": 1,
+                "schema": bootstrap_sidecar.SIDECAR_STATE_VERSION,
                 "kind": "runtime",
                 "complete": True,
                 "torch_complete": True,

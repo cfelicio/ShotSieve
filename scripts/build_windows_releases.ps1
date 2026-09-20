@@ -206,6 +206,8 @@ function Install-TorchVariant {
     param(
         [string]$PythonCommand,
         [string]$TorchVariant,
+        [string]$TargetId,
+        [string]$BuildRoot,
         [string]$ConstraintsFile,
         [string]$AdditionalConstraintsFile = ""
     )
@@ -249,6 +251,22 @@ function Install-TorchVariant {
             & $PythonCommand -m pip install --upgrade --force-reinstall --no-cache-dir @rocmPackages --trusted-host repo.radeon.com @constraintArgs
             break
         }
+        "rocm10-gfx1103" {
+            Write-Host "Preparing the stable AMD ROCm 10.0 gfx1103 candidate..."
+            $selectorWheelDirectory = Join-Path (Join-Path $BuildRoot $TargetId) "rocm-selector-wheel"
+            New-Item -ItemType Directory -Force -Path $selectorWheelDirectory | Out-Null
+            & $PythonCommand -m pip wheel --no-deps --wheel-dir $selectorWheelDirectory "rocm==10.0.0" --index-url https://stable.repo.amd.com/rocm/whl-next/ --extra-index-url https://pypi.org/simple
+            if ($LASTEXITCODE -ne 0) {
+                throw "Failed to build the ROCm 10 selector wheel for target '$TargetId'."
+            }
+            $rocm10Packages = @(
+                "rocm==10.0.0",
+                "torch[device-gfx1103]==2.13.0+rocm10.0.0",
+                "torchvision[device-gfx1103]==0.28.0+rocm10.0.0"
+            )
+            & $PythonCommand -m pip install --upgrade --force-reinstall --no-cache-dir @rocm10Packages --index-url https://stable.repo.amd.com/rocm/whl-next/ --extra-index-url https://pypi.org/simple --find-links $selectorWheelDirectory --only-binary=rocm @constraintArgs
+            break
+        }
         default {
             Write-Host "Installing default Torch runtime..."
             & $PythonCommand -m pip install --upgrade --force-reinstall --no-cache-dir torch torchvision @constraintArgs
@@ -265,6 +283,7 @@ function Install-TargetDependencies {
     param(
         [string]$PythonCommand,
         [string]$ProjectRoot,
+        [string]$BuildRoot,
         [object]$Target,
         [string]$ConstraintsFile
     )
@@ -285,7 +304,7 @@ function Install-TargetDependencies {
     }
 
     $additionalConstraintsFile = if ($targetConstraintsFile -ne $ConstraintsFile) { $ConstraintsFile } else { "" }
-    Install-TorchVariant -PythonCommand $PythonCommand -TorchVariant ([string]$Target.torchVariant) -ConstraintsFile $targetConstraintsFile -AdditionalConstraintsFile $additionalConstraintsFile
+    Install-TorchVariant -PythonCommand $PythonCommand -TorchVariant ([string]$Target.torchVariant) -TargetId ([string]$Target.id) -BuildRoot $BuildRoot -ConstraintsFile $targetConstraintsFile -AdditionalConstraintsFile $additionalConstraintsFile
 
     $extras = @($Target.extras)
     if ($extras.Count -gt 0) {
@@ -431,7 +450,7 @@ foreach ($target in $selectedTargets) {
     Write-Host "Building Windows release target '$($target.id)'..."
     $targetBasePythonCommand = Resolve-PythonCommandForTarget -BasePythonCommand $resolvedPythonCommand -ConfiguredPythonExe $PythonExe -ExpectedPythonVersion ([string]$target.pythonVersion)
     $targetPythonCommand = Resolve-TargetPythonCommand -BasePythonCommand $targetBasePythonCommand -ResolvedBuildRoot $resolvedBuildRoot -TargetId $target.id -ExpectedPythonVersion ([string]$target.pythonVersion)
-    Install-TargetDependencies -PythonCommand $targetPythonCommand -Target $target -ProjectRoot $projectRoot -ConstraintsFile $constraintsFile
+    Install-TargetDependencies -PythonCommand $targetPythonCommand -Target $target -ProjectRoot $projectRoot -BuildRoot $resolvedBuildRoot -ConstraintsFile $constraintsFile
     $archivePath = New-WindowsTargetBundle -PythonCommand $targetPythonCommand -ProjectRoot $projectRoot -Target $target -ResolvedDistRoot $resolvedDistRoot -ResolvedBuildRoot $resolvedBuildRoot
     Write-Host "Built archive: $archivePath"
 }

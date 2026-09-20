@@ -24,6 +24,8 @@ RELEASE_CONSTRAINTS_PATH = PROJECT_ROOT / "scripts" / "release-constraints.txt"
 XPU_CONSTRAINTS_PATH = PROJECT_ROOT / "scripts" / "source-constraints-xpu.txt"
 ROCM_CONSTRAINTS_PATH = PROJECT_ROOT / "scripts" / "source-constraints-rocm.txt"
 ROCM_WINDOWS_CONSTRAINTS_PATH = PROJECT_ROOT / "scripts" / "source-constraints-rocm-windows.txt"
+ROCM10_CONSTRAINTS_PATH = PROJECT_ROOT / "scripts" / "source-constraints-rocm10-gfx1103.txt"
+RELEASE_WORKFLOW_PATH = PROJECT_ROOT / ".github" / "workflows" / "release.yml"
 LOCAL_ONLY_REPO_RELATIVE_PATHS = (
     "blog.md",
     ".github/agents/anvil.agent.md",
@@ -473,6 +475,23 @@ def test_rocm_track_is_pinned_and_in_release_matrix() -> None:
     assert "torch==2.9.1+rocm7.2.1" in windows_constraints
     assert "torchvision==0.24.1" in windows_constraints
 
+    rocm10_constraints = ROCM10_CONSTRAINTS_PATH.read_text(encoding="utf-8")
+    assert "torch==2.13.0+rocm10.0.0" in rocm10_constraints
+    assert "torchvision==0.28.0+rocm10.0.0" in rocm10_constraints
+    assert "rocm==10.0.0" in rocm10_constraints
+
+    windows_build = SCRIPT_PATH.read_text(encoding="utf-8")
+    release_workflow = RELEASE_WORKFLOW_PATH.read_text(encoding="utf-8")
+    for package in (
+        "rocm==10.0.0",
+        '"torch[device-gfx1103]==2.13.0+rocm10.0.0"',
+        '"torchvision[device-gfx1103]==0.28.0+rocm10.0.0"',
+    ):
+        assert package in windows_build
+        assert package in release_workflow
+    assert "https://stable.repo.amd.com/rocm/whl-next/" in windows_build
+    assert "https://stable.repo.amd.com/rocm/whl-next/" in release_workflow
+
     from shotsieve.dependency_constraints import model_requirements_for_runtime
 
     assert model_requirements_for_runtime("ROCm")[-2:] == (
@@ -482,9 +501,14 @@ def test_rocm_track_is_pinned_and_in_release_matrix() -> None:
 
     matrix = run_release_matrix("runtime")
     assert {entry["id"] for entry in matrix if entry["torchVariant"] == "rocm"} == {"windows-amd-rocm", "linux-amd-rocm"}
+    assert {
+        entry["id"] for entry in matrix if entry["torchVariant"] == "rocm10-gfx1103"
+    } == {"windows-amd-rocm10-gfx1103", "linux-amd-rocm10-gfx1103"}
 
     rocm_doc = (PROJECT_ROOT / "docs" / "amd-rocm.md").read_text(encoding="utf-8")
     assert "rocm7.2.1" in rocm_doc
+    assert "rocm10.0.0" in rocm_doc
+    assert "device-gfx1103" in rocm_doc
     assert "--driver-version" in rocm_doc
     assert "qrealign-mini" in rocm_doc
 
@@ -572,10 +596,12 @@ def test_tier1_release_matrix_covers_all_runtime_pack_targets() -> None:
         "windows-nvidia-cuda",
         "windows-intel-xpu",
         "windows-amd-rocm",
+        "windows-amd-rocm10-gfx1103",
         "linux-cpu",
         "linux-nvidia-cuda",
         "linux-intel-xpu",
         "linux-amd-rocm",
+        "linux-amd-rocm10-gfx1103",
         "macos-cpu",
         "macos-apple-mps",
     }
@@ -586,6 +612,10 @@ def test_tier1_release_matrix_covers_all_runtime_pack_targets() -> None:
     assert targets["linux-intel-xpu"]["torchVariant"] == "xpu"
     assert targets["windows-amd-rocm"]["torchVariant"] == "rocm"
     assert targets["linux-amd-rocm"]["torchVariant"] == "rocm"
+    assert targets["windows-amd-rocm10-gfx1103"]["torchVariant"] == "rocm10-gfx1103"
+    assert targets["linux-amd-rocm10-gfx1103"]["torchVariant"] == "rocm10-gfx1103"
+    assert targets["windows-amd-rocm10-gfx1103"]["pythonVersion"] == "3.12"
+    assert targets["linux-amd-rocm10-gfx1103"]["pythonVersion"] == "3.12"
     assert targets["macos-apple-mps"]["runsOn"] == "macos-latest"
     assert targets["windows-cpu"]["constraintsFile"] == "scripts/release-constraints-torch.txt"
     assert targets["windows-nvidia-cuda"]["constraintsFile"] == "scripts/release-constraints-torch.txt"

@@ -1,0 +1,3 @@
+# Qualification profile: test the candidate pair after testing each update alone.
+huggingface-hub==1.32.0
+transformers==5.17.0

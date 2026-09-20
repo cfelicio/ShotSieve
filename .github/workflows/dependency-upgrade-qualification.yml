@@ -1,0 +1,163 @@
+name: dependency-upgrade-qualification
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  learned-models:
+    name: ${{ matrix.upgrade_track }}-${{ matrix.model }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        model:
+          - topiq_nr
+          - clipiqa
+          - qrealign-mini
+        upgrade_track:
+          - hub
+          - transformers
+          - combined
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install current pinned learned-IQA runtime
+        run: |
+          python -m pip install --upgrade pip setuptools wheel packaging -c scripts/release-constraints.txt -c scripts/release-constraints-torch.txt
+          python -m pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu --trusted-host download.pytorch.org -c scripts/release-constraints.txt -c scripts/release-constraints-torch.txt
+          python -m pip install -e ".[learned-iqa]" -c scripts/release-constraints.txt -c scripts/release-constraints-torch.txt
+
+      - name: Check baseline and capture its resolved package inventory
+        shell: bash
+        env:
+          UPGRADE_TRACK: ${{ matrix.upgrade_track }}
+        run: |
+          python -m pip check
+          mkdir -p "$RUNNER_TEMP/dependency-inventory"
+          python -m pip list --format=json > "$RUNNER_TEMP/dependency-inventory/$UPGRADE_TRACK-baseline.json"
+
+      - name: Apply isolated Hub/Transformers qualification profile
+        run: python -m pip install --upgrade huggingface-hub transformers -c "scripts/model-upgrade-${{ matrix.upgrade_track }}-constraints.txt"
+
+      - name: Check candidate imports and dependency consistency
+        shell: bash
+        env:
+          UPGRADE_TRACK: ${{ matrix.upgrade_track }}
+        run: |
+          python -m pip check
+          python -c "from transformers import AutoModelForImageTextToText; print(AutoModelForImageTextToText.__name__)"
+          python -m pip list --format=json > "$RUNNER_TEMP/dependency-inventory/$UPGRADE_TRACK-candidate.json"
+
+      - name: Prepare model into a fresh candidate cache
+        env:
+          SMOKE_MODEL: ${{ matrix.model }}
+        shell: bash
+        run: |
+          python scripts/model_smoke.py \
+            --model "$SMOKE_MODEL" \
+            --cache-dir "$RUNNER_TEMP/shotsieve-cache/${{ matrix.upgrade_track }}/$SMOKE_MODEL" \
+            --data-dir "$RUNNER_TEMP/shotsieve-data/${{ matrix.upgrade_track }}/$SMOKE_MODEL" \
+            --report-path "$RUNNER_TEMP/shotsieve-model-smoke/${{ matrix.upgrade_track }}/$SMOKE_MODEL-online.json"
+
+      - name: Re-open and score with network disabled
+        env:
+          SMOKE_MODEL: ${{ matrix.model }}
+        shell: bash
+        run: |
+          python scripts/model_smoke.py \
+            --model "$SMOKE_MODEL" \
+            --cache-dir "$RUNNER_TEMP/shotsieve-cache/${{ matrix.upgrade_track }}/$SMOKE_MODEL" \
+            --data-dir "$RUNNER_TEMP/shotsieve-data/${{ matrix.upgrade_track }}/$SMOKE_MODEL" \
+            --offline \
+            --report-path "$RUNNER_TEMP/shotsieve-model-smoke/${{ matrix.upgrade_track }}/$SMOKE_MODEL-offline.json"
+
+      - name: Upload candidate smoke reports
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: dependency-upgrade-${{ matrix.upgrade_track }}-${{ matrix.model }}-reports
+          path: |
+            ${{ runner.temp }}/shotsieve-model-smoke/${{ matrix.upgrade_track }}/*.json
+            ${{ runner.temp }}/dependency-inventory/*.json
+          if-no-files-found: ignore
+          retention-days: 14
+
+  windows-qrealign-cache:
+    name: windows-${{ matrix.upgrade_track }}-qrealign-mini
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        upgrade_track:
+          - hub
+          - combined
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install current pinned learned-IQA runtime
+        run: |
+          python -m pip install --upgrade pip setuptools wheel packaging -c scripts/release-constraints.txt -c scripts/release-constraints-torch.txt
+          python -m pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu --trusted-host download.pytorch.org -c scripts/release-constraints.txt -c scripts/release-constraints-torch.txt
+          python -m pip install -e ".[learned-iqa]" -c scripts/release-constraints.txt -c scripts/release-constraints-torch.txt
+
+      - name: Check baseline and capture its resolved package inventory
+        shell: pwsh
+        env:
+          UPGRADE_TRACK: ${{ matrix.upgrade_track }}
+        run: |
+          python -m pip check
+          New-Item -ItemType Directory -Force -Path "$env:RUNNER_TEMP/dependency-inventory" | Out-Null
+          python -m pip list --format=json > "$env:RUNNER_TEMP/dependency-inventory/$env:UPGRADE_TRACK-baseline.json"
+
+      - name: Apply isolated Hub/Transformers qualification profile
+        shell: pwsh
+        run: python -m pip install --upgrade huggingface-hub transformers -c "scripts/model-upgrade-${{ matrix.upgrade_track }}-constraints.txt"
+
+      - name: Check candidate imports and dependency consistency
+        shell: pwsh
+        env:
+          UPGRADE_TRACK: ${{ matrix.upgrade_track }}
+        run: |
+          python -m pip check
+          python -c "from transformers import AutoModelForImageTextToText; print(AutoModelForImageTextToText.__name__)"
+          python -m pip list --format=json > "$env:RUNNER_TEMP/dependency-inventory/$env:UPGRADE_TRACK-candidate.json"
+
+      - name: Prepare Q-ReAlign Mini into a fresh candidate cache
+        shell: pwsh
+        env:
+          UPGRADE_TRACK: ${{ matrix.upgrade_track }}
+        run: python scripts/model_smoke.py --model qrealign-mini --cache-dir "$env:RUNNER_TEMP/shotsieve-cache/$env:UPGRADE_TRACK/qrealign-mini" --data-dir "$env:RUNNER_TEMP/shotsieve-data/$env:UPGRADE_TRACK/qrealign-mini" --report-path "$env:RUNNER_TEMP/shotsieve-model-smoke/$env:UPGRADE_TRACK/qrealign-mini-online.json"
+
+      - name: Re-open Q-ReAlign Mini with network disabled
+        shell: pwsh
+        env:
+          UPGRADE_TRACK: ${{ matrix.upgrade_track }}
+        run: python scripts/model_smoke.py --model qrealign-mini --cache-dir "$env:RUNNER_TEMP/shotsieve-cache/$env:UPGRADE_TRACK/qrealign-mini" --data-dir "$env:RUNNER_TEMP/shotsieve-data/$env:UPGRADE_TRACK/qrealign-mini" --offline --report-path "$env:RUNNER_TEMP/shotsieve-model-smoke/$env:UPGRADE_TRACK/qrealign-mini-offline.json"
+
+      - name: Upload Windows candidate reports and inventories
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: dependency-upgrade-windows-${{ matrix.upgrade_track }}-qrealign-reports
+          path: |
+            ${{ runner.temp }}/shotsieve-model-smoke/${{ matrix.upgrade_track }}/*.json
+            ${{ runner.temp }}/dependency-inventory/*.json
+          if-no-files-found: ignore
+          retention-days: 14

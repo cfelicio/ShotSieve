@@ -48,6 +48,17 @@ ROCM_WINDOWS_TORCH_REQUIREMENTS = (
     "torchvision==0.24.1",
 )
 
+# The AMD stable multi-architecture index currently publishes ROCm 10.0.0
+# with the PyTorch 2.13 / TorchVision 0.28 pair. Keep this candidate separate
+# from the legacy ROCm 7.2.1 track and scope it to the 780M's gfx1103 kernels.
+ROCM10_GFX1103_TORCH_REQUIREMENTS = (
+    "torch[device-gfx1103]==2.13.0+rocm10.0.0",
+    "torchvision[device-gfx1103]==0.28.0+rocm10.0.0",
+    "rocm==10.0.0",
+)
+ROCM10_SELECTOR_REQUIREMENT = "rocm==10.0.0"
+ROCM10_PYTHON_INDEX_URL = "https://stable.repo.amd.com/rocm/whl-next/"
+
 # These URLs are deliberately kept as exact, target-specific inputs.  In
 # particular, XPU and ROCm must never silently resolve to the generic PyPI
 # torch wheels.  The release workflow and the frozen sidecar installer share
@@ -59,11 +70,15 @@ ROCM_LINUX_PACKAGE_URLS = (
     "https://repo.radeon.com/rocm/manylinux/rocm-rel-7.2.1/triton-3.5.1%2Brocm7.2.1.gita272dfa8-cp312-cp312-linux_x86_64.whl",
 )
 
+ROCM_WINDOWS_SOURCE_PACKAGE_URL = (
+    "https://repo.radeon.com/rocm/windows/rocm-rel-7.2.1/rocm-7.2.1.tar.gz"
+)
+
 ROCM_WINDOWS_PACKAGE_URLS = (
     "https://repo.radeon.com/rocm/windows/rocm-rel-7.2.1/rocm_sdk_core-7.2.1-py3-none-win_amd64.whl",
     "https://repo.radeon.com/rocm/windows/rocm-rel-7.2.1/rocm_sdk_devel-7.2.1-py3-none-win_amd64.whl",
     "https://repo.radeon.com/rocm/windows/rocm-rel-7.2.1/rocm_sdk_libraries_custom-7.2.1-py3-none-win_amd64.whl",
-    "https://repo.radeon.com/rocm/windows/rocm-rel-7.2.1/rocm-7.2.1.tar.gz",
+    ROCM_WINDOWS_SOURCE_PACKAGE_URL,
     "https://repo.radeon.com/rocm/windows/rocm-rel-7.2.1/torch-2.9.1%2Brocm7.2.1-cp312-cp312-win_amd64.whl",
     "https://repo.radeon.com/rocm/windows/rocm-rel-7.2.1/torchaudio-2.9.1%2Brocm7.2.1-cp312-cp312-win_amd64.whl",
     "https://repo.radeon.com/rocm/windows/rocm-rel-7.2.1/torchvision-0.24.1%2Brocm7.2.1-cp312-cp312-win_amd64.whl",
@@ -124,8 +139,12 @@ __all__ = [
     "PYTORCH_CPU_INDEX_URL",
     "PYTORCH_CUDA_INDEX_URL",
     "PYTORCH_XPU_INDEX_URL",
+    "ROCM10_GFX1103_TORCH_REQUIREMENTS",
+    "ROCM10_PYTHON_INDEX_URL",
+    "ROCM10_SELECTOR_REQUIREMENT",
     "ROCM_LINUX_PACKAGE_URLS",
     "ROCM_TORCH_REQUIREMENTS",
+    "ROCM_WINDOWS_SOURCE_PACKAGE_URL",
     "ROCM_WINDOWS_PACKAGE_URLS",
     "ROCM_WINDOWS_TORCH_REQUIREMENTS",
     "TORCH_REQUIREMENTS",

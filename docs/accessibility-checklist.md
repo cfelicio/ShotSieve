@@ -1,6 +1,6 @@
 # Visual QA Checklist
 
-Last updated: 2026-04-24
+Last updated: 2026-09-18
 
 Use this checklist for a quick manual visual-usability pass on the local review UI after frontend changes. The goal is simple: good contrast, readable text, comfortable controls, sensible font sizing, and clear review states for photographers actively looking at images on screen.
 

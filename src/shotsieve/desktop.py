@@ -27,6 +27,7 @@ from shotsieve.runtime_support import (
     parse_env_bool,
     path_has_pyiqa,
     path_has_torch,
+    prepare_runtime_dll_search_path,
     source_checkout_root,
 )
 from shotsieve.web import serve_review_ui
@@ -80,6 +81,8 @@ def runtime_target_id_from_executable_name(*, system_name: str | None = None) ->
         return f"{prefix}-nvidia-cuda"
     if "intel-xpu" in runtime_name:
         return f"{prefix}-intel-xpu"
+    if "amd-rocm10-gfx1103" in runtime_name:
+        return f"{prefix}-amd-rocm10-gfx1103"
     if "amd-rocm" in runtime_name:
         return f"{prefix}-amd-rocm"
     if prefix == "macos" and "apple-mps" in runtime_name:
@@ -90,7 +93,15 @@ def runtime_target_id_from_executable_name(*, system_name: str | None = None) ->
     return None
 
 
-def _clear_torch_module_cache() -> None:
+def _clear_failed_torch_imports() -> None:
+    """Remove orphan imports after a failure, never reload an initialized Torch.
+
+    Dropping a successfully imported torch does not unload its native extension
+    or operator registrations. Reimporting it can break CPU fallback as well as
+    GPU initialization. Replacing an already-loaded build requires a restart.
+    """
+    if sys.modules.get("torch") is not None:
+        return
     for module_name in list(sys.modules):
         if (
             module_name == "torch"
@@ -214,11 +225,12 @@ def _learned_iqa_runtime_import_diagnostic() -> str | None:
 
 
 def runtime_bundle_has_usable_cuda_torch(*, force_reload: bool = False) -> bool:
+    if force_reload:
+        importlib.invalidate_caches()
+        _clear_failed_torch_imports()
+
     if importlib.util.find_spec("torch") is None:
         return False
-
-    if force_reload:
-        _clear_torch_module_cache()
 
     try:
         torch_module = importlib.import_module("torch")
@@ -234,10 +246,12 @@ def runtime_bundle_has_usable_torch(target_id: str | None, *, force_reload: bool
     if normalized_target.endswith("-nvidia-cuda"):
         return runtime_bundle_has_usable_cuda_torch(force_reload=force_reload)
 
+    if force_reload:
+        importlib.invalidate_caches()
+        _clear_failed_torch_imports()
+
     if importlib.util.find_spec("torch") is None:
         return False
-    if force_reload:
-        _clear_torch_module_cache()
 
     try:
         torch_module = importlib.import_module("torch")
@@ -288,6 +302,7 @@ def _call_prepare_learned_iqa_runtime(
 def _prepend_runtime_pythonpath(path: Path) -> None:
     path_text = str(path)
     os.environ["PYTHONPATH"] = compose_pythonpath(existing=os.environ.get("PYTHONPATH"), prepend_path=path)
+    prepare_runtime_dll_search_path(path)
     if path_text not in sys.path:
         sys.path.insert(0, path_text)
 
@@ -322,7 +337,7 @@ def _runtime_name_from_target_id(target_id: str | None) -> str:
         return "cuda"
     if normalized.endswith("-intel-xpu"):
         return "xpu"
-    if normalized.endswith("-amd-rocm"):
+    if normalized.endswith(("-amd-rocm", "-amd-rocm10-gfx1103")):
         return "rocm"
     if normalized.endswith("-cpu"):
         return "cpu"

@@ -1,15 +1,19 @@
 # AMD ROCm install and release track
 
 ShotSieve can use native AMD ROCm through the logical `rocm` runtime target
-(`amd` is its vendor alias). Windows and Linux runtime packs include this
-track, and the same pinned instructions can be used for source installs.
+(`amd` is its vendor alias). Windows and Linux runtime packs include the legacy
+ROCm 7.2.1 track. Separate ROCm 10.0 `gfx1103` candidate packs target Radeon
+780M-class hardware; they are not a replacement for the existing targets
+until native validation is complete.
 
-The commands below follow AMD's currently documented ROCm 7.2.1 Radeon
-PyTorch pair: PyTorch 2.9.1, Python 3.12, and the AMD-published wheels. Use a
-fresh environment and do not mix these wheels with the common CPU/CUDA/MPS or
-Intel XPU Torch environments. The exact GPU, OS, driver, Python, Torch, and
-ROCm combination must appear in AMD's current compatibility matrix before a
-run is treated as evidence.
+This guide documents both the legacy ROCm 7.2.1 / PyTorch 2.9.1 track and a
+separate ROCm 10.0 / PyTorch 2.13 candidate for the Radeon 780M (`gfx1103`).
+AMD's ROCm 10.0 matrix lists the 780M for specific Windows/Linux configurations,
+but that does not make the legacy 7.2.1 ShotSieve pack compatible with it.
+Use a fresh environment and do not mix the 7.2.1 wheels with the common
+CPU/CUDA/MPS or Intel XPU Torch environments. The exact GPU, OS, driver, Python,
+Torch, and ROCm combination must appear in AMD's current compatibility matrix
+before a run is treated as evidence.
 
 ## Supported boundary and prerequisites
 
@@ -44,6 +48,60 @@ Official references:
 - [AMD Windows PyTorch wheels](https://rocm.docs.amd.com/projects/radeon-ryzen/en/latest/docs/install/installrad/windows/install-pytorch.html)
 - [ROCm license and disclaimers](https://rocm.docs.amd.com/en/latest/about/license.html)
 
+## ROCm 10.0 `gfx1103` candidate (Radeon 780M)
+
+This is a separate candidate for the Radeon 780M's `gfx1103` architecture. It
+uses AMD's stable multi-architecture Python index with the published ROCm
+`10.0.0`, PyTorch `2.13.0`, and TorchVision `0.28.0` packages. The AMD index
+lists Windows and Linux wheels for Python 3.12 and the `device-gfx1103`
+packages. This is not the old ROCm 7.2.1 package set; do not mix the two
+environments.
+
+As of the review date, AMD's compatibility matrix requires Windows 11 25H2
+and lists Adrenalin driver 26.8.1 for this APU family. Linux entries list
+Ubuntu 24.04.4 with the OEM 6.17 kernel or Ubuntu 26.04 with GA kernel 7.0.
+Check AMD's live matrix before testing because driver and OS support can
+change. The code and build workflow are integrated, but no 780M inference has
+yet been run in this workspace.
+
+For a source-install validation, create a clean Python 3.12 environment:
+
+```powershell
+py -3.12 -m venv .venv-rocm10
+.\.venv-rocm10\Scripts\python.exe -m pip install --upgrade pip setuptools wheel
+.\.venv-rocm10\Scripts\python.exe -m pip install `
+  "torch[device-gfx1103]==2.13.0+rocm10.0.0" `
+  "torchvision[device-gfx1103]==0.28.0+rocm10.0.0" `
+  "rocm==10.0.0" `
+  --index-url https://stable.repo.amd.com/rocm/whl-next/ `
+  --extra-index-url https://pypi.org/simple `
+  -c scripts/source-constraints-rocm10-gfx1103.txt
+.\.venv-rocm10\Scripts\python.exe -m pip install -e ".[learned-iqa]" `
+  -c scripts/source-constraints-rocm10-gfx1103.txt
+.\.venv-rocm10\Scripts\python.exe -m pip check
+```
+
+On Linux, use the same requirements and indexes in a Python 3.12 environment
+on an OS/kernel listed by AMD. For frozen runtime packs, the build creates a
+local wheel from AMD's pinned ROCm selector source distribution using normal
+Python, then includes it in the archive. The app's embedded installer uses
+that wheel to avoid launching a PEP 517 subprocess through the frozen
+executable; pip resolves the remaining SDK and `gfx1103` packages from AMD's
+stable index.
+
+To build the Windows candidate locally:
+
+```powershell
+./scripts/build_windows_releases.ps1 -TargetIds windows-amd-rocm10-gfx1103
+```
+
+Before calling the target usable, test the clean Python install and frozen
+candidate on actual `gfx1103` hardware: `pip check`, Torch import, HIP/device
+enumeration, a synchronized GPU tensor operation, then ShotSieve's online and
+offline model smoke tests. GitHub Actions can validate dependency resolution
+and bundling, but a hosted build runner cannot prove the laptop's
+driver/device path.
+
 ## Install on supported Linux
 
 First install the AMDGPU/ROCm system components for the exact distribution and
@@ -77,6 +135,7 @@ python -m pip install --upgrade pip setuptools wheel
 python -m pip install \
   "https://repo.radeon.com/rocm/manylinux/rocm-rel-7.2.1/torch-2.9.1%2Brocm7.2.1.lw.gitff65f5bc-cp312-cp312-linux_x86_64.whl" \
   "https://repo.radeon.com/rocm/manylinux/rocm-rel-7.2.1/torchvision-0.24.0%2Brocm7.2.1.gitb919bd0c-cp312-cp312-linux_x86_64.whl" \
+  "https://repo.radeon.com/rocm/manylinux/rocm-rel-7.2.1/torchaudio-2.9.0%2Brocm7.2.1.gite3c6ee2b-cp312-cp312-linux_x86_64.whl" \
   "https://repo.radeon.com/rocm/manylinux/rocm-rel-7.2.1/triton-3.5.1%2Brocm7.2.1.gita272dfa8-cp312-cp312-linux_x86_64.whl"
 python -m pip install -e '.[learned-iqa]' -c scripts/source-constraints-rocm.txt
 python -m pip check
@@ -103,7 +162,8 @@ py -3.12 -m venv .venv-rocm
   "https://repo.radeon.com/rocm/windows/rocm-rel-7.2.1/rocm-7.2.1.tar.gz"
 .\.venv-rocm\Scripts\python.exe -m pip install --no-cache-dir `
   "https://repo.radeon.com/rocm/windows/rocm-rel-7.2.1/torch-2.9.1%2Brocm7.2.1-cp312-cp312-win_amd64.whl" `
-  "https://repo.radeon.com/rocm/windows/rocm-rel-7.2.1/torchvision-0.24.1%2Brocm7.2.1-cp312-cp312-win_amd64.whl"
+  "https://repo.radeon.com/rocm/windows/rocm-rel-7.2.1/torchvision-0.24.1%2Brocm7.2.1-cp312-cp312-win_amd64.whl" `
+  "https://repo.radeon.com/rocm/windows/rocm-rel-7.2.1/torchaudio-2.9.1%2Brocm7.2.1-cp312-cp312-win_amd64.whl"
 .\.venv-rocm\Scripts\python.exe -m pip install -e ".[learned-iqa]" `
   -c scripts/source-constraints-rocm-windows.txt
 .\.venv-rocm\Scripts\python.exe -m pip check
