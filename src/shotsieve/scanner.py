@@ -1029,6 +1029,7 @@ def commit_batch(connection, batch: list[dict], summary: ScanSummary, *, existin
         )
         ON CONFLICT(path_key) DO UPDATE SET
             path = excluded.path,
+            move_managed = 0,
             size_bytes = excluded.size_bytes,
             modified_time = excluded.modified_time,
             format = excluded.format,

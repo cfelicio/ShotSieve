@@ -48,6 +48,19 @@ All notable changes to this project will be documented in this file.
 - Validated runtime-pack launchers in destination-volume staging before
   publication and wrote checksum markers before publication, so a checksum-valid
   archive with an invalid fresh-install layout is not left as a marked install.
+- Drained active file mutations during orderly server shutdown, rejected new
+  file and model-preparation jobs once shutdown begins, and preserved moved-file
+  catalog/media access only while the moved path still matches its recorded path key.
+- Bound all release build and publication checkouts to the requested version
+  tag's verified commit, and stopped preview workers from outliving a cancelled
+  operation or replacing a newer preview.
+- Refreshed source fingerprints before standalone rescoring, made preview
+  replacement atomic, and prevented failed Compare recovery from replacing
+  valid comparison state.
+- Hardened local Host and Origin validation, cache-prune error handling, full
+  cache-clear commit ordering, and review-selection revision tokens.
+- Kept Analyze and recovery messages consistent with score and comparison
+  failures.
 
 ### Documentation
 
@@ -58,6 +71,10 @@ All notable changes to this project will be documented in this file.
 - Added a coordinated dependency-freshness review: current CUDA/XPU/MPS Torch
   pins, the ROCm 10.0/TheRock migration candidate, known newer model-library
   releases, and a staged validation plan.
+- Updated `audit.md` with dispositions and verification for all 16 findings,
+  documented remaining evidence limits, clarified the local-only `--host`
+  contract, aligned the learned-IQA source install with tested constraints, and
+  corrected the runtime-pack count.
 - Added a manual dependency-upgrade qualification workflow for isolated Hub
   1.32.0, Transformers 5.17.0, and combined profiles while retaining the
   production pins, plus regression tests for runtime constraint-file pin drift.

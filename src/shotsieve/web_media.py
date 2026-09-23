@@ -6,6 +6,8 @@ from http import HTTPStatus
 from pathlib import Path
 from typing import Any, Callable
 
+from .db import normalize_resolved_path
+
 MediaPathForFile = Callable[..., Path | None]
 DatabaseFactory = Callable[[Path], Any]
 BuildConfigFunc = Callable[[str], Any]
@@ -61,9 +63,10 @@ def resolve_media_request(
                 for row in root_conn.execute("SELECT DISTINCT root_path FROM scan_runs").fetchall()
                 if row["root_path"]
             ]
+            moved_source_allowed = False
             if variant == "preview":
                 file_row = root_conn.execute(
-                    "SELECT path, preview_path FROM files WHERE id = ?",
+                    "SELECT path, path_key, preview_path, move_managed FROM files WHERE id = ?",
                     (file_id,),
                 ).fetchone()
                 if file_row is not None and file_row["path"] and file_row["preview_path"]:
@@ -71,9 +74,26 @@ def resolve_media_request(
                     canonical_preview_name = f"{dependencies.stable_preview_name(Path(str(file_row['path'])))}.jpg"
                     if preview_candidate == resolved_media and preview_candidate.name == canonical_preview_name:
                         known_roots.append(preview_candidate.parent)
+                if file_row is not None and bool(file_row["move_managed"]):
+                    catalog_path = Path(str(file_row["path"])).expanduser()
+                    moved_source_allowed = (
+                        normalize_resolved_path(catalog_path) == str(file_row["path_key"])
+                        and catalog_path.resolve() == resolved_media
+                    )
+            elif variant == "source":
+                file_row = root_conn.execute(
+                    "SELECT path, path_key, move_managed FROM files WHERE id = ?",
+                    (file_id,),
+                ).fetchone()
+                if file_row is not None and bool(file_row["move_managed"]):
+                    catalog_path = Path(str(file_row["path"])).expanduser()
+                    moved_source_allowed = (
+                        normalize_resolved_path(catalog_path) == str(file_row["path_key"])
+                        and catalog_path.resolve() == resolved_media
+                    )
         if config.preview_dir:
             known_roots.append(config.preview_dir.resolve())
-        if known_roots and not dependencies.is_within_any_root(resolved_media, known_roots):
+        if known_roots and not moved_source_allowed and not dependencies.is_within_any_root(resolved_media, known_roots):
             return MediaRequestResult(
                 error_status=HTTPStatus.FORBIDDEN,
                 error_message="Media path is outside allowed roots",

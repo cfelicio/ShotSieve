@@ -148,6 +148,16 @@ def test_release_workflow_uses_node24_actions_and_supports_manual_recovery() -> 
 
     assert "workflow_dispatch:" in workflow
     assert "release_tag:" in workflow
+    assert "resolve-release-source:" in workflow
+    assert "format('refs/tags/{0}', inputs.release_tag)" in workflow
+    assert "ref: ${{ needs.resolve-release-source.outputs.commit }}" in workflow
+    assert "does not match package version" in workflow
+    assert "tag_ref = f\"refs/tags/{tag}\"" in workflow
+    assert "{tag_ref}^{{commit}}" in workflow
+    assert "does not match {tag_ref} at {tag_commit}" in workflow
+    assert "commit={commit}" in workflow
+    assert workflow.count("uses: actions/checkout@v5") == workflow.count("ref:")
+    assert "Verify publication checkout matches tested source" in workflow
     assert "actions/checkout@v5" in all_workflows
     assert "actions/setup-python@v6" in all_workflows
     assert "actions/upload-artifact@v6" in all_workflows

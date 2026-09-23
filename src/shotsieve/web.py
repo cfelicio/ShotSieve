@@ -136,6 +136,8 @@ class BoundedReviewHTTPServer(ThreadingHTTPServer):
         request_read_timeout_seconds: float = _DEFAULT_REQUEST_BODY_READ_TIMEOUT_SECONDS,
         request_io_poll_timeout_seconds: float = _DEFAULT_REQUEST_IO_POLL_TIMEOUT_SECONDS,
         response_write_timeout_seconds: float = _DEFAULT_RESPONSE_WRITE_TIMEOUT_SECONDS,
+        operation_registry: JobRegistry | None = None,
+        model_registry: JobRegistry | None = None,
     ) -> None:
         super().__init__(server_address, handler_class)
         self.request_header_read_timeout_seconds = max(0.1, float(request_header_read_timeout_seconds))
@@ -144,6 +146,29 @@ class BoundedReviewHTTPServer(ThreadingHTTPServer):
         self.request_io_poll_timeout_seconds = max(0.05, float(request_io_poll_timeout_seconds))
         self.response_write_timeout_seconds = max(0.1, float(response_write_timeout_seconds))
         self._request_slots = threading.BoundedSemaphore(max(1, int(max_concurrent_requests)))
+        self.operation_registry = operation_registry
+        self.model_registry = model_registry
+        self.operation_lifecycle_lock = threading.Lock()
+        self.accepting_operations = True
+
+    def begin_operation_shutdown(self) -> None:
+        """Reject new mutation jobs and ask active file operations to stop."""
+        with self.operation_lifecycle_lock:
+            self.accepting_operations = False
+        for registry in (self.operation_registry, self.model_registry):
+            if registry is not None:
+                registry.cancel_running()
+
+    def has_running_operations(self) -> bool:
+        return any(
+            registry is not None and registry.has_running_jobs()
+            for registry in (self.operation_registry, self.model_registry)
+        )
+
+    def wait_for_operations(self) -> None:
+        for registry in (self.operation_registry, self.model_registry):
+            if registry is not None:
+                registry.wait_until_idle()
 
     def process_request(self, request, client_address) -> None:
         request_socket = cast(socket.socket, request)
@@ -237,7 +262,11 @@ def serve_review_ui(
     except KeyboardInterrupt:
         pass
     finally:
+        server.begin_operation_shutdown()
         server.server_close()
+        if server.has_running_operations():
+            print("Finishing active file operations before shutdown. Press Ctrl+C again to force exit.")
+        server.wait_for_operations()
 
 
 def build_review_server(
@@ -261,6 +290,8 @@ def build_review_server(
         request_read_timeout_seconds=request_read_timeout_seconds,
         request_io_poll_timeout_seconds=request_io_poll_timeout_seconds,
         response_write_timeout_seconds=response_write_timeout_seconds,
+        operation_registry=handler._shotsieve_operation_registry,
+        model_registry=handler._shotsieve_model_registry,
     )
 
 
@@ -429,6 +460,8 @@ def build_handler(db_path: Path):
 
     class ReviewHandler(BaseHTTPRequestHandler):
         _shotsieve_route_dependencies = route_context.dependencies
+        _shotsieve_operation_registry = operation_registry
+        _shotsieve_model_registry = model_registry
         protocol_version = "HTTP/1.1"
 
         def setup(self) -> None:
@@ -500,6 +533,12 @@ def build_handler(db_path: Path):
                 is_loopback_host_func=route_is_loopback_host,
             ):
                 return
+            if _security_helpers.reject_disallowed_host(
+                self,
+                send_json_error=lambda status, message: send_json_error(self, status, message),
+                expected_port=int(self.server.server_port),
+            ):
+                return
             try:
                 handle_get(self, route_context)
             except (ValueError, LearnedBackendUnavailableError) as exc:
@@ -512,6 +551,12 @@ def build_handler(db_path: Path):
             if _security_helpers.reject_non_local_client(
                 self,
                 is_loopback_host_func=route_is_loopback_host,
+            ):
+                return
+            if _security_helpers.reject_disallowed_host(
+                self,
+                send_json_error=lambda status, message: send_json_error(self, status, message),
+                expected_port=int(self.server.server_port),
             ):
                 return
             if _security_helpers.reject_disallowed_origin(

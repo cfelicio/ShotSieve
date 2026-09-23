@@ -59,8 +59,21 @@ def host_and_port(value: str | None) -> tuple[str | None, int | None]:
     if not raw:
         return None, None
 
-    parsed = urlparse(f"http://{raw}")
-    return parsed.hostname, parsed.port
+    try:
+        parsed = urlparse(f"http://{raw}")
+        if (
+            not parsed.hostname
+            or parsed.username is not None
+            or parsed.password is not None
+            or parsed.path
+            or parsed.params
+            or parsed.query
+            or parsed.fragment
+        ):
+            return None, None
+        return parsed.hostname, parsed.port
+    except ValueError:
+        return None, None
 
 
 def effective_origin_port(parsed_origin: Any) -> int | None:
@@ -81,14 +94,20 @@ def is_allowed_post_origin(origin: str | None, host_header: str | None) -> bool:
     if not origin_value or origin_value == "null":
         return False
 
-    parsed_origin = urlparse(origin_value)
-    if not parsed_origin.scheme or not parsed_origin.hostname:
+    try:
+        parsed_origin = urlparse(origin_value)
+        origin_host = parsed_origin.hostname
+        origin_port = effective_origin_port(parsed_origin)
+    except ValueError:
         return False
-    if not is_loopback_host(parsed_origin.hostname):
+    if parsed_origin.scheme not in {"http", "https"} or not origin_host:
+        return False
+    if not is_loopback_host(origin_host):
         return False
 
     request_host, request_port = host_and_port(host_header)
-    origin_port = effective_origin_port(parsed_origin)
+    if request_host is None:
+        return False
 
     if request_host and not is_loopback_host(request_host):
         return False
@@ -97,6 +116,15 @@ def is_allowed_post_origin(origin: str | None, host_header: str | None) -> bool:
     if request_port is None or origin_port is None:
         return False
     return request_port == origin_port
+
+
+def is_allowed_local_host(host_header: str | None, *, expected_port: int) -> bool:
+    request_host, request_port = host_and_port(host_header)
+    if request_host is None or not is_loopback_host(request_host):
+        return False
+    if request_port is None:
+        request_port = 80
+    return request_port == expected_port
 
 
 def reject_non_local_client(
@@ -108,6 +136,18 @@ def reject_non_local_client(
     if is_loopback_host_func(client_host):
         return False
     handler.send_error(HTTPStatus.FORBIDDEN, "Local access only")
+    return True
+
+
+def reject_disallowed_host(
+    handler: Any,
+    *,
+    send_json_error: JsonErrorSender,
+    expected_port: int,
+) -> bool:
+    if is_allowed_local_host(handler.headers.get("Host"), expected_port=expected_port):
+        return False
+    send_json_error(HTTPStatus.FORBIDDEN, "Host header is not allowed for local-only requests")
     return True
 
 

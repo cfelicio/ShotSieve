@@ -262,47 +262,65 @@ def _start_operation_job(
 ) -> None:
     """Start an operation job with one shared lock/registry lifecycle."""
     deps = cast(WebRouteDependencies, context.dependency_views.jobs)
-    if not _route(context, "try_acquire_operation_lock", try_acquire_operation_lock)(handler, context):
-        return
+    server = getattr(handler, "server", None)
+    lifecycle_lock = getattr(server, "operation_lifecycle_lock", None)
 
-    try:
-        job_id = registry.create(initial_progress=initial_progress)
-    except Exception:
-        context.operation_lock.release()
-        raise
-
-    def run_job() -> None:
-        try:
-            def publish(*args: object) -> None:
-                registry.update_progress(job_id, progress_payload(*args))
-
-            def cancel_check() -> None:
-                if registry.is_cancelled(job_id):
-                    raise cancel_error()
-
-            result = worker(publish, cancel_check)
-            summary = result_payload(result)
-            if result_handler is None:
-                registry.complete(job_id, summary=summary)
-            else:
-                result_handler(registry, job_id, summary)
-        except Exception as exc:
-            failure = exception_payload(exc)
-            registry.fail(
-                job_id,
-                error=failure.error,
-                progress=failure.progress,
-                summary=failure.summary,
+    def start_job() -> None:
+        if server is not None and not getattr(server, "accepting_operations", True):
+            _route(context, "send_json_error", send_json_error)(
+                handler,
+                HTTPStatus.SERVICE_UNAVAILABLE,
+                "The server is shutting down and cannot start new work.",
             )
-        finally:
-            context.operation_lock.release()
+            return
+        if not _route(context, "try_acquire_operation_lock", try_acquire_operation_lock)(handler, context):
+            return
 
-    try:
-        deps.thread_factory(target=run_job, daemon=True).start()
-    except Exception:
-        context.operation_lock.release()
-        raise
-    _route(context, "send_json", send_json)(handler, {"job_id": job_id, "status": "running"})
+        try:
+            job_id = registry.create(initial_progress=initial_progress)
+        except Exception:
+            context.operation_lock.release()
+            raise
+
+        def run_job() -> None:
+            try:
+                def publish(*args: object) -> None:
+                    registry.update_progress(job_id, progress_payload(*args))
+
+                def cancel_check() -> None:
+                    if registry.is_cancelled(job_id):
+                        raise cancel_error()
+
+                result = worker(publish, cancel_check)
+                summary = result_payload(result)
+                if result_handler is None:
+                    registry.complete(job_id, summary=summary)
+                else:
+                    result_handler(registry, job_id, summary)
+            except Exception as exc:
+                failure = exception_payload(exc)
+                registry.fail(
+                    job_id,
+                    error=failure.error,
+                    progress=failure.progress,
+                    summary=failure.summary,
+                )
+            finally:
+                context.operation_lock.release()
+
+        try:
+            deps.thread_factory(target=run_job, daemon=True).start()
+        except Exception as exc:
+            registry.fail(job_id, error=str(exc))
+            context.operation_lock.release()
+            raise
+        _route(context, "send_json", send_json)(handler, {"job_id": job_id, "status": "running"})
+
+    if lifecycle_lock is None:
+        start_job()
+    else:
+        with lifecycle_lock:
+            start_job()
 
 
 def start_delete_job(handler: Any, context: WebRouteContext, payload: dict[str, object]) -> None:

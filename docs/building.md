@@ -30,6 +30,31 @@ it uses the platform-specific source constraints and the [AMD ROCm guide](amd-ro
 Do not mix those wheels with CPU, CUDA, MPS, or another vendor's Torch
 installation.
 
+### Tested source install for learned-IQA
+
+The `learned-iqa` extra selects `pyiqa`, but its transitive model stack can
+resolve differently without constraints. The tested CPU source setup used by
+the model smoke workflow is:
+
+```bash
+python -m pip install --upgrade pip setuptools wheel packaging \
+  -c scripts/release-constraints.txt \
+  -c scripts/release-constraints-torch.txt
+python -m pip install torch torchvision \
+  --index-url https://download.pytorch.org/whl/cpu \
+  -c scripts/release-constraints.txt \
+  -c scripts/release-constraints-torch.txt
+python -m pip install -e ".[learned-iqa]" \
+  -c scripts/release-constraints.txt \
+  -c scripts/release-constraints-torch.txt
+python -m pip check
+```
+
+This pins the common Python model stack and CPU Torch pair used by the
+qualification workflow. Accelerator source installs use their platform-specific
+constraints and vendor instructions below. Matching these pins does not replace
+model preparation or hardware validation.
+
 ## Runtime support boundaries
 
 The release matrix describes what ShotSieve builds and ships; it is not a
@@ -257,7 +282,7 @@ Review and commit those changes. Then create and push the annotated tag:
 ```
 
 The tag helper does **not** edit version files. GitHub Actions publishes the Python
-distributions, ten runtime packs, checksummed bootstrap manifest, and split
+distributions, twelve runtime packs, checksummed bootstrap manifest, and split
 archive parts when required. Use `-DryRun` on the tag helper to inspect its
 checks before making the tag.
 

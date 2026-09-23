@@ -11,6 +11,7 @@ from PIL import Image
 
 from shotsieve.db import database, initialize_database
 from shotsieve.export import _reject_system_directory, export_files
+from shotsieve.review import delete_files
 from shotsieve.scanner import scan_root
 
 
@@ -126,12 +127,18 @@ class TestMoveFiles:
                 mode="move",
             )
             row = connection.execute("SELECT path FROM files WHERE id = ?", (ids_by_name["alpha.jpg"],)).fetchone()
+            delete_result = delete_files(
+                connection,
+                file_ids=[ids_by_name["alpha.jpg"]],
+                delete_from_disk=True,
+            )
 
         assert result.moved == 1
         assert result.copied == 0
         assert not (photo_dir / "alpha.jpg").exists()
-        assert (dest / "alpha.jpg").exists()
         assert str(dest) in row["path"]
+        assert delete_result["deleted_count"] == 1
+        assert not (dest / "alpha.jpg").exists()
 
 
 class TestCollisionHandling:

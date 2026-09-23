@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import hashlib
 import io
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -403,36 +404,27 @@ def review_selection_revision(
     else:
         raise ValueError("scope must be one of: review-browser, review-state")
 
-    row = connection.execute(
+    selected_ids = connection.execute(
         f"""
-        SELECT
-            COUNT(*) AS total,
-            COALESCE(MIN(files.id), 0) AS min_id,
-            COALESCE(MAX(files.id), 0) AS max_id,
-            COALESCE(SUM(files.id), 0) AS sum_id,
-            COALESCE(SUM(files.id * files.id), 0) AS sum_sq_id
+        SELECT DISTINCT files.id
         FROM files
         {joins}
         {where_clause}
+        ORDER BY files.id ASC
         """,
         tuple(params),
-    ).fetchone()
+    )
+    digest = hashlib.sha256()
+    total = 0
+    for row in selected_ids:
+        digest.update(str(int(row[0])).encode("ascii"))
+        digest.update(b"\0")
+        total += 1
     scope_key = "catalog"
     if root:
         resolved_roots = [normalize_resolved_path(Path(p).expanduser().resolve()) for p in root.split("|") if p.strip()]
         scope_key = "|".join(resolved_roots) if resolved_roots else "catalog"
-    revision = "|".join(
-        str(value or 0)
-        for value in (
-            scope,
-            scope_key,
-            row["total"],
-            row["min_id"],
-            row["max_id"],
-            row["sum_id"],
-            row["sum_sq_id"],
-        )
-    )
+    revision = f"{scope}|{scope_key}|{total}|{digest.hexdigest()}"
     log_duration(
         "review.selection_revision",
         started_at,

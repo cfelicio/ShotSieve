@@ -7,12 +7,14 @@ import threading
 from hashlib import sha1
 from http import HTTPStatus
 from pathlib import Path
+from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
 import pytest
 from PIL import Image
 
 from shotsieve.db import database, initialize_database
+from shotsieve.export import export_files
 from shotsieve.scanner import canonical_path_key, scan_root
 from shotsieve.web import build_handler
 
@@ -20,6 +22,71 @@ from conftest import create_image, find_free_port
 
 
 class TestMediaStreaming:
+    def test_moved_catalog_photo_remains_available_through_media_routes(self, test_server):
+        base_url, db_path, tmp_path = test_server
+        photo_dir = tmp_path / "photos"
+        photo_dir.mkdir()
+        source_path = photo_dir / "test.jpg"
+        create_image(source_path)
+        destination = tmp_path / "moved"
+        destination.mkdir()
+        preview_dir = tmp_path / "data" / "previews"
+
+        with database(db_path) as connection:
+            scan_root(
+                connection,
+                root=photo_dir,
+                recursive=True,
+                extensions=(".jpg",),
+                preview_dir=preview_dir,
+            )
+            file_id = connection.execute("SELECT id FROM files LIMIT 1").fetchone()["id"]
+            export_files(
+                connection,
+                file_ids=[file_id],
+                destination=str(destination),
+                mode="move",
+            )
+
+        moved_bytes = (destination / "test.jpg").read_bytes()
+        for variant in ("source", "preview"):
+            response = urlopen(f"{base_url}/api/media/{variant}?id={file_id}")
+            assert response.read() == moved_bytes
+
+    def test_moved_media_rejects_symlink_replacement_outside_allowed_roots(self, test_server):
+        base_url, db_path, tmp_path = test_server
+        photo_dir = tmp_path / "photos"
+        photo_dir.mkdir()
+        source_path = photo_dir / "test.jpg"
+        create_image(source_path)
+        destination = tmp_path / "moved"
+        destination.mkdir()
+
+        with database(db_path) as connection:
+            scan_root(
+                connection,
+                root=photo_dir,
+                recursive=True,
+                extensions=(".jpg",),
+                preview_dir=tmp_path / "data" / "previews",
+            )
+            file_id = connection.execute("SELECT id FROM files LIMIT 1").fetchone()["id"]
+            export_files(connection, file_ids=[file_id], destination=str(destination), mode="move")
+
+        moved_path = destination / source_path.name
+        outside_path = tmp_path / "outside.jpg"
+        create_image(outside_path)
+        moved_path.unlink()
+        try:
+            moved_path.symlink_to(outside_path)
+        except (OSError, NotImplementedError) as exc:
+            pytest.skip(f"symlink creation is unavailable: {exc}")
+
+        for variant in ("source", "preview"):
+            with pytest.raises(HTTPError) as exc_info:
+                urlopen(f"{base_url}/api/media/{variant}?id={file_id}")
+            assert exc_info.value.code == HTTPStatus.FORBIDDEN
+
     @pytest.mark.parametrize("variant", ["source", "preview"])
     def test_mutable_media_reloads_replaced_content(self, test_server, variant):
         base_url, db_path, tmp_path = test_server

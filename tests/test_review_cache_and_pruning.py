@@ -73,6 +73,100 @@ def test_prune_missing_cache_entries_removes_managed_preview(tmp_path: Path) -> 
     assert count == 0
 
 
+@pytest.mark.parametrize("stat_error", [PermissionError("denied"), OSError("stat failed")])
+def test_prune_preserves_rows_when_source_stat_is_inaccessible(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    stat_error: OSError,
+) -> None:
+    db_path = tmp_path / "data" / "shotsieve.db"
+    preview_dir = tmp_path / "previews"
+    photo_dir = tmp_path / "photos"
+    photo_dir.mkdir()
+    source_path = photo_dir / "sample.jpg"
+    create_image(source_path)
+    initialize_database(db_path)
+
+    with connect(db_path) as connection:
+        scan_root(connection, root=photo_dir, recursive=True, extensions=(".jpg",), preview_dir=preview_dir)
+        score_with_fake_learned_backend(connection)
+        row = connection.execute("SELECT id, preview_path FROM files LIMIT 1").fetchone()
+        file_id = int(row["id"])
+        preview_path = Path(row["preview_path"])
+        connection.execute(
+            "INSERT INTO review_state(file_id, decision_state, delete_marked, updated_time) VALUES(?, 'delete', 1, 'now')",
+            (file_id,),
+        )
+
+    original_stat = Path.stat
+
+    def blocked_stat(path: Path, *args, **kwargs):
+        if str(path) == str(source_path):
+            raise type(stat_error)(str(stat_error))
+        return original_stat(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "stat", blocked_stat)
+    with connect(db_path) as connection:
+        with pytest.raises(type(stat_error)):
+            prune_missing_cache_entries(connection, preview_cache_root=preview_dir)
+        retained = connection.execute(
+            """
+            SELECT files.id, scores.file_id AS score_id, review_state.file_id AS review_id,
+                   files.preview_path
+            FROM files
+            LEFT JOIN scores ON scores.file_id = files.id
+            LEFT JOIN review_state ON review_state.file_id = files.id
+            WHERE files.id = ?
+            """,
+            (file_id,),
+        ).fetchone()
+
+    assert retained["id"] == file_id
+    assert retained["score_id"] == file_id
+    assert retained["review_id"] == file_id
+    assert retained["preview_path"] == str(preview_path)
+    assert preview_path.exists()
+
+
+def test_clear_all_commits_catalog_deletion_before_removing_previews(tmp_path: Path) -> None:
+    db_path = tmp_path / "data" / "shotsieve.db"
+    preview_dir = tmp_path / "previews"
+    photo_dir = tmp_path / "photos"
+    photo_dir.mkdir()
+    create_image(photo_dir / "sample.jpg")
+    initialize_database(db_path)
+
+    connection = connect(db_path)
+    try:
+        scan_root(connection, root=photo_dir, recursive=True, extensions=(".jpg",), preview_dir=preview_dir)
+        row = connection.execute("SELECT id, preview_path FROM files LIMIT 1").fetchone()
+        file_id = int(row["id"])
+        preview_path = Path(row["preview_path"])
+        connection.commit()
+
+        class CommitFailureConnection:
+            def __getattr__(self, name):
+                return getattr(connection, name)
+
+            def commit(self):
+                raise RuntimeError("forced catalog commit failure")
+
+        with pytest.raises(RuntimeError, match="forced catalog commit failure"):
+            clear_cache_scope(
+                CommitFailureConnection(),
+                scope="all",
+                preview_cache_root=preview_dir,
+            )
+        connection.rollback()
+        retained = connection.execute("SELECT id, preview_path FROM files WHERE id = ?", (file_id,)).fetchone()
+    finally:
+        connection.close()
+
+    assert retained["id"] == file_id
+    assert retained["preview_path"] == str(preview_path)
+    assert preview_path.exists()
+
+
 def test_prune_missing_cache_entries_processes_rows_in_batches(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

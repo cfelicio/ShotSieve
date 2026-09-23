@@ -43,6 +43,7 @@ class JobRegistry:
 
     def __init__(self, *, max_jobs: int = 10) -> None:
         self._lock = threading.Lock()
+        self._idle = threading.Condition(self._lock)
         self._jobs: dict[str, dict[str, object]] = {}
         self._max_jobs = max_jobs
 
@@ -90,13 +91,14 @@ class JobRegistry:
     def complete(self, job_id: str, *, summary: dict) -> None:
         """Mark job as completed and store the summary payload."""
         now = time.time()
-        with self._lock:
+        with self._idle:
             record = self._jobs.get(job_id)
             if record is not None:
                 record["status"] = "completed"
                 record["summary"] = summary
                 record["finished_at"] = now
                 record["updated_at"] = now
+                self._idle.notify_all()
 
     def fail(
         self,
@@ -108,7 +110,7 @@ class JobRegistry:
     ) -> None:
         """Mark job as failed and optionally retain a partial summary."""
         now = time.time()
-        with self._lock:
+        with self._idle:
             record = self._jobs.get(job_id)
             if record is not None:
                 record["status"] = "failed"
@@ -119,6 +121,32 @@ class JobRegistry:
                     record["summary"] = dict(summary)
                 record["finished_at"] = now
                 record["updated_at"] = now
+                self._idle.notify_all()
+
+    def cancel_running(self) -> int:
+        """Request cancellation for each active job and return their count."""
+        cancelled = 0
+        with self._idle:
+            for record in self._jobs.values():
+                if record.get("status") == "running":
+                    record["cancelled"] = True
+                    cancelled += 1
+        return cancelled
+
+    def has_running_jobs(self) -> bool:
+        with self._lock:
+            return any(record.get("status") == "running" for record in self._jobs.values())
+
+    def wait_until_idle(self, timeout: float | None = None) -> bool:
+        """Wait for all current jobs to finish; return false on timeout."""
+        deadline = None if timeout is None else time.monotonic() + max(0.0, timeout)
+        with self._idle:
+            while any(record.get("status") == "running" for record in self._jobs.values()):
+                remaining = None if deadline is None else deadline - time.monotonic()
+                if remaining is not None and remaining <= 0:
+                    return False
+                self._idle.wait(remaining)
+        return True
 
     def cancel(self, job_id: str) -> bool:
         """Request cancellation.  Returns True if the job was running."""

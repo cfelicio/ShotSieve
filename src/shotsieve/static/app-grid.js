@@ -17,6 +17,7 @@
     const { fetchJson } = api;
 
     let queueAbortController = null;
+    let detailRequestGeneration = 0;
 
     function selectAll() {
       state.bulkSelection = null;
@@ -356,9 +357,10 @@
     }
 
     async function selectFile(fileId) {
+      const requestGeneration = ++detailRequestGeneration;
       state.activeId = fileId;
-
-      const detailPromise = fetchJson(`/api/file?id=${fileId}`);
+      state.detail = null;
+      renderDetail();
 
       if (state.queue.length > 0) {
         updateSelectionState({ scrollActive: true });
@@ -366,7 +368,11 @@
         renderQueue();
       }
 
-      state.detail = await detailPromise;
+      const detail = await fetchJson(`/api/file?id=${fileId}`);
+      if (requestGeneration !== detailRequestGeneration || Number(state.activeId) !== Number(fileId)) {
+        return;
+      }
+      state.detail = detail;
       renderDetail();
     }
 

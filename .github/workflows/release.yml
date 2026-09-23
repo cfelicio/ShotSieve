@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       release_tag:
-        description: Existing or new version tag to publish (for example, v0.4.6)
+        description: Existing version tag to publish (for example, v0.4.6)
         required: true
         type: string
 
@@ -25,9 +25,52 @@ env:
   RELEASE_CONSTRAINTS: scripts/release-constraints.txt
 
 jobs:
+  resolve-release-source:
+    name: resolve-release-source
+    runs-on: ubuntu-latest
+    outputs:
+      commit: ${{ steps.source.outputs.commit }}
+
+    steps:
+      - name: Checkout requested release tag
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.release_tag != '' && format('refs/tags/{0}', inputs.release_tag) || github.ref }}
+
+      - id: source
+        name: Verify release tag and package version
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag || github.ref_name }}
+        run: |
+          python - <<'PY'
+          import os
+          import subprocess
+          import tomllib
+          from pathlib import Path
+
+          tag = os.environ["RELEASE_TAG"].strip()
+          if not tag or tag != os.environ["RELEASE_TAG"] or "/" in tag or "\\" in tag:
+              raise SystemExit(f"Release tag must be a plain tag name, got {tag!r}")
+          tag_ref = f"refs/tags/{tag}"
+          expected_version = tag[1:] if tag.startswith("v") else tag
+          with Path("pyproject.toml").open("rb") as handle:
+              version = tomllib.load(handle)["project"]["version"]
+          if version != expected_version:
+              raise SystemExit(f"Release tag {tag!r} does not match package version {version!r}")
+          commit = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
+          tag_commit = subprocess.check_output(
+              ["git", "rev-parse", "--verify", f"{tag_ref}^{{commit}}"], text=True
+          ).strip()
+          if commit != tag_commit:
+              raise SystemExit(f"Checked out commit {commit} does not match {tag_ref} at {tag_commit}")
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+              output.write(f"commit={commit}\n")
+          PY
+
   test:
     name: test-${{ matrix.os }}-py${{ matrix.python-version }}
     runs-on: ${{ matrix.os }}
+    needs: resolve-release-source
     strategy:
       fail-fast: false
       matrix:
@@ -42,6 +85,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v5
+        with:
+          ref: ${{ needs.resolve-release-source.outputs.commit }}
 
       - name: Set up Python
         uses: actions/setup-python@v6
@@ -69,6 +114,7 @@ jobs:
   prepare-release-matrix:
     name: prepare-release-matrix
     runs-on: ubuntu-latest
+    needs: resolve-release-source
 
     outputs:
       runtime_matrix: ${{ steps.runtime-matrix.outputs.matrix }}
@@ -76,6 +122,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v5
+        with:
+          ref: ${{ needs.resolve-release-source.outputs.commit }}
 
       - name: Set up Python
         uses: actions/setup-python@v6
@@ -103,11 +151,15 @@ jobs:
   build-python-dist:
     name: build-python-dist
     runs-on: ubuntu-latest
-    needs: test
+    needs:
+      - test
+      - resolve-release-source
 
     steps:
       - name: Checkout
         uses: actions/checkout@v5
+        with:
+          ref: ${{ needs.resolve-release-source.outputs.commit }}
 
       - name: Set up Python
         uses: actions/setup-python@v6
@@ -136,6 +188,7 @@ jobs:
     needs:
       - test
       - prepare-release-matrix
+      - resolve-release-source
     env:
       PIP_NO_CACHE_DIR: "1"
       PIP_DISABLE_PIP_VERSION_CHECK: "1"
@@ -146,6 +199,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v5
+        with:
+          ref: ${{ needs.resolve-release-source.outputs.commit }}
 
       - name: Set up Python
         uses: actions/setup-python@v6
@@ -284,6 +339,7 @@ jobs:
     needs:
       - build-python-dist
       - build-tier1-portable-bundles
+      - resolve-release-source
     if: ${{ github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/v') }}
     env:
       RELEASE_TAG: ${{ inputs.release_tag || github.ref_name }}
@@ -291,6 +347,13 @@ jobs:
     steps:
       - name: Checkout release tooling
         uses: actions/checkout@v5
+        with:
+          ref: ${{ needs.resolve-release-source.outputs.commit }}
+
+      - name: Verify publication checkout matches tested source
+        env:
+          EXPECTED_RELEASE_COMMIT: ${{ needs.resolve-release-source.outputs.commit }}
+        run: python -c "import os, subprocess; actual = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(); expected = os.environ['EXPECTED_RELEASE_COMMIT']; assert actual == expected, f'{actual} != {expected}'"
 
       - name: Download all build artifacts
         uses: actions/download-artifact@v7

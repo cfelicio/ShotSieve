@@ -13,13 +13,125 @@ from urllib.error import HTTPError
 import pytest
 
 from shotsieve.db import connect, database, initialize_database
+from shotsieve.review import review_selection_revision
 from shotsieve.scanner import scan_root
-from shotsieve.web import build_handler
+from shotsieve.web import BoundedReviewHTTPServer, build_handler
 
 from conftest import create_image, find_free_port
 
 
 class TestWebRoutesJobsIntegration:
+    def test_shutdown_waits_for_inflight_move_catalog_commit(self, tmp_path: Path, monkeypatch):
+        from shotsieve import export as export_module
+
+        db_path = tmp_path / "data" / "shotsieve.db"
+        photo_dir = tmp_path / "photos"
+        preview_dir = tmp_path / "previews"
+        destination = tmp_path / "moved"
+        photo_dir.mkdir()
+        destination.mkdir()
+        source_path = photo_dir / "sample.jpg"
+        create_image(source_path)
+        initialize_database(db_path)
+        with database(db_path) as connection:
+            scan_root(connection, root=photo_dir, recursive=True, extensions=(".jpg",), preview_dir=preview_dir)
+            file_id = connection.execute("SELECT id FROM files LIMIT 1").fetchone()["id"]
+            selection_revision = review_selection_revision(
+                connection,
+                scope="review-browser",
+                marked="all",
+            )
+
+        handler = build_handler(db_path)
+        server = BoundedReviewHTTPServer(
+            ("127.0.0.1", 0),
+            handler,
+            operation_registry=handler._shotsieve_operation_registry,
+            model_registry=handler._shotsieve_model_registry,
+        )
+        server_thread = threading.Thread(target=server.serve_forever, daemon=True)
+        server_thread.start()
+        transfer_finished = threading.Event()
+        continue_transfer = threading.Event()
+        real_move = export_module._move_without_overwrite
+
+        def move_then_pause(source: Path, target: Path):
+            result = real_move(source, target)
+            transfer_finished.set()
+            assert continue_transfer.wait(timeout=5)
+            return result
+
+        monkeypatch.setattr(export_module, "_move_without_overwrite", move_then_pause)
+        model_job_id = server.model_registry.create(initial_progress={"phase": "preparing_model"})
+        export_payload = json.dumps({
+            "file_ids": [file_id],
+            "destination": str(destination),
+            "mode": "move",
+            "selection_revision": selection_revision,
+            "page_selection": {"scope": "review-browser", "marked": "all"},
+        }).encode("utf-8")
+        start_request = Request(
+            f"http://127.0.0.1:{server.server_port}/api/files/export/start",
+            data=export_payload,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        try:
+            response = urlopen(start_request)
+            job_id = json.loads(response.read().decode("utf-8"))["job_id"]
+            assert transfer_finished.wait(timeout=3)
+            server.begin_operation_shutdown()
+            registry = server.operation_registry
+            assert registry is not None
+            assert registry.is_cancelled(job_id)
+            assert server.model_registry is not None
+            assert server.model_registry.is_cancelled(model_job_id)
+
+            rejected_request = Request(
+                f"http://127.0.0.1:{server.server_port}/api/files/export/start",
+                data=export_payload,
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            with pytest.raises(HTTPError) as exc_info:
+                urlopen(rejected_request)
+            assert exc_info.value.code == HTTPStatus.SERVICE_UNAVAILABLE
+            server.shutdown()
+            server.server_close()
+
+            wait_started = threading.Event()
+
+            def wait_for_shutdown() -> None:
+                wait_started.set()
+                server.wait_for_operations()
+
+            shutdown_waiter = threading.Thread(target=wait_for_shutdown)
+            shutdown_waiter.start()
+            assert wait_started.wait(timeout=1)
+            assert shutdown_waiter.is_alive()
+        finally:
+            continue_transfer.set()
+            if "registry" in locals():
+                registry.wait_until_idle()
+                if "shutdown_waiter" in locals():
+                    assert shutdown_waiter.is_alive()
+            if server.model_registry is not None:
+                server.model_registry.complete(model_job_id, summary={"state": "cancelled"})
+            if "shutdown_waiter" in locals():
+                shutdown_waiter.join(timeout=5)
+            server.shutdown()
+            server.server_close()
+            server_thread.join(timeout=5)
+
+        assert not shutdown_waiter.is_alive()
+        assert not server_thread.is_alive()
+        assert registry.status(job_id)["status"] in {"completed", "failed"}
+        assert not source_path.exists()
+        assert (destination / source_path.name).exists()
+        with database(db_path) as connection:
+            row = connection.execute("SELECT path FROM files WHERE id = ?", (file_id,)).fetchone()
+        assert Path(row["path"]) == (destination / source_path.name).resolve()
+
     def test_score_start_uses_stored_custom_preview_root(self, test_server, monkeypatch):
         base_url, db_path, tmp_path = test_server
         photo_dir = tmp_path / "photos"

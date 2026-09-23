@@ -389,7 +389,7 @@ def _move_export_row(
 
     try:
         connection.execute(
-            "UPDATE files SET path = ?, path_key = ?, preview_path = NULL, preview_status = 'missing' WHERE id = ?",
+            "UPDATE files SET path = ?, path_key = ?, preview_path = NULL, preview_status = 'missing', move_managed = 1 WHERE id = ?",
             (str(target), canonical_path_key(target), row["id"]),
         )
         # Persist each moved row so a later filesystem or database failure does

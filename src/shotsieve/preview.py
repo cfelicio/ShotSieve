@@ -181,6 +181,17 @@ def generate_preview(
 
     preview_dir.mkdir(parents=True, exist_ok=True)
     preview_path, _ = preview_output_paths(source_path, preview_dir)
+    try:
+        temporary_path = _create_temporary_preview_path(preview_path)
+    except OSError as exc:
+        return PreviewResult(
+            path=None,
+            status="failed",
+            width=None,
+            height=None,
+            capture_time=None,
+            error_text=str(exc),
+        )
 
     stderr_buffer = io.StringIO()
     header_warning: str | None = None
@@ -203,7 +214,8 @@ def generate_preview(
                 image = prepare_image_for_rgb(image, apply_exif_orientation=False)
 
                 image.thumbnail(MAX_PREVIEW_SIZE, Image.Resampling.LANCZOS)
-                image.save(preview_path, format="JPEG", quality=85, optimize=False)
+                image.save(temporary_path, format="JPEG", quality=85, optimize=False)
+        os.replace(temporary_path, preview_path)
     except (OSError, UnidentifiedImageError, ValueError) as exc:
         issue_text = _format_decoder_issues(source_path, header_warning, stderr_buffer.getvalue())
         return PreviewResult(
@@ -214,6 +226,8 @@ def generate_preview(
             capture_time=None,
             error_text=_combine_failure_error_text(exc, issue_text),
         )
+    finally:
+        _remove_temporary_preview(temporary_path)
 
     issue_text = _format_decoder_issues(source_path, header_warning, stderr_buffer.getvalue())
     _emit_nonfatal_issue(issue_text)
@@ -247,92 +261,116 @@ def generate_raw_preview(
 
     preview_dir.mkdir(parents=True, exist_ok=True)
     preview_path, _ = preview_output_paths(source_path, preview_dir)
-
-    stderr_buffer = io.StringIO()
     try:
-        with _captured_stderr(stderr_buffer):
-            with rawpy.imread(str(source_path)) as raw_image:
-                raw_width = None
-                raw_height = None
-                if hasattr(raw_image, "sizes") and raw_image.sizes is not None:
-                    sizes = raw_image.sizes
-                    raw_width = getattr(sizes, "iwidth", None) or getattr(sizes, "width", None)
-                    raw_height = getattr(sizes, "iheight", None) or getattr(sizes, "height", None)
-
-                # Fast path: extract the embedded JPEG thumbnail (most RAW files have one).
-                # Use it only when it is large enough for our target preview size;
-                # tiny embedded thumbnails look visibly softer than the source.
-                result = _try_extract_raw_thumbnail(
-                    raw_image,
-                    preview_path,
-                    raw_preview_mode=raw_preview_mode,
-                    raw_width=raw_width,
-                    raw_height=raw_height,
-                    source_path=source_path,
-                    max_decode_pixels=max_decode_pixels,
-                )
-                if result is not None:
-                    result.error_text = _format_decoder_issues(
-                        source_path,
-                        result.error_text,
-                        stderr_buffer.getvalue(),
-                    )
-                    return result
-
-                if raw_width and raw_height:
-                    enforce_decode_budget(
-                        source_path,
-                        int(raw_width),
-                        int(raw_height),
-                        max_pixels=max_decode_pixels,
-                    )
-
-                # Slow fallback: full Bayer demosaicing for RAW files without thumbnails.
-                # Keep rawpy's auto-brightening disabled so monochrome / high-key RAWs
-                # preserve their captured tonality instead of getting blown out in previews
-                # and downstream learned-IQA scoring.
-                rgb = raw_image.postprocess(use_camera_wb=True, no_auto_bright=True)
-    except (OSError, ValueError, RuntimeError) as exc:
-        issue_text = _format_decoder_issues(source_path, stderr_buffer.getvalue())
+        temporary_path = _create_temporary_preview_path(preview_path)
+    except OSError as exc:
         return PreviewResult(
             path=None,
             status="failed",
             width=None,
             height=None,
             capture_time=None,
-            error_text=_combine_failure_error_text(exc, issue_text),
+            error_text=str(exc),
         )
-
     try:
-        decoded_image = Image.fromarray(rgb)
-        enforce_decode_budget(source_path, *decoded_image.size, max_pixels=max_decode_pixels)
-        image = prepare_image_for_rgb(decoded_image, apply_exif_orientation=False)
-    except (OSError, ValueError, RuntimeError) as exc:
-        issue_text = _format_decoder_issues(source_path, stderr_buffer.getvalue())
-        return PreviewResult(
-            path=None,
-            status="failed",
-            width=None,
-            height=None,
-            capture_time=None,
-            error_text=_combine_failure_error_text(exc, issue_text),
-        )
-    width, height = image.size
-    if raw_width and raw_height:
-        width, height = raw_width, raw_height
-    image.thumbnail(MAX_PREVIEW_SIZE, Image.Resampling.LANCZOS)
-    image.save(preview_path, format="JPEG", quality=85, optimize=False)
-    issue_text = _format_decoder_issues(source_path, stderr_buffer.getvalue())
-    _emit_nonfatal_issue(issue_text)
+        stderr_buffer = io.StringIO()
+        try:
+            with _captured_stderr(stderr_buffer):
+                with rawpy.imread(str(source_path)) as raw_image:
+                    raw_width = None
+                    raw_height = None
+                    if hasattr(raw_image, "sizes") and raw_image.sizes is not None:
+                        sizes = raw_image.sizes
+                        raw_width = getattr(sizes, "iwidth", None) or getattr(sizes, "width", None)
+                        raw_height = getattr(sizes, "iheight", None) or getattr(sizes, "height", None)
 
-    return PreviewResult(
-        path=str(preview_path.resolve()),
-        status="ready",
-        width=width,
-        height=height,
-        capture_time=None,
-        error_text=issue_text,
-    )
+                    # Use an embedded thumbnail only when it is large enough
+                    # for our target preview size.
+                    result = _try_extract_raw_thumbnail(
+                        raw_image,
+                        temporary_path,
+                        raw_preview_mode=raw_preview_mode,
+                        raw_width=raw_width,
+                        raw_height=raw_height,
+                        source_path=source_path,
+                        max_decode_pixels=max_decode_pixels,
+                    )
+                    if result is not None:
+                        os.replace(temporary_path, preview_path)
+                        result.path = str(preview_path.resolve())
+                        result.error_text = _format_decoder_issues(
+                            source_path,
+                            result.error_text,
+                            stderr_buffer.getvalue(),
+                        )
+                        return result
+
+                    if raw_width and raw_height:
+                        enforce_decode_budget(
+                            source_path,
+                            int(raw_width),
+                            int(raw_height),
+                            max_pixels=max_decode_pixels,
+                        )
+
+                    # Keep rawpy's auto-brightening disabled so captured
+                    # tonality is preserved in previews and model scoring.
+                    rgb = raw_image.postprocess(use_camera_wb=True, no_auto_bright=True)
+        except (OSError, ValueError, RuntimeError) as exc:
+            issue_text = _format_decoder_issues(source_path, stderr_buffer.getvalue())
+            return PreviewResult(
+                path=None,
+                status="failed",
+                width=None,
+                height=None,
+                capture_time=None,
+                error_text=_combine_failure_error_text(exc, issue_text),
+            )
+
+        try:
+            decoded_image = Image.fromarray(rgb)
+            enforce_decode_budget(source_path, *decoded_image.size, max_pixels=max_decode_pixels)
+            image = prepare_image_for_rgb(decoded_image, apply_exif_orientation=False)
+        except (OSError, ValueError, RuntimeError) as exc:
+            issue_text = _format_decoder_issues(source_path, stderr_buffer.getvalue())
+            return PreviewResult(
+                path=None,
+                status="failed",
+                width=None,
+                height=None,
+                capture_time=None,
+                error_text=_combine_failure_error_text(exc, issue_text),
+            )
+        width, height = image.size
+        if raw_width and raw_height:
+            width, height = raw_width, raw_height
+        image.thumbnail(MAX_PREVIEW_SIZE, Image.Resampling.LANCZOS)
+        try:
+            image.save(temporary_path, format="JPEG", quality=85, optimize=False)
+            os.replace(temporary_path, preview_path)
+        except (OSError, ValueError) as exc:
+            issue_text = _format_decoder_issues(source_path, stderr_buffer.getvalue())
+            return PreviewResult(
+                path=None,
+                status="failed",
+                width=None,
+                height=None,
+                capture_time=None,
+                error_text=_combine_failure_error_text(exc, issue_text),
+            )
+        issue_text = _format_decoder_issues(source_path, stderr_buffer.getvalue())
+        _emit_nonfatal_issue(issue_text)
+
+        return PreviewResult(
+            path=str(preview_path.resolve()),
+            status="ready",
+            width=width,
+            height=height,
+            capture_time=None,
+            error_text=issue_text,
+        )
+    finally:
+        _remove_temporary_preview(temporary_path)
 
 
 def _try_extract_raw_thumbnail(
@@ -577,6 +615,23 @@ def preview_capabilities() -> dict[str, str]:
     }
 
 
+def _create_temporary_preview_path(preview_path: Path) -> Path:
+    descriptor, raw_path = tempfile.mkstemp(
+        prefix=f".{preview_path.stem}.",
+        suffix=".tmp",
+        dir=preview_path.parent,
+    )
+    os.close(descriptor)
+    return Path(raw_path)
+
+
+def _remove_temporary_preview(path: Path) -> None:
+    try:
+        path.unlink()
+    except OSError:
+        pass
+
+
 def generate_previews_parallel(
     source_paths: Sequence[Path], 
     preview_dir: Path, 
@@ -612,23 +667,29 @@ def generate_previews_parallel(
     import os
     workers = max_workers or max(4, (os.cpu_count() or 4))
 
-    # Map futures back to their original index so results stay ordered.
+    # Keep only one worker's worth of tasks queued. Submitting an unbounded
+    # list makes cancellation wait for previews the user never needed.
     results: list[PreviewResult | None] = [None] * total
-
-    with ProcessPoolExecutor(max_workers=workers) as executor:
-        future_to_index = {
-            executor.submit(
+    executor = ProcessPoolExecutor(max_workers=workers)
+    future_to_index = {}
+    next_index = 0
+    try:
+        while next_index < total and len(future_to_index) < workers:
+            future = executor.submit(
                 generate_preview,
-                path,
+                source_paths[next_index],
                 preview_dir,
                 raw_preview_mode=raw_preview_mode,
                 max_decode_pixels=max_decode_pixels,
-            ): idx
-            for idx, path in enumerate(source_paths)
-        }
+            )
+            future_to_index[future] = next_index
+            next_index += 1
+
         completed = 0
-        for future in as_completed(future_to_index):
+        while future_to_index:
+            future = next(as_completed(tuple(future_to_index)))
             idx = future_to_index[future]
+            del future_to_index[future]
             try:
                 results[idx] = future.result()
             except Exception as exc:
@@ -643,5 +704,24 @@ def generate_previews_parallel(
             completed += 1
             if progress_callback is not None:
                 progress_callback(completed, total)
+            if next_index < total:
+                next_future = executor.submit(
+                    generate_preview,
+                    source_paths[next_index],
+                    preview_dir,
+                    raw_preview_mode=raw_preview_mode,
+                    max_decode_pixels=max_decode_pixels,
+                )
+                future_to_index[next_future] = next_index
+                next_index += 1
+    except BaseException:
+        for pending_future in future_to_index:
+            pending_future.cancel()
+        # Running child processes may still be writing a stable preview path.
+        # Wait for them before returning so a later scan cannot race their writes.
+        executor.shutdown(wait=True, cancel_futures=True)
+        raise
+    else:
+        executor.shutdown(wait=True, cancel_futures=False)
 
     return results  # type: ignore[return-value]

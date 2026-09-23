@@ -92,6 +92,34 @@ def test_review_listing_and_state_updates(tmp_path: Path) -> None:
     assert summary["scored_files"] == 2
 
 
+def test_selection_revision_distinguishes_sets_with_matching_aggregates(tmp_path: Path) -> None:
+    db_path = tmp_path / "data" / "shotsieve.db"
+    initialize_database(db_path)
+    first_ids = {1, 2, 5, 7, 8, 10}
+    second_ids = {1, 3, 4, 6, 9, 10}
+
+    with connect(db_path) as connection:
+        connection.executemany(
+            "INSERT INTO files(id, path, path_key) VALUES(?, ?, ?)",
+            [(file_id, f"photo-{file_id}.jpg", f"photo-{file_id}.jpg") for file_id in range(1, 11)],
+        )
+        connection.executemany(
+            "INSERT INTO review_state(file_id, delete_marked, updated_time) VALUES(?, 1, 'now')",
+            [(file_id,) for file_id in sorted(first_ids)],
+        )
+        first_revision = review_selection_revision(connection, scope="review-state", marked="delete")
+        connection.execute("DELETE FROM review_state")
+        connection.executemany(
+            "INSERT INTO review_state(file_id, delete_marked, updated_time) VALUES(?, 1, 'now')",
+            [(file_id,) for file_id in sorted(second_ids)],
+        )
+        second_revision = review_selection_revision(connection, scope="review-state", marked="delete")
+
+    assert sum(first_ids) == sum(second_ids)
+    assert sum(file_id * file_id for file_id in first_ids) == sum(file_id * file_id for file_id in second_ids)
+    assert first_revision != second_revision
+
+
 def test_analysis_diagnostics_explain_preview_and_model_failures(tmp_path: Path) -> None:
     db_path = tmp_path / "data" / "shotsieve.db"
     preview_dir = tmp_path / "previews"

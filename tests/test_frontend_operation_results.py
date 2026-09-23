@@ -527,3 +527,168 @@ def test_scan_and_score_share_job_lifecycle_without_losing_kind_specific_polling
             assert result["activeJobId"] is None
             assert result["clearCalls"] == 0
             assert result["markCalls"] == 1
+
+
+def test_analyze_stops_after_model_unavailable_or_failed_scoring(chromium_page):
+    page, _ = chromium_page
+    results = page.evaluate(
+        """
+        async () => {
+          async function runScenario(noModel) {
+            const calls = [];
+            const messages = [];
+            const state = {
+              options: noModel ? {} : { default_scoring_mode: "topiq_nr", learned_models: ["topiq_nr"] },
+              page: 0,
+              loadedReviewSelection: null,
+            };
+            const select = document.getElementById("model-select");
+            select.value = noModel ? "" : "topiq_nr";
+            const workflow = window.ShotSieveWorkflowLibraryAnalysis.createWorkflowLibraryAnalysis({
+              api: {
+                postJson: async (url) => {
+                  calls.push(["post", url]);
+                  return url === "/api/score-estimate" ? { rows_total: 1 } : { job_id: url };
+                },
+              },
+              busy: {
+                setBusyMessage: () => {},
+                setBusyPhaseProgress: () => {},
+                setBusyProgress: () => {},
+              },
+              compare: { currentResourceProfile: () => "normal", scoreBatchSize: () => 1 },
+              notifications: { showToast: (message, tone) => messages.push([message, tone]) },
+              pollingModule: {},
+              review: {
+                loadQueue: async () => calls.push(["loadQueue"]),
+                refreshWorkspace: async () => calls.push(["refreshWorkspace"]),
+                syncReviewRoot: (root) => root,
+              },
+              state,
+              ui: {
+                currentLibraryRoot: () => "C:/photos",
+                saveUiState: () => {},
+                setTab: (tab) => calls.push(["setTab", tab]),
+              },
+              workflowExport: { clearActiveSelection: () => {} },
+              operations: {
+                runTrackedJob: async ({ kind }) => {
+                  calls.push(["job", kind]);
+                  if (kind === "scan") return { files_seen: 1 };
+                  return {
+                    job_status: "failed",
+                    job_error: "score failed",
+                    diagnostic: { cause: "Model backend failed", recovery_action: "Prepare the model and retry." },
+                  };
+                },
+              },
+            });
+            await workflow.analyzeLibrary();
+            return { calls, messages };
+          }
+          return [await runScenario(false), await runScenario(true)];
+        }
+        """,
+    )
+
+    for scenario in results:
+        assert not any(call[0] == "setTab" and call[1] == "review" for call in scenario["calls"])
+        assert not any(call[0] == "loadQueue" for call in scenario["calls"])
+        assert not any("Analysis completed" in message[0] for message in scenario["messages"])
+    assert any("Model backend failed" in message[0] for message in results[0]["messages"])
+    assert any("No learned IQA model" in message[0] for message in results[1]["messages"])
+
+
+def test_recovery_fetches_failed_score_and_compare_diagnostics(chromium_page):
+    page, _ = chromium_page
+    results = page.evaluate(
+        """
+        async () => {
+          async function runScenario(kind) {
+            const urls = [];
+            const messages = [];
+            const jobId = `${kind}-job`;
+            const state = {
+              recoveryJob: {
+                kind,
+                jobId,
+                label: kind === "score" ? "Scoring" : "Compare",
+                statusPath: `/api/${kind}/status`,
+                resultPath: `/api/${kind}/result`,
+              },
+              comparison: null,
+            };
+            const workflow = window.ShotSieveWorkflowLibraryOperations.createWorkflowLibraryOperations({
+              api: {
+                fetchJson: async (url) => {
+                  urls.push(url);
+                  if (url.includes("/status?")) return { status: "failed", error: "stored failure" };
+                  return {
+                    diagnostic: { cause: "Retained model failure", recovery_action: "Check analysis diagnostics." },
+                    error_report: { cause: "Retained model failure", recovery_action: "Check analysis diagnostics." },
+                  };
+                },
+                postJson: async () => ({}),
+              },
+              busy: {
+                clearTrackedJob: () => { state.recoveryJob = null; },
+                markTrackedJobUnknown: () => { throw new Error("unexpected status loss"); },
+              },
+              formatting: { formatDuration: () => "0s" },
+              notifications: { showToast: (message, tone) => messages.push([message, tone]) },
+              pollingModule: {
+                createResultFetcher: () => async () => ({}),
+                createStatusFetcher: () => async () => ({}),
+                pollJob: async () => ({}),
+              },
+              review: { refreshWorkspace: async () => {} },
+              state,
+            });
+            const result = await workflow.checkTrackedJob();
+            let summaryRendered = false;
+            if (kind === "compare") {
+              const compareWorkflow = window.ShotSieveWorkflowCompare.createWorkflowCompare({
+                api: { postJson: async () => ({}) },
+                busy: {},
+                compare: {},
+                formatting: {
+                  escapeHtml: (value) => String(value),
+                  formatDuration: () => "0s",
+                  formatFilesPerSecond: () => "0 files/s",
+                  formatNumber: (value) => String(value),
+                  getScoreColor: () => "",
+                  mergeTimingTotals: () => ({}),
+                  pathLeaf: (value) => String(value),
+                  sortComparisonRows: (rows) => rows,
+                },
+                notifications: { showToast: () => {} },
+                pollingModule: {},
+                state,
+                ui: { currentLibraryRoot: () => null, selectedComparisonModels: () => [], setTab: () => {} },
+                workflowLibrary: {},
+              });
+              compareWorkflow.renderComparisonSummary();
+              summaryRendered = true;
+            }
+            return {
+              urls,
+              messages,
+              recoveryCleared: state.recoveryJob === null,
+              comparison: state.comparison,
+              summaryRendered,
+              result,
+            };
+          }
+          return [await runScenario("score"), await runScenario("compare")];
+        }
+        """,
+    )
+
+    for scenario in results:
+        assert any("/result?job_id=" in url for url in scenario["urls"])
+        assert scenario["recoveryCleared"] is True
+        assert scenario["messages"]
+        assert "Retained model failure" in scenario["messages"][0][0]
+    assert scenario["messages"][0][1] == "error"
+    assert results[1]["comparison"] is None
+    assert results[1]["summaryRendered"] is True

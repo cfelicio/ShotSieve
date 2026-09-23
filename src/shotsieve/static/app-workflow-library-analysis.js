@@ -136,7 +136,7 @@
       const selectedModel = document.getElementById("model-select").value || state.options?.default_scoring_mode || state.options?.learned_models?.[0] || "";
       if (!selectedModel) {
         showToast("No learned IQA model is currently available. Check the runtime setup in Settings.", "error");
-        return;
+        return false;
       }
       const learnedBackend = selectedModel;
       const runtimeTarget = document.getElementById("device-select").value || "auto";
@@ -193,7 +193,7 @@
         const recovery = diagnostic.recovery_action || "Open Settings and choose Prepare selected model before retrying.";
         showToast(`${cause} ${recovery}`, "error");
         await refreshWorkspace();
-        return result;
+        return false;
       }
 
       if (pipeline) {
@@ -215,6 +215,7 @@
       showToast("Scoring completed.");
       await refreshWorkspace();
       syncReviewRoot(root);
+      return true;
     }
 
     async function prepareSelectedModel() {
@@ -291,9 +292,12 @@
         pipeline: { stepIndex: 1, totalSteps: 3 },
       });
       setBusyMessage("Scoring selected folder...");
-      await runScore(root, {
+      const scoreSucceeded = await runScore(root, {
         pipeline: { stepIndex: 2, totalSteps: 3 },
       });
+      if (!scoreSucceeded) {
+        return;
+      }
       const reviewRoot = syncReviewRoot(root) || root;
       resetReviewFiltersForAnalyze(reviewRoot);
       if (workflowExport?.clearActiveSelection) {

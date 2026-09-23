@@ -205,7 +205,7 @@
       let result = null;
       const shouldFetchResult = job.kind === "operation"
         || statusValue === "completed"
-        || job.kind === "preparation";
+        || ["preparation", "score", "compare"].includes(job.kind);
       if (shouldFetchResult) {
         try {
           result = await fetchJson(`${job.resultPath}?job_id=${encodeURIComponent(job.jobId)}`);
@@ -219,8 +219,14 @@
       if (job.kind === "operation" && result) {
         state.latestOperationResult = result;
       }
-      if (job.kind === "compare" && result) {
+      if (job.kind === "compare" && statusValue === "completed" && result) {
         state.comparison = result;
+      }
+      if (statusValue === "failed" && ["score", "compare"].includes(job.kind)) {
+        const diagnostic = result?.diagnostic || result?.error_report || {};
+        const detail = diagnostic.cause || result?.job_error || status?.error || `${job.label || "Analysis"} failed.`;
+        const recovery = diagnostic.recovery_action || "Review the analysis diagnostics and retry when the issue is resolved.";
+        showToast(`${detail} ${recovery}`, "error");
       }
       await refreshWorkspace();
       if (job.kind === "operation") {

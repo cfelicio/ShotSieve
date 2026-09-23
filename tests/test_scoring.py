@@ -581,29 +581,27 @@ def test_score_refreshes_when_source_file_changes(tmp_path: Path) -> None:
         Image.new("RGB", (180, 120), color=(180, 70, 40)).save(sample_path, format="JPEG", quality=95)
         os.utime(sample_path, (initial_stat.st_atime + 5, initial_stat.st_mtime + 5))
 
-        rescan_summary = scan_root(
-            connection,
-            root=photo_dir,
-            recursive=True,
-            extensions=(".jpg",),
-            preview_dir=preview_dir,
-        )
         second_summary = score_files(
             connection,
             learned_backend_name="topiq_nr",
             learned_backend_factory=lambda model_name: FakeLearnedBackend(),
         )
         second_row = connection.execute(
-            "SELECT overall_score, learned_score_normalized, model_version FROM scores"
+            """
+            SELECT scores.overall_score, scores.learned_score_normalized,
+                   scores.model_version, files.modified_time, files.preview_path
+            FROM scores JOIN files ON files.id = scores.file_id
+            """
         ).fetchone()
 
     assert first_summary.files_scored == 1
     assert first_row["overall_score"] == 82.0
-    assert rescan_summary.files_updated == 1
     assert second_summary.files_scored == 1
     assert second_row["overall_score"] == 47.0
     assert second_row["overall_score"] == second_row["learned_score_normalized"]
     assert second_row["model_version"] == first_row["model_version"]
+    assert second_row["modified_time"] == sample_path.stat().st_mtime
+    assert second_row["preview_path"] is None
 
 
 def test_score_removes_stale_score_row_when_rescore_fails(tmp_path: Path) -> None:

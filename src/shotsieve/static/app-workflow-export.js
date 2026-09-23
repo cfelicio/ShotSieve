@@ -40,6 +40,10 @@
         showToast("Pick a file first.", "error");
         return;
       }
+      if (Number(state.detail?.id) !== Number(state.activeId)) {
+        showToast("Wait for the selected photo to finish loading before reviewing it.", "error");
+        return;
+      }
       const updatedDetail = await postJson("/api/review", { file_id: state.activeId, ...payload });
       if (typeof applyReviewUpdate === "function" && applyReviewUpdate(updatedDetail)) {
         await refreshOverview();

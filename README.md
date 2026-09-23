@@ -75,8 +75,8 @@ shotsieve-desktop
 ```
 
 The first command is enough for cataloging and Review. The optional extras add
-learned-IQA scoring and HEIF/RAW loaders. For tests, linting, or release work,
-follow [docs/building.md](docs/building.md).
+learned-IQA scoring and HEIF/RAW loaders. For a tested, pinned source setup
+for learned-IQA, follow [docs/building.md](docs/building.md#tested-source-install-for-learned-iqa).
 
 For a downloaded runtime pack, launch the bundled `ShotSieve-*` executable
 from the archive instead of `shotsieve-desktop`.
@@ -144,8 +144,9 @@ separately from **All libraries (global)**, and the queue is paged at 60 photos
 by default. Filters include score, format, dimensions, megapixels, file size,
 metadata completeness, path, and review state.
 
-The default review server is `127.0.0.1:8765`. If you change `--host` to expose
-it beyond loopback, protect that interface with your own network controls.
+The default review server is `127.0.0.1:8765` and accepts requests only from
+loopback clients with a loopback Host header. `--host` changes the address the
+server binds to; it does not enable remote or LAN access.
 
 ## Documentation
 

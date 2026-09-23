@@ -126,6 +126,7 @@ SCHEMA_MIGRATIONS = {
         "analysis_error": "ALTER TABLE files ADD COLUMN analysis_error TEXT",
         "last_analysis_time": "ALTER TABLE files ADD COLUMN last_analysis_time TEXT",
         "preview_conversion_version": "ALTER TABLE files ADD COLUMN preview_conversion_version TEXT",
+        "move_managed": "ALTER TABLE files ADD COLUMN move_managed INTEGER NOT NULL DEFAULT 0",
     },
     "scores": {
         "learned_confidence": "ALTER TABLE scores ADD COLUMN learned_confidence REAL",

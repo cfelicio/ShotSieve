@@ -295,6 +295,41 @@ def _build_score_plan(
     return plan
 
 
+def _refresh_scoring_source_fingerprints(connection, rows) -> bool:
+    """Refresh selected rows' source stats and invalidate stale previews.
+
+    Re-Score can run without a preceding catalog scan. Refreshing only the
+    score fingerprint would still allow a changed source to be analyzed from
+    its old ready preview, so changed rows also lose their preview pointer.
+    Filesystem errors are left for the ordinary scoring availability path.
+    """
+    changed = False
+    for row in rows:
+        try:
+            source_stat = Path(str(row["path"])).stat()
+        except OSError:
+            continue
+
+        if row["modified_time"] == source_stat.st_mtime and row["size_bytes"] == source_stat.st_size:
+            continue
+
+        connection.execute(
+            """
+            UPDATE files
+            SET modified_time = ?, size_bytes = ?,
+                preview_path = NULL, preview_status = 'missing',
+                preview_conversion_version = NULL,
+                scan_status = 'updated', last_error = NULL,
+                analysis_status = 'pending', analysis_error = NULL,
+                last_analysis_time = NULL
+            WHERE id = ?
+            """,
+            (source_stat.st_mtime, source_stat.st_size, _row_int(row, "id")),
+        )
+        changed = True
+    return changed
+
+
 def _drop_stale_score_row(connection, row) -> None:
     if row["existing_score_id"] is not None:
         delete_score_row(connection, file_id=_row_int(row, "id"))
@@ -585,6 +620,8 @@ def score_files(
     selected_backend = validate_model_name(learned_backend_name or DEFAULT_MODEL_NAME)
 
     rows = fetch_score_rows(connection, raw_root=raw_root, limit=limit, offset=offset)
+    if _refresh_scoring_source_fingerprints(connection, rows):
+        rows = fetch_score_rows(connection, raw_root=raw_root, limit=limit, offset=offset)
     summary.rows_loaded = len(rows)
     if learned_backend_factory is None:
         def factory(model_name: str) -> LearnedIqaBackend:

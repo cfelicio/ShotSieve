@@ -20,6 +20,10 @@ class _FakeFuture:
             raise self._error
         return self._result
 
+    def cancel(self):
+        self.cancelled = True
+        return True
+
 
 class _FakeExecutor:
     def __init__(self, *, max_workers: int | None, future_map: dict[Path, _FakeFuture]) -> None:
@@ -37,6 +41,9 @@ class _FakeExecutor:
         assert preview_dir.name == "previews"
         assert kwargs.get("raw_preview_mode", "auto") in {"fast", "auto", "high-quality"}
         return self._future_map[source_path]
+
+    def shutdown(self, *, wait: bool, cancel_futures: bool) -> None:
+        self.shutdown_args = {"wait": wait, "cancel_futures": cancel_futures}
 
 
 def test_generate_previews_parallel_records_failed_worker_results(monkeypatch, tmp_path: Path) -> None:
@@ -75,10 +82,11 @@ def test_generate_previews_parallel_records_failed_worker_results(monkeypatch, t
         return _FakeExecutor(max_workers=max_workers, future_map=future_map)
 
     def fake_as_completed(futures):
-        assert set(futures) == set(future_map.values())
-        yield future_map[source_paths[2]]
-        yield future_map[source_paths[1]]
-        yield future_map[source_paths[0]]
+        pending = set(futures)
+        for source_path in source_paths[::-1]:
+            future = future_map[source_path]
+            if future in pending:
+                yield future
 
     progress_updates: list[tuple[int, int]] = []
     def capture_progress(completed: int, total: int) -> None:
@@ -103,6 +111,47 @@ def test_generate_previews_parallel_records_failed_worker_results(monkeypatch, t
     assert results[1].error_text == "worker exploded"
     assert results[2].path == str(preview_dir / "third-preview.jpg")
     assert progress_updates == [(1, 3), (2, 3), (3, 3)]
+
+
+def test_generate_previews_parallel_stops_submitting_after_cancellation(monkeypatch, tmp_path: Path) -> None:
+    preview_dir = tmp_path / "previews"
+    source_paths = [tmp_path / f"{index}.jpg" for index in range(5)]
+    futures = {path: _FakeFuture(result=object()) for path in source_paths}
+    submitted: list[Path] = []
+    shutdown_args: list[dict[str, bool]] = []
+
+    class ControlledExecutor:
+        def __init__(self, *, max_workers: int | None = None) -> None:
+            self.max_workers = max_workers
+
+        def submit(self, fn, source_path: Path, _preview_dir: Path, **_kwargs):
+            assert fn is preview_module.generate_preview
+            submitted.append(source_path)
+            return futures[source_path]
+
+        def shutdown(self, *, wait: bool, cancel_futures: bool) -> None:
+            shutdown_args.append({"wait": wait, "cancel_futures": cancel_futures})
+
+    def first_completed(pending):
+        yield next(iter(pending))
+
+    def cancel_on_first_progress(_completed: int, _total: int) -> None:
+        raise InterruptedError("cancel preview generation")
+
+    monkeypatch.setattr("concurrent.futures.ProcessPoolExecutor", ControlledExecutor)
+    monkeypatch.setattr("concurrent.futures.as_completed", first_completed)
+
+    with pytest.raises(InterruptedError, match="cancel preview generation"):
+        preview_module.generate_previews_parallel(
+            source_paths,
+            preview_dir,
+            max_workers=2,
+            progress_callback=cancel_on_first_progress,
+        )
+
+    assert submitted == source_paths[:2]
+    assert futures[source_paths[1]].cancelled is True
+    assert shutdown_args == [{"wait": True, "cancel_futures": True}]
 
 
 def test_generate_preview_captures_nonfatal_decoder_stderr_as_issue_text(monkeypatch, tmp_path: Path) -> None:
@@ -168,6 +217,45 @@ def test_generate_preview_failure_keeps_exception_and_decoder_issue_text(monkeyp
     assert result.error_text == (
         "decoder exploded | broken.jpg: Corrupt JPEG data: premature end of data segment"
     )
+
+
+def test_failed_preview_regeneration_preserves_existing_preview(monkeypatch, tmp_path: Path) -> None:
+    source_path = tmp_path / "sample.jpg"
+    preview_dir = tmp_path / "previews"
+    source_path.write_bytes(b"source")
+    preview_dir.mkdir()
+    preview_path, _ = preview_module.preview_output_paths(source_path, preview_dir)
+    preview_path.write_bytes(b"previously valid preview")
+
+    class PartialWriteImage:
+        size = (120, 80)
+        mode = "RGB"
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def thumbnail(self, *_args, **_kwargs):
+            return None
+
+        def getexif(self):
+            return {}
+
+        def save(self, path, **_kwargs):
+            Path(path).write_bytes(b"partial replacement")
+            raise OSError("encoder failed")
+
+    monkeypatch.setattr(preview_module.threading, "active_count", lambda: 1)
+    monkeypatch.setattr(preview_module.Image, "open", lambda _path: PartialWriteImage())
+    monkeypatch.setattr(preview_module.ImageOps, "exif_transpose", lambda image: image)
+
+    result = preview_module.generate_preview(source_path, preview_dir)
+
+    assert result.status == "failed"
+    assert preview_path.read_bytes() == b"previously valid preview"
+    assert not list(preview_dir.glob(f".{preview_path.stem}.*.tmp"))
 
 
 def test_generate_preview_captures_low_level_decoder_stderr_with_source_file_context(

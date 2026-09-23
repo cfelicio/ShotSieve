@@ -11,6 +11,100 @@ from test_frontend_accessibility import (
 )
 
 
+def test_rapid_photo_selection_keeps_detail_and_review_action_on_latest_id(chromium_page) -> None:
+    page, _ = chromium_page
+    result = page.evaluate(
+        """
+        async () => {
+          const state = {
+            activeId: null,
+            detail: null,
+            queue: [{ id: 1 }, { id: 2 }],
+            selectedIds: new Set(),
+            bulkSelection: null,
+            loadedReviewSelection: null,
+            page: 0,
+            pageSize: 60,
+            totalFiles: 2,
+          };
+          const pending = new Map();
+          const posts = [];
+          const renderedDetails = [];
+          const deferred = (id) => new Promise((resolve) => pending.set(id, resolve));
+          const grid = window.ShotSieveGrid.createGridController({
+            state,
+            ui: {},
+            formatting: {
+              escapeHtml: String,
+              formatNumber: String,
+              getScoreColor: () => "",
+              pathDirectory: String,
+              pathLeaf: String,
+            },
+            reviewModule: {
+              renderDetail: ({ state: current }) => renderedDetails.push(current.detail?.id ?? null),
+              renderQueue: () => {},
+              updateSelectionState: () => {},
+            },
+            notifications: { showToast: () => {} },
+            api: { fetchJson: (url) => deferred(Number(new URL(url, location.href).searchParams.get("id"))) },
+            stateModule: {},
+            appUtils: {},
+            handleError: () => {},
+            openOriginalFile: () => {},
+          });
+          const workflow = window.ShotSieveWorkflowExport.createWorkflowExport({
+            state,
+            api: {
+              fetchJson: async () => ({}),
+              postJson: async (_url, payload) => {
+                posts.push(payload);
+                return { id: payload.file_id };
+              },
+            },
+            busy: {
+              setBusyMessage: () => {},
+              setBusyPhaseProgress: () => {},
+              withBusy: async (_message, task) => task(),
+            },
+            notifications: { showToast: () => {} },
+            review: {
+              applyReviewUpdate: () => true,
+              isAutoAdvanceEnabled: () => false,
+              loadQueue: async () => {},
+              refreshOverview: async () => {},
+              refreshWorkspace: async () => {},
+              reviewDecisions: { keep: { decision_state: "keep" } },
+              selectFile: grid.selectFile,
+              renderPagination: () => {},
+            },
+            ui: { handleError: () => {}, openBrowser: () => {} },
+            workflowLibrary: {},
+          });
+
+          const first = grid.selectFile(1);
+          const second = grid.selectFile(2);
+          pending.get(2)({ id: 2, name: "photo-two.jpg" });
+          await second;
+          pending.get(1)({ id: 1, name: "photo-one.jpg" });
+          await first;
+          await workflow.saveReview({ decision_state: "keep" });
+
+          return {
+            activeId: state.activeId,
+            detailId: state.detail?.id,
+            posts,
+            renderedDetails,
+          };
+        }
+        """,
+    )
+
+    assert result["activeId"] == 2
+    assert result["detailId"] == 2
+    assert result["posts"] == [{"file_id": 2, "decision_state": "keep"}]
+
+
 def test_active_library_scope_separates_totals_and_resets_review_state(scoped_chromium_page) -> None:
     chromium_page, expect, root_a, root_b = scoped_chromium_page
 

@@ -114,9 +114,11 @@ def _resolve_source_path_within_roots(
     path_value: str | Path,
     expected_path_key: str,
     trusted_roots: Sequence[Path],
+    *,
+    allow_managed_move: bool = False,
 ) -> Path:
     resolved_path = Path(path_value).expanduser().resolve()
-    if not trusted_roots:
+    if not trusted_roots and not allow_managed_move:
         raise OSError(
             f"Refusing to delete file outside tracked scan roots: {resolved_path}"
         )
@@ -131,6 +133,9 @@ def _resolve_source_path_within_roots(
         if _is_within_dir(resolved_path, root):
             return resolved_path
 
+    if allow_managed_move:
+        return resolved_path
+
     raise OSError(f"Refusing to delete file outside tracked scan roots: {resolved_path}")
 
 
@@ -143,7 +148,7 @@ def _resolve_ready_preview_path(raw_preview_path: str | None, preview_status: st
 
 def media_path_for_file(connection, *, file_id: int, variant: str) -> Path | None:
     row = connection.execute(
-        "SELECT path, preview_path, preview_status FROM files WHERE id = ?",
+        "SELECT path, preview_path, preview_status, move_managed FROM files WHERE id = ?",
         (file_id,),
     ).fetchone()
     if row is None:
@@ -205,7 +210,7 @@ def prune_missing_cache_entries(connection, *, preview_cache_root: Path | None =
     """Remove cached file entries whose source files no longer exist on disk.
 
     THREAD-SAFETY NOTE: The ThreadPoolExecutor is used ONLY for filesystem
-    existence checks (Path.exists). All database operations must happen on the
+    stat calls. All database operations must happen on the
     calling thread. Do NOT add connection.execute() calls inside the executor
     - SQLite connections are not safe to share across threads.
     """
@@ -216,7 +221,11 @@ def prune_missing_cache_entries(connection, *, preview_cache_root: Path | None =
     executor_cls = _rattr("ThreadPoolExecutor", ThreadPoolExecutor)
 
     def check_exists(row):
-        return row if not Path(row["path"]).exists() else None
+        try:
+            Path(row["path"]).stat()
+        except FileNotFoundError:
+            return row
+        return None
 
     with executor_cls(max_workers=16) as executor:
         while True:
@@ -556,28 +565,10 @@ def clear_cache_scope(
         total_steps = max(1, len(preview_rows) + 1)
 
         emit_progress(0, total_steps)
-
-        for index, row in enumerate(preview_rows, start=1):
-            if cancel_check is not None:
-                cancel_check()
-            delete_managed_preview_file(
-                row["preview_path"],
-                source_path=row["path"],
-                preview_cache_root=preview_cache_root,
-                suppress_errors=True,
-            )
-            emit_progress(index, total_steps)
-
         cleanup_roots = []
         if preview_cache_root is not None:
             cleanup_roots.append(preview_cache_root.expanduser().resolve())
         cleanup_roots.extend(infer_preview_cache_roots(connection))
-
-        for cleanup_root in dict.fromkeys(cleanup_roots):
-            if cancel_check is not None:
-                cancel_check()
-            if preview_cache_root_is_claimed(cleanup_root):
-                clear_preview_cache_dir(cleanup_root, suppress_errors=True)
 
         if cancel_check is not None:
             cancel_check()
@@ -585,7 +576,32 @@ def clear_cache_scope(
         connection.execute("DELETE FROM scores")
         connection.execute("DELETE FROM files")
         connection.execute("DELETE FROM scan_runs")
-        emit_progress(total_steps, total_steps)
+
+        # Retire catalog pointers first. If cancellation or a commit error
+        # happens before this point, every existing preview remains usable.
+        # Once committed, leftover preview files are only orphaned cache data.
+        connection.commit()
+
+        progress_cancelled = False
+        for index, row in enumerate(preview_rows, start=1):
+            delete_managed_preview_file(
+                row["preview_path"],
+                source_path=row["path"],
+                preview_cache_root=preview_cache_root,
+                suppress_errors=True,
+            )
+            if not progress_cancelled:
+                try:
+                    emit_progress(index, total_steps)
+                except InterruptedError:
+                    progress_cancelled = True
+
+        for cleanup_root in dict.fromkeys(cleanup_roots):
+            if preview_cache_root_is_claimed(cleanup_root):
+                clear_preview_cache_dir(cleanup_root, suppress_errors=True)
+
+        if not progress_cancelled:
+            emit_progress(total_steps, total_steps)
         return {"files": file_count, "scores": score_count, "review": review_count, "scan_runs": scan_run_count}
 
     raise ValueError("scope must be one of: scores, review, all")
@@ -603,7 +619,7 @@ def delete_files(
     normalized_ids = normalize_file_ids(file_ids)
     trusted_roots = _trusted_delete_roots(connection) if delete_from_disk else ()
     selected_rows = connection.execute(
-        f"SELECT id, path, path_key, preview_path FROM files WHERE id IN ({','.join('?' for _ in normalized_ids)})",
+        f"SELECT id, path, path_key, preview_path, move_managed FROM files WHERE id IN ({','.join('?' for _ in normalized_ids)})",
         tuple(normalized_ids),
     ).fetchall()
     rows_by_id = {row["id"]: row for row in selected_rows}
@@ -687,6 +703,7 @@ def _delete_row(
                 row["path"],
                 row["path_key"],
                 trusted_roots,
+                allow_managed_move=bool(row["move_managed"]),
             )
         except (OSError, ValueError) as exc:
             return _DeleteRowOutcome(

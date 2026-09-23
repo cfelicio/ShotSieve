@@ -170,3 +170,45 @@ class TestLocalSecurityGuards:
 
     def test_origin_default_https_port_mismatch_is_rejected(self) -> None:
         assert _is_allowed_post_origin("https://localhost", "localhost:8765") is False
+
+    def test_malformed_host_or_origin_ports_are_rejected(self) -> None:
+        from shotsieve.web_security import host_and_port, is_allowed_post_origin
+
+        assert host_and_port("127.0.0.1:abc") == (None, None)
+        assert is_allowed_post_origin("http://127.0.0.1:abc", "127.0.0.1:8765") is False
+        assert is_allowed_post_origin("http://127.0.0.1:8765", "127.0.0.1:abc") is False
+        assert is_allowed_post_origin("ftp://127.0.0.1:8765", "127.0.0.1:8765") is False
+
+    def test_get_rejects_unexpected_host_header(self, test_server):
+        base_url, _, _ = test_server
+        req = Request(f"{base_url}/api/options", headers={"Host": "evil.example"})
+        with pytest.raises(HTTPError) as exc_info:
+            urlopen(req)
+
+        assert exc_info.value.code == HTTPStatus.FORBIDDEN
+
+    def test_post_rejects_unexpected_host_header_without_origin(self, test_server):
+        base_url, _, _ = test_server
+        req = Request(
+            f"{base_url}/api/nonexistent",
+            data=b"{}",
+            headers={"Content-Type": "application/json", "Host": "evil.example"},
+            method="POST",
+        )
+        with pytest.raises(HTTPError) as exc_info:
+            urlopen(req)
+
+        assert exc_info.value.code == HTTPStatus.FORBIDDEN
+
+    def test_post_with_malformed_host_port_returns_forbidden(self, test_server):
+        base_url, _, _ = test_server
+        req = Request(
+            f"{base_url}/api/nonexistent",
+            data=b"{}",
+            headers={"Content-Type": "application/json", "Host": "127.0.0.1:abc"},
+            method="POST",
+        )
+        with pytest.raises(HTTPError) as exc_info:
+            urlopen(req)
+
+        assert exc_info.value.code == HTTPStatus.FORBIDDEN
