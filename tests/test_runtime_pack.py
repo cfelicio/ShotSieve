@@ -6,10 +6,8 @@ from pathlib import Path
 import pytest
 
 from shotsieve.bootstrap_sidecar import (
-    ROCM10_GFX1103_TORCH_REQUIREMENTS,
-    ROCM10_PYTHON_INDEX_URL,
-    ROCM_LINUX_PACKAGE_URLS,
-    ROCM_WINDOWS_PACKAGE_URLS,
+    ROCM_PYTHON_INDEX_URL,
+    ROCM_TORCH_REQUIREMENTS,
     SIDECAR_STATE_VERSION,
     sidecar_site_packages_dir,
     torch_install_plan,
@@ -30,38 +28,26 @@ def test_every_runtime_pack_has_a_torchless_target_plan(target) -> None:
         assert "https://download.pytorch.org/whl/xpu" in plan.index_args
         assert any("+xpu" in package for package in plan.packages)
     elif target.torchVariant == "rocm":
-        assert all("repo.radeon.com" in package for package in plan.packages)
-        assert "https://pypi.org/simple" not in plan.index_args
-    elif target.torchVariant == "rocm10-gfx1103":
-        assert plan.packages == ROCM10_GFX1103_TORCH_REQUIREMENTS
-        assert ROCM10_PYTHON_INDEX_URL in plan.index_args
+        assert plan.packages == ROCM_TORCH_REQUIREMENTS
+        assert ROCM_PYTHON_INDEX_URL in plan.index_args
         assert "https://pypi.org/simple" in plan.index_args
     elif target.platform == "macos":
         assert plan.index_args == ()
 
 
-def test_rocm_plans_use_the_exact_platform_wheels() -> None:
-    assert torch_install_plan(target_id="linux-amd-rocm").packages == ROCM_LINUX_PACKAGE_URLS
-    assert torch_install_plan(target_id="windows-amd-rocm").packages == ROCM_WINDOWS_PACKAGE_URLS
-
-
 @pytest.mark.parametrize("platform", ("windows", "linux"))
-def test_rocm10_gfx1103_plan_is_pinned_to_the_stable_780m_stack(platform: str) -> None:
-    plan = torch_install_plan(target_id=f"{platform}-amd-rocm10-gfx1103")
+def test_amd_plan_uses_the_same_stable_rocm10_stack(platform: str) -> None:
+    plan = torch_install_plan(target_id=f"{platform}-amd-rocm")
 
     assert plan.runtime == "rocm"
-    assert plan.packages == (
-        "torch[device-gfx1103]==2.13.0+rocm10.0.0",
-        "torchvision[device-gfx1103]==0.28.0+rocm10.0.0",
-        "rocm==10.0.0",
-    )
-    assert "https://stable.repo.amd.com/rocm/whl-next/" in plan.index_args
+    assert plan.packages == ROCM_TORCH_REQUIREMENTS
+    assert ROCM_PYTHON_INDEX_URL in plan.index_args
     assert "https://pypi.org/simple" in plan.index_args
 
 
-def test_rocm10_gfx1103_is_not_offered_for_unsupported_platform() -> None:
-    with pytest.raises(ValueError, match="ROCm 10 gfx1103 is not supported"):
-        torch_install_plan(target_id="macos-amd-rocm10-gfx1103")
+def test_rocm_is_not_offered_for_unsupported_platform() -> None:
+    with pytest.raises(ValueError, match="ROCm is not supported"):
+        torch_install_plan(target_id="macos-amd-rocm")
 
 
 def test_sidecar_uses_only_the_current_target_location(tmp_path: Path) -> None:
@@ -123,11 +109,6 @@ def test_previous_sidecar_schema_is_invalidated_after_dependency_fix(tmp_path: P
         ("ShotSieve-NVIDIA-CUDA.exe", "Windows", "windows-nvidia-cuda"),
         ("ShotSieve-Intel-XPU", "Linux", "linux-intel-xpu"),
         ("ShotSieve-AMD-ROCm", "Linux", "linux-amd-rocm"),
-        (
-            "ShotSieve-AMD-ROCm10-GFX1103",
-            "Linux",
-            "linux-amd-rocm10-gfx1103",
-        ),
         ("ShotSieve-Apple-MPS", "Darwin", "macos-apple-mps"),
     ),
 )

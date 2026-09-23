@@ -1,15 +1,14 @@
 from __future__ import annotations
 
 import re
+import tomllib
 from pathlib import Path
 
 import pytest
 
 from shotsieve.dependency_constraints import (
     COMMON_MODEL_REQUIREMENTS,
-    ROCM10_GFX1103_TORCH_REQUIREMENTS,
     ROCM_TORCH_REQUIREMENTS,
-    ROCM_WINDOWS_TORCH_REQUIREMENTS,
     TORCH_REQUIREMENTS,
     XPU_TORCH_REQUIREMENTS,
     model_requirements_for_runtime,
@@ -38,6 +37,19 @@ def _pins_from_file(path: Path) -> dict[str, list[str]]:
     return _pins_from_lines(path.read_text(encoding="utf-8").splitlines())
 
 
+def _requirements_from_project(entries: list[str]) -> dict[str, str]:
+    requirements: dict[str, str] = {}
+    for entry in entries:
+        match = re.fullmatch(
+            r"([A-Za-z0-9_.-]+)(?:==|>=)([A-Za-z0-9.+_-]+)(?:,<([A-Za-z0-9.+_-]+))?",
+            entry,
+        )
+        assert match is not None, f"unsupported pyproject requirement: {entry}"
+        package = re.sub(r"[-_.]+", "-", match.group(1)).casefold()
+        requirements[package] = match.group(2)
+    return requirements
+
+
 def _assert_pins_match(path: Path, requirements: tuple[str, ...], *, exact: bool) -> None:
     expected = _pins_from_lines(list(requirements))
     actual = _pins_from_file(path)
@@ -60,13 +72,51 @@ def test_release_model_constraints_match_runtime_source_of_truth() -> None:
     )
 
 
+def test_pyproject_dependency_floors_match_qualified_versions() -> None:
+    metadata = tomllib.loads((PROJECT_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    project = metadata["project"]
+    extras = project["optional-dependencies"]
+
+    assert _requirements_from_project(metadata["build-system"]["requires"]) == {
+        "setuptools": "84.0.0",
+        "wheel": "0.48.0",
+    }
+
+    assert _requirements_from_project(project["dependencies"]) == {
+        "numpy": "2.5.3",
+        "pillow": "12.3.0",
+    }
+    assert _requirements_from_project(extras["format-loaders"]) == {
+        "pillow-heif": "1.8.0",
+        "rawpy": "0.27.1",
+    }
+    assert _requirements_from_project(extras["test"]) == {
+        "pytest": "9.1.1",
+        "playwright": "1.63.0",
+        "ruff": "0.16.8",
+    }
+    assert _requirements_from_project(extras["lint"]) == {"ruff": "0.16.8"}
+
+    expected_models = _pins_from_lines(list(COMMON_MODEL_REQUIREMENTS))
+    assert _requirements_from_project(extras["learned-iqa"]) == {
+        package: versions[0] for package, versions in expected_models.items()
+    }
+    assert _requirements_from_project(extras["windows-build"]) == {
+        "pip": "26.2.1",
+        "setuptools": "81.0.0",
+        "wheel": "0.48.0",
+        "packaging": "26.3",
+        "pyinstaller": "6.22.3",
+    }
+    assert "setuptools>=81.0.0,<82" in extras["learned-iqa"]
+    assert "setuptools>=81.0.0,<82" in extras["windows-build"]
+
+
 @pytest.mark.parametrize(
     ("filename", "requirements"),
     (
         ("source-constraints-xpu.txt", XPU_TORCH_REQUIREMENTS),
         ("source-constraints-rocm.txt", ROCM_TORCH_REQUIREMENTS),
-        ("source-constraints-rocm-windows.txt", ROCM_WINDOWS_TORCH_REQUIREMENTS),
-        ("source-constraints-rocm10-gfx1103.txt", ROCM10_GFX1103_TORCH_REQUIREMENTS),
     ),
 )
 def test_accelerator_constraint_files_match_runtime_source_of_truth(
@@ -77,79 +127,50 @@ def test_accelerator_constraint_files_match_runtime_source_of_truth(
 
 
 @pytest.mark.parametrize(
-    ("runtime", "platform", "expected"),
+    ("runtime", "expected"),
     (
-        ("cpu", "linux", TORCH_REQUIREMENTS),
-        ("cuda", "windows", TORCH_REQUIREMENTS),
-        ("mps", "macos", TORCH_REQUIREMENTS),
-        ("xpu", "linux", XPU_TORCH_REQUIREMENTS),
-        ("rocm", "linux", ROCM_TORCH_REQUIREMENTS),
-        ("rocm", "windows", ROCM_WINDOWS_TORCH_REQUIREMENTS),
+        ("cpu", TORCH_REQUIREMENTS),
+        ("cuda", TORCH_REQUIREMENTS),
+        ("mps", TORCH_REQUIREMENTS),
+        ("xpu", XPU_TORCH_REQUIREMENTS),
+        ("rocm", ROCM_TORCH_REQUIREMENTS),
     ),
 )
 def test_runtime_dependency_plan_uses_declared_accelerator_pins(
     runtime: str,
-    platform: str,
     expected: tuple[str, ...],
 ) -> None:
-    actual = model_requirements_for_runtime(runtime, platform_name=platform)
+    actual = model_requirements_for_runtime(runtime)
     assert actual[: len(COMMON_MODEL_REQUIREMENTS)] == COMMON_MODEL_REQUIREMENTS
     assert actual[len(COMMON_MODEL_REQUIREMENTS) :] == expected
 
 
-def test_rocm10_runtime_targets_select_the_candidate_constraint_file() -> None:
-    candidates = [
+def test_amd_targets_use_the_single_rocm10_stack_on_both_platforms() -> None:
+    amd_targets = [
         target
         for target in runtime_pack_release_targets()
-        if target.torchVariant == "rocm10-gfx1103"
+        if target.torchVariant == "rocm"
     ]
-    assert {target.id for target in candidates} == {
-        "windows-amd-rocm10-gfx1103",
-        "linux-amd-rocm10-gfx1103",
+    assert {target.id for target in amd_targets} == {
+        "windows-amd-rocm",
+        "linux-amd-rocm",
     }
-    assert {
-        target.constraintsFile for target in candidates
-    } == {"scripts/source-constraints-rocm10-gfx1103.txt"}
+    assert {target.pythonVersion for target in amd_targets} == {"3.14"}
+    assert {target.constraintsFile for target in amd_targets} == {
+        "scripts/source-constraints-rocm.txt"
+    }
+    assert all(target.buildProfile == "runtime-pack" for target in amd_targets)
+    assert all(
+        model_requirements_for_runtime("rocm")[-3:] == ROCM_TORCH_REQUIREMENTS
+        for target in amd_targets
+    )
 
 
-def test_hugging_face_upgrade_profiles_are_isolated_and_synced_to_current_pins() -> None:
-    production = _pins_from_lines(list(COMMON_MODEL_REQUIREMENTS))
-    hub_only = {
-        "huggingface-hub": ["1.32.0"],
-        "transformers": production["transformers"],
-    }
-    transformers_only = {
-        "huggingface-hub": production["huggingface-hub"],
-        "transformers": ["5.17.0"],
-    }
-    combined = {
-        "huggingface-hub": ["1.32.0"],
-        "transformers": ["5.17.0"],
-    }
-
-    for track, expected in (
-        ("hub", hub_only),
-        ("transformers", transformers_only),
-        ("combined", combined),
-    ):
-        assert _pins_from_file(
-            CONSTRAINT_DIR / f"model-upgrade-{track}-constraints.txt"
-        ) == expected
-
+def test_qualification_workflow_uses_current_pins_for_online_and_offline_models() -> None:
     workflow = (
-        PROJECT_ROOT / ".github" / "workflows" / "dependency-upgrade-qualification.yml"
+        PROJECT_ROOT / ".github" / "workflows" / "model-smoke.yml"
     ).read_text(encoding="utf-8")
-    assert "workflow_dispatch:" in workflow
-    assert "model-upgrade-${{ matrix.upgrade_track }}-constraints.txt" in workflow
-    assert "from transformers import AutoModelForImageTextToText" in workflow
-    for track in ("hub", "transformers", "combined"):
-        assert f"- {track}" in workflow
-    for model in ("topiq_nr", "clipiqa", "qrealign-mini"):
-        assert f"- {model}" in workflow
+    assert '"3.14"' in workflow
     assert "--offline" in workflow
-    assert "pip list --format=json" in workflow
-    assert "dependency-inventory" in workflow
-    assert "runs-on: windows-latest" in workflow
-    assert "HF_HUB_DISABLE_SHARED_BLOBS" in (
-        PROJECT_ROOT / "src" / "shotsieve" / "learned_iqa_runtime.py"
-    ).read_text(encoding="utf-8")
+    for model in ("topiq_nr", "clipiqa", "qrealign-mini"):
+        assert model in workflow

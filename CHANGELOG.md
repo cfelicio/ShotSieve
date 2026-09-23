@@ -6,6 +6,20 @@ All notable changes to this project will be documented in this file.
 
 ### Changed
 
+- Set the source minimum to Python 3.13 and use Python 3.14 for portable
+  release targets and primary dependency/model qualification.
+- Promoted AMD's stable ROCm 10.0.0 / PyTorch 2.13.0 / TorchVision 0.28.0
+  packages to the sole Windows/Linux AMD runtime and removed the duplicate
+  targets and ROCm 7 implementation.
+- Advanced the stable core, format-loader, test, build, and learned-IQA
+  dependency floors and moved Hugging Face Hub and Transformers to their latest
+  stable releases.
+- Updated package license metadata to the current SPDX form for the latest
+  setuptools build backend.
+- Pinned the learned-model runtime to setuptools 81.x because setuptools
+  82.0.0 removed `pkg_resources`, which OpenAI CLIP 1.0.1 imports at runtime;
+  CLIPIQA failed under setuptools 84 and passed under 81.0.0 in model smoke
+  checks. The isolated package build backend uses stable setuptools 84.
 - Removed version-compatibility aliases and facades for retired release targets,
   sidecar locations and markers, preview names, learned-model names, and runtime
   helper imports. Fresh downloads now use only the current direct paths.
@@ -15,19 +29,15 @@ All notable changes to this project will be documented in this file.
 - Removed legacy `inspect.signature` forwarding for `max_decode_pixels` in
   scanner, preview, scoring, and learned-IQA loading. Current internal
   signatures now receive the decode budget directly.
-- Added separate Windows/Linux ROCm 10.0 `gfx1103` candidate targets using the
-  stable AMD index and the published PyTorch 2.13 / TorchVision 0.28 package
-  pair. The existing ROCm 7.2.1 targets remain unchanged.
 - Added a `0.5.x` preview-build workflow that runs tests and builds the portable
   target matrix into seven-day Actions artifacts without publishing a GitHub
   Release.
 
 ### Fixed
 
-- Fixed frozen Windows ROCm dependency resolution by assembling AMD's
-  SHA-256-verified pure-Python `rocm` source into a local wheel. Pip can now
-  resolve Torch's `rocm[libraries]` requirement together with AMD's pinned SDK
-  wheels without launching the frozen executable as a PEP 517 build process.
+- Bundled AMD's ROCm selector wheel with the AMD runtime packs so the frozen
+  sidecar installer resolves stable ROCm 10 packages without a source-build
+  subprocess.
 - Corrected ROCm device detection to accept AMD `gfx` architectures through
   PyTorch's HIP-backed CUDA API, and use PyTorch's device memory properties for
   ROCm VRAM sizing.
@@ -66,20 +76,13 @@ All notable changes to this project will be documented in this file.
 
 - Renamed the README release heading to cover the 0.4 series and corrected the
   malformed AMD ROCm Windows prerequisite bullet.
-- Clarified that ShotSieve's ROCm 7.2.1 pin does not cover the Radeon 780M,
-  while AMD's newer ROCm 10.0 matrix lists a separate `gfx1103` path.
-- Added a coordinated dependency-freshness review: current CUDA/XPU/MPS Torch
-  pins, the ROCm 10.0/TheRock migration candidate, known newer model-library
-  releases, and a staged validation plan.
 - Updated `audit.md` with dispositions and verification for all 16 findings,
   documented remaining evidence limits, clarified the local-only `--host`
   contract, aligned the learned-IQA source install with tested constraints, and
   corrected the runtime-pack count.
-- Added a manual dependency-upgrade qualification workflow for isolated Hub
-  1.32.0, Transformers 5.17.0, and combined profiles while retaining the
-  production pins, plus regression tests for runtime constraint-file pin drift.
-- Documented the ROCm 10 `gfx1103` candidate install, its current AMD OS/driver
-  boundary, and the remaining physical-GPU validation checklist.
+- Documented AMD's stable ROCm 10.0 `gfx1103` packages for both runtime packs,
+  updated Python 3.14 installation and native-model checks, and aligned runtime
+  constraint drift tests with the current release pins.
 
 ## [0.4.10] - 2026-09-18
 

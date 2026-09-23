@@ -6,7 +6,8 @@ ShotSieve from source. For the user-facing overview, start with the
 
 ## Python and source install
 
-The package requires Python 3.11 or newer. A basic editable install is:
+The package requires Python 3.13 or newer. Python 3.14 is the preferred
+development and release interpreter. A basic editable install is:
 
 ```bash
 python -m pip install -e .
@@ -26,7 +27,8 @@ Keep accelerator environments separate. Intel XPU is a packaged Windows/Linux tr
 as well as a source-install track; it uses
 `scripts/source-constraints-xpu.txt` and the [Intel XPU guide](intel-xpu.md).
 AMD ROCm is a packaged Windows/Linux track as well as a source-install track;
-it uses the platform-specific source constraints and the [AMD ROCm guide](amd-rocm.md).
+both platforms use the stable ROCm 10.0 package set in
+`scripts/source-constraints-rocm.txt` and the [AMD ROCm guide](amd-rocm.md).
 Do not mix those wheels with CPU, CUDA, MPS, or another vendor's Torch
 installation.
 
@@ -65,8 +67,7 @@ certification of every device from a vendor.
 | CPU | Broadest fallback, subject to the platform, Python version, RAM/disk, and selected model. |
 | NVIDIA CUDA | PyTorch 2.14.0 from the cu130 index. The active GPU must be covered by the wheel's compiled kernels, and the driver and model VRAM must also be suitable. |
 | Intel XPU | PyTorch 2.14.0 + XPU on the Intel GPU/OS/driver combinations listed by the pinned PyTorch guide. |
-| AMD ROCm | AMD ROCm 7.2.1 wheels on the exact product/OS/driver/Python combinations in AMD's matrix. Linux is the broader path; Windows is narrower. |
-| AMD ROCm 10 `gfx1103` candidate | Stable ROCm 10.0.0 / PyTorch 2.13.0 / TorchVision 0.28.0 on Python 3.12, scoped to the Radeon 780M architecture. Windows/Linux packs are wired, but hardware validation is still outstanding. |
+| AMD ROCm | AMD's stable ROCm 10.0.0 / PyTorch 2.13.0 / TorchVision 0.28.0 packages on Windows and Linux; the current target selects `gfx1103` kernels and uses Python 3.14. Check AMD's live OS/driver matrix for the exact host. |
 | Apple MPS | Apple Silicon with an MPS-capable PyTorch build and supported macOS. |
 
 Auto mode may fall back to CPU when an accelerator is unavailable. An explicit
@@ -103,13 +104,10 @@ use the platform app-data directory.
 
 ### Runtime packs and sidecars
 
-The current release matrix defines ten established runtime-pack targets and
-two ROCm 10 `gfx1103` candidates:
+The current release matrix defines ten runtime-pack targets:
 
-- `windows-cpu`, `windows-nvidia-cuda`, `windows-intel-xpu`,
-  `windows-amd-rocm`, `windows-amd-rocm10-gfx1103`
-- `linux-cpu`, `linux-nvidia-cuda`, `linux-intel-xpu`, `linux-amd-rocm`,
-  `linux-amd-rocm10-gfx1103`
+- `windows-cpu`, `windows-nvidia-cuda`, `windows-intel-xpu`, `windows-amd-rocm`
+- `linux-cpu`, `linux-nvidia-cuda`, `linux-intel-xpu`, `linux-amd-rocm`
 - `macos-cpu`, `macos-apple-mps`
 
 The authoritative target metadata is in
@@ -137,18 +135,18 @@ Useful examples:
 ./scripts/build_windows_releases.ps1 -Mode runtime -TargetIds windows-nvidia-cuda
 
 # Select a Python interpreter matching the target's declared version.
-./scripts/build_windows_releases.ps1 -PythonExe C:\Python313\python.exe `
+./scripts/build_windows_releases.ps1 -PythonExe C:\Python314\python.exe `
   -Mode runtime -TargetIds windows-nvidia-cuda
 ```
 
 The Windows outputs use the `ShotSieve-windows-<vendor-runtime>` naming scheme.
-The release and preview workflows build the full twelve-target matrix. Runtime
+The release and preview workflows build all ten targets. Runtime
 pack archives are torchless: the build environment installs Torch so
 PyInstaller can analyze imports, but the published archive contains neither
 Torch nor model weights.
 
 Pushes to `0.5.x` run the `preview-build` workflow. It runs the cross-platform
-tests, builds all twelve portable targets, smoke-tests each bundle, and uploads
+tests, builds all ten portable targets, smoke-tests each bundle, and uploads
 the archives as Actions artifacts for seven days. It does not create or update a
 GitHub Release; do not use the `ci-release` workflow for branch previews because
 its manual path publishes a release. Actions artifacts are separate from the
@@ -179,11 +177,9 @@ Runtime sidecar selections are target-specific:
 - CPU uses the pinned PyTorch CPU index.
 - NVIDIA CUDA uses the pinned cu130 index.
 - Intel XPU uses the pinned official XPU index.
-- AMD Windows/Linux targets use the exact AMD ROCm 7.2.1 package URLs and
-  constraints.
-- The `*-amd-rocm10-gfx1103` candidate targets use the stable AMD index,
-  pinned ROCm 10 / PyTorch package extras, and a locally built selector wheel
-  bundled for frozen first-run installation.
+- AMD Windows/Linux targets use AMD's stable ROCm 10.0 index, the pinned
+  PyTorch package pair with `device-gfx1103`, and a selector wheel bundled for
+  frozen first-run installation.
 - macOS CPU/MPS uses the supported default PyTorch packages.
 
 The learned-model catalog is `topiq_nr`, `clipiqa`, and `qrealign-mini`. The
@@ -239,25 +235,15 @@ For a quick manual visual pass, use the [visual QA checklist](accessibility-chec
 That checklist is intentionally about visual usability, not broad accessibility
 conformance.
 
-Pull requests and direct pushes to `main` run the offline suite. CI also runs a
-Python 3.14 core suite without browser or accelerator claims and smoke-tests an
-installed wheel outside the checkout. CI treats missing Chromium or a failed
-browser launch as an error; local runs may skip browser-marked tests when the
-browser is unavailable.
+CI runs the Python 3.13 minimum across the supported operating systems and a
+full Python 3.14 suite on Linux. It also smoke-tests an installed wheel under
+Python 3.14. CI treats missing Chromium or a failed browser launch as an error;
+local runs may skip browser-marked tests when the browser is unavailable.
 
 The manual/weekly model-smoke workflow prepares TOPIQ, CLIPIQA, and Q-ReAlign
-Mini in fresh caches, repeats the checks offline, records resolved dependency
-versions, and uploads sanitized JSON reports. It does not upload photos, model
-weights, or caches.
-
-The manual `dependency-upgrade-qualification` workflow tests Hub-only,
-Transformers-only, and combined candidate pins against all three models
-without changing the release constraints. It checks the Q-ReAlign lazy import,
-runs online/offline smokes, and uploads reports for comparison with the
-current-pin workflow. It also uploads baseline/candidate resolved package
-inventories. A Windows CPU lane repeats Q-ReAlign to check the Hub cache's
-Windows symlink policy. It is a qualification workflow, not a release or GPU
-test.
+Mini with the current stable pins in fresh caches, repeats the checks offline,
+records resolved dependency versions, and uploads sanitized JSON reports. It
+does not upload photos, model weights, or caches.
 
 ## Performance measurement
 
@@ -282,7 +268,7 @@ Review and commit those changes. Then create and push the annotated tag:
 ```
 
 The tag helper does **not** edit version files. GitHub Actions publishes the Python
-distributions, twelve runtime packs, checksummed bootstrap manifest, and split
+distributions, ten runtime packs, checksummed bootstrap manifest, and split
 archive parts when required. Use `-DryRun` on the tag helper to inspect its
 checks before making the tag.
 

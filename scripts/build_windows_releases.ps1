@@ -238,33 +238,19 @@ function Install-TorchVariant {
             break
         }
         "rocm" {
-            Write-Host "Installing the AMD ROCm 7.2.1 Torch runtime for the Windows release target..."
-            $rocmPackages = @(
-                "https://repo.radeon.com/rocm/windows/rocm-rel-7.2.1/rocm_sdk_core-7.2.1-py3-none-win_amd64.whl",
-                "https://repo.radeon.com/rocm/windows/rocm-rel-7.2.1/rocm_sdk_devel-7.2.1-py3-none-win_amd64.whl",
-                "https://repo.radeon.com/rocm/windows/rocm-rel-7.2.1/rocm_sdk_libraries_custom-7.2.1-py3-none-win_amd64.whl",
-                "https://repo.radeon.com/rocm/windows/rocm-rel-7.2.1/rocm-7.2.1.tar.gz",
-                "https://repo.radeon.com/rocm/windows/rocm-rel-7.2.1/torch-2.9.1%2Brocm7.2.1-cp312-cp312-win_amd64.whl",
-                "https://repo.radeon.com/rocm/windows/rocm-rel-7.2.1/torchaudio-2.9.1%2Brocm7.2.1-cp312-cp312-win_amd64.whl",
-                "https://repo.radeon.com/rocm/windows/rocm-rel-7.2.1/torchvision-0.24.1%2Brocm7.2.1-cp312-cp312-win_amd64.whl"
-            )
-            & $PythonCommand -m pip install --upgrade --force-reinstall --no-cache-dir @rocmPackages --trusted-host repo.radeon.com @constraintArgs
-            break
-        }
-        "rocm10-gfx1103" {
-            Write-Host "Preparing the stable AMD ROCm 10.0 gfx1103 candidate..."
+            Write-Host "Preparing the stable AMD ROCm 10.0 Torch runtime..."
             $selectorWheelDirectory = Join-Path (Join-Path $BuildRoot $TargetId) "rocm-selector-wheel"
             New-Item -ItemType Directory -Force -Path $selectorWheelDirectory | Out-Null
             & $PythonCommand -m pip wheel --no-deps --wheel-dir $selectorWheelDirectory "rocm==10.0.0" --index-url https://stable.repo.amd.com/rocm/whl-next/ --extra-index-url https://pypi.org/simple
             if ($LASTEXITCODE -ne 0) {
                 throw "Failed to build the ROCm 10 selector wheel for target '$TargetId'."
             }
-            $rocm10Packages = @(
+            $rocmPackages = @(
                 "rocm==10.0.0",
                 "torch[device-gfx1103]==2.13.0+rocm10.0.0",
                 "torchvision[device-gfx1103]==0.28.0+rocm10.0.0"
             )
-            & $PythonCommand -m pip install --upgrade --force-reinstall --no-cache-dir @rocm10Packages --index-url https://stable.repo.amd.com/rocm/whl-next/ --extra-index-url https://pypi.org/simple --find-links $selectorWheelDirectory --only-binary=rocm @constraintArgs
+            & $PythonCommand -m pip install --upgrade --force-reinstall --no-cache-dir @rocmPackages --index-url https://stable.repo.amd.com/rocm/whl-next/ --extra-index-url https://pypi.org/simple --find-links $selectorWheelDirectory --only-binary=rocm @constraintArgs
             break
         }
         default {

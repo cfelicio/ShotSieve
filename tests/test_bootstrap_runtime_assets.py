@@ -1,11 +1,9 @@
 from __future__ import annotations
 
 from email.message import Message
-import csv
 import hashlib
 import io
 import json
-import subprocess
 import sys
 import types
 from pathlib import Path
@@ -476,14 +474,14 @@ def test_embedded_install_learned_iqa_sidecar_does_not_replace_loaded_torch(
     )
 
     assert installed is True
-    requirements = {"timm==1.0.29", "openai-clip==1.0.1", "accelerate==1.15.0", "facexlib==0.3.0"}
+    requirements = {"timm==1.0.30", "openai-clip==1.0.1", "accelerate==1.15.0", "facexlib==0.3.0"}
     args_by_requirement = {
         requirement: args
         for args in captured_args
         for requirement in requirements
         if requirement in args
     }
-    for requirement in ("timm==1.0.29", "openai-clip==1.0.1", "accelerate==1.15.0", "facexlib==0.3.0"):
+    for requirement in ("timm==1.0.30", "openai-clip==1.0.1", "accelerate==1.15.0", "facexlib==0.3.0"):
         assert "--no-deps" in args_by_requirement[requirement]
     assert "--no-build-isolation" in args_by_requirement["openai-clip==1.0.1"]
 
@@ -529,195 +527,7 @@ def test_openai_clip_source_archive_installs_pure_python_package(
     )
 
 
-@pytest.fixture
-def rocm_source_archive(
-    monkeypatch: pytest.MonkeyPatch,
-) -> dict[str, bytes]:
-    archive_buffer = io.BytesIO()
-    archive_files = {
-        "src/rocm_sdk/__init__.py": b"__version__ = '7.2.1'\n",
-        "src/rocm_sdk/_dist_info.py": b"__version__ = '7.2.1'\n",
-        "src/rocm.egg-info/PKG-INFO": (
-            b"Metadata-Version: 2.4\nName: rocm\nVersion: 7.2.1\n"
-            b"Requires-Dist: rocm==7.2.1\nRequires-Dist: rocm-sdk-core==7.2.1\n"
-            b"Provides-Extra: libraries\n"
-            b"Requires-Dist: rocm-sdk-libraries-custom==7.2.1; extra == 'libraries'\n"
-            b"Dynamic: Requires-Dist\n"
-        ),
-        "src/rocm.egg-info/entry_points.txt": b"[console_scripts]\nrocm-sdk = rocm_sdk.__main__:main\n",
-        "src/rocm.egg-info/top_level.txt": b"rocm_sdk\n",
-    }
-    with tarfile.open(fileobj=archive_buffer, mode="w:gz") as archive:
-        for relative_name, content in archive_files.items():
-            member = tarfile.TarInfo(f"rocm-7.2.1/{relative_name}")
-            member.size = len(content)
-            archive.addfile(member, io.BytesIO(content))
-    archive_bytes = archive_buffer.getvalue()
-
-    class _Response:
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *_args):
-            return False
-
-        def read(self, _limit):
-            return archive_bytes
-
-    monkeypatch.setattr(
-        sidecar_module,
-        "_ROCM_WINDOWS_SOURCE_SHA256",
-        hashlib.sha256(archive_bytes).hexdigest(),
-    )
-    monkeypatch.setattr(
-        sidecar_module.urllib.request, "urlopen", lambda *_args, **_kwargs: _Response()
-    )
-    return archive_files
-
-
-def test_rocm_windows_source_archive_installs_verified_pure_python_package(
-    tmp_path: Path,
-    rocm_source_archive: dict[str, bytes],
-) -> None:
-    sidecar_module._install_rocm_windows_source(tmp_path)
-
-    assert (tmp_path / "rocm_sdk" / "__init__.py").read_bytes() == rocm_source_archive[
-        "src/rocm_sdk/__init__.py"
-    ]
-    dist_info = tmp_path / "rocm-7.2.1.dist-info"
-    metadata_text = (dist_info / "METADATA").read_text(encoding="utf-8")
-    assert metadata_text.startswith("Metadata-Version: 2.4\nName: rocm\nVersion: 7.2.1\n")
-    assert "Dynamic:" not in metadata_text
-    assert (dist_info / "WHEEL").is_file()
-    assert (dist_info / "RECORD").is_file()
-    assert "rocm-7.2.1.dist-info/METADATA,sha256=" in (dist_info / "RECORD").read_text(
-        encoding="utf-8"
-    )
-    with (dist_info / "RECORD").open(encoding="utf-8", newline="") as record_file:
-        record_names = [row[0] for row in csv.reader(record_file)]
-    assert len(record_names) == len(set(record_names))
-    assert set(record_names) == {
-        path.relative_to(tmp_path).as_posix() for path in tmp_path.rglob("*") if path.is_file()
-    }
-
-
-def test_rocm_source_checksum_failure_does_not_publish_wheel(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, rocm_source_archive,
-) -> None:
-    monkeypatch.setattr(sidecar_module, "_ROCM_WINDOWS_SOURCE_SHA256", "0" * 64)
-    with pytest.raises(RuntimeError, match="SHA-256"):
-        sidecar_module._build_rocm_windows_source_wheel(tmp_path)
-    assert list(tmp_path.iterdir()) == []
-
-
-def test_rocm_local_wheel_satisfies_torch_dependency_and_sdk_extras(
-    tmp_path: Path, rocm_source_archive,
-) -> None:
-    rocm_wheel = sidecar_module._build_rocm_windows_source_wheel(tmp_path)
-    with zipfile.ZipFile(rocm_wheel) as wheel:
-        assert wheel.read("rocm_sdk/__init__.py") == rocm_source_archive["src/rocm_sdk/__init__.py"]
-        assert "Dynamic:" not in wheel.read("rocm-7.2.1.dist-info/METADATA").decode()
-
-    def stub_wheel(name: str, version: str, requirements: str = "") -> Path:
-        wheel_path = tmp_path / f"{name}-{version}-py3-none-any.whl"
-        dist_info = f"{name}-{version}.dist-info"
-        with zipfile.ZipFile(wheel_path, "w") as wheel:
-            wheel.writestr(
-                f"{dist_info}/METADATA",
-                f"Metadata-Version: 2.1\nName: {name}\nVersion: {version}\n{requirements}",
-            )
-            wheel.writestr(f"{dist_info}/WHEEL", "Wheel-Version: 1.0\nRoot-Is-Purelib: true\nTag: py3-none-any\n")
-            wheel.writestr(f"{dist_info}/RECORD", "")
-        return wheel_path
-
-    # Mirrors the real AMD Torch requirement, including rocm's self-reference.
-    # --no-index proves resolution needs neither PyPI nor a source build.
-    wheels = [
-        rocm_wheel,
-        stub_wheel("torch", "2.9.1+rocm7.2.1", "Requires-Dist: rocm[libraries]==7.2.1\n"),
-        stub_wheel("rocm_sdk_core", "7.2.1"),
-        stub_wheel("rocm_sdk_libraries_custom", "7.2.1"),
-    ]
-    result = subprocess.run(
-        [sys.executable, "-m", "pip", "--isolated", "install", "--dry-run",
-         "--ignore-installed", "--no-index", "--no-cache-dir", "--disable-pip-version-check",
-         "--only-binary=:all:", "--target", str(tmp_path / "target"), *map(str, wheels)],
-        capture_output=True, text=True, timeout=60,
-    )
-    assert result.returncode == 0, result.stdout + result.stderr
-    assert "rocm-7.2.1" in result.stdout
-    assert "rocm_sdk_libraries_custom-7.2.1" in result.stdout
-
-
-@pytest.mark.parametrize(
-    ("target_id", "frozen", "uses_source_fallback"),
-    (
-        ("windows-amd-rocm", True, True),
-        ("linux-amd-rocm", True, False),
-        ("windows-amd-rocm", False, False),
-    ),
-)
-@pytest.mark.parametrize("pip_return_code", (0, 1))
-def test_rocm_source_fallback_is_limited_to_frozen_windows(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    target_id: str,
-    frozen: bool,
-    uses_source_fallback: bool,
-    pip_return_code: int,
-    rocm_source_archive,
-) -> None:
-    captured_args: list[list[str]] = []
-    generated_wheels: list[Path] = []
-
-    def fake_pip_main(args):
-        captured_args.append(list(args))
-        for arg in args:
-            if arg.endswith("rocm-7.2.1-py3-none-any.whl"):
-                generated_wheels.append(Path(arg))
-                with zipfile.ZipFile(arg) as wheel:
-                    wheel.extractall(args[args.index("--target") + 1])
-        return pip_return_code
-
-    monkeypatch.setattr(sidecar_module.sys, "frozen", frozen, raising=False)
-    monkeypatch.setattr(
-        sidecar_module, "_load_embedded_pip_main", lambda: fake_pip_main
-    )
-    monkeypatch.setattr(
-        sidecar_module, "_patch_distlib_finder_for_frozen", lambda: None
-    )
-    monkeypatch.setattr(
-        sidecar_module, "_patch_pip_scriptmaker_for_embedded_install", lambda: None
-    )
-    monkeypatch.setattr(sidecar_module, "path_has_torch", lambda _path: True)
-
-    site_packages = tmp_path / target_id
-    site_packages.mkdir()
-    previous_file = site_packages / "previous-install.txt"
-    previous_file.write_text("keep on failure", encoding="utf-8")
-    installed = sidecar_module._install_torch_sidecar_with_embedded_pip(
-        runtime="rocm",
-        site_packages=site_packages,
-    )
-
-    assert installed is (pip_return_code == 0)
-    assert len(captured_args) == 1
-    assert len(generated_wheels) == int(uses_source_fallback)
-    assert all(not path.parent.exists() for path in generated_wheels)
-    assert previous_file.exists() is (pip_return_code != 0)
-    assert not list(tmp_path.glob(f".{target_id}.install-*"))
-    source_url_passed_to_pip = (
-        sidecar_module.ROCM_WINDOWS_SOURCE_PACKAGE_URL in captured_args[0]
-    )
-    assert source_url_passed_to_pip is (
-        target_id == "windows-amd-rocm" and not uses_source_fallback
-    )
-    assert (site_packages / "rocm_sdk" / "__init__.py").exists() is (
-        uses_source_fallback and pip_return_code == 0
-    )
-
-
-def test_frozen_rocm10_install_uses_bundled_selector_wheel_and_stable_index(
+def test_frozen_amd_install_uses_bundled_selector_wheel_and_stable_index(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -733,7 +543,7 @@ def test_frozen_rocm10_install_uses_bundled_selector_wheel_and_stable_index(
     monkeypatch.setattr(sidecar_module, "_patch_pip_scriptmaker_for_embedded_install", lambda: None)
     monkeypatch.setattr(sidecar_module, "path_has_torch", lambda _path: True)
 
-    target_id = "windows-amd-rocm10-gfx1103"
+    target_id = "windows-amd-rocm"
     runtime_root = tmp_path / "portable" / "data" / "runtime"
     site_packages = runtime_root / "site-packages" / target_id
     selector_wheel_dir = runtime_root / "wheels"
@@ -755,10 +565,9 @@ def test_frozen_rocm10_install_uses_bundled_selector_wheel_and_stable_index(
     assert "https://stable.repo.amd.com/rocm/whl-next/" in args_text
     assert "--only-binary=rocm" in args_text
     assert str(selector_wheel_dir) in args_text
-    assert sidecar_module.ROCM_WINDOWS_SOURCE_PACKAGE_URL not in args_text
 
 
-def test_frozen_rocm10_install_fails_cleanly_without_selector_wheel(
+def test_frozen_amd_install_fails_cleanly_without_selector_wheel(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -777,7 +586,7 @@ def test_frozen_rocm10_install_fails_cleanly_without_selector_wheel(
 
     site_packages = (
         tmp_path / "portable" / "data" / "runtime" / "site-packages"
-        / "windows-amd-rocm10-gfx1103"
+        / "windows-amd-rocm"
     )
     installed = sidecar_module._install_torch_sidecar_with_embedded_pip(
         runtime="rocm",

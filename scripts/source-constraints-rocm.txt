@@ -1,4 +1,4 @@
-# AMD ROCm 7.2.1 Linux target constraints. The exact wheels are installed
-# from repo.radeon.com by the release workflow and docs/amd-rocm.md.
-torch==2.9.1+rocm7.2.1.lw.gitff65f5bc
-torchvision==0.24.0+rocm7.2.1.gitb919bd0c
+# AMD's stable ROCm 10.0 packages for gfx1103 (Radeon 780M), Windows/Linux.
+torch[device-gfx1103]==2.13.0+rocm10.0.0
+torchvision[device-gfx1103]==0.28.0+rocm10.0.0
+rocm==10.0.0

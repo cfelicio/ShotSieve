@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import base64
 import contextlib
 import csv
 import errno
@@ -20,7 +19,6 @@ import time
 import traceback
 import urllib.request
 import warnings
-import zipfile
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
@@ -30,12 +28,9 @@ from shotsieve.dependency_constraints import (
     PYTORCH_CPU_INDEX_URL,
     PYTORCH_CUDA_INDEX_URL,
     PYTORCH_XPU_INDEX_URL,
-    ROCM10_GFX1103_TORCH_REQUIREMENTS,
-    ROCM10_PYTHON_INDEX_URL,
-    ROCM10_SELECTOR_REQUIREMENT,
-    ROCM_LINUX_PACKAGE_URLS,
-    ROCM_WINDOWS_SOURCE_PACKAGE_URL,
-    ROCM_WINDOWS_PACKAGE_URLS,
+    ROCM_PYTHON_INDEX_URL,
+    ROCM_SELECTOR_REQUIREMENT,
+    ROCM_TORCH_REQUIREMENTS,
     TORCH_REQUIREMENTS,
     XPU_TORCH_REQUIREMENTS,
 )
@@ -97,16 +92,6 @@ _OPENAI_CLIP_SOURCE_URL = (
 _OPENAI_CLIP_SOURCE_SHA256 = "cd40bf2f205c096c49524fcbff484339f793b52afd6e7ffad80a2fe108151721"
 _OPENAI_CLIP_SOURCE_ROOT = "openai-clip-1.0.1"
 _OPENAI_CLIP_DIST_INFO = "openai_clip-1.0.1.dist-info"
-
-# AMD publishes its Windows ROCm meta-package as an sdist.  Pip's PEP 517
-# build-isolation subprocess cannot use a PyInstaller executable as Python,
-# so frozen Windows builds install this small pure-Python package directly.
-# Keep the archive pinned and verify it before reading any member.
-_ROCM_WINDOWS_SOURCE_SHA256 = "9084902eaa69213a00a90784ad89e6e5fe73c702df0cc6cc3a70d777c7a6142b"
-_ROCM_WINDOWS_SOURCE_ROOT = "rocm-7.2.1"
-_ROCM_WINDOWS_SOURCE_DIST_INFO = "rocm-7.2.1.dist-info"
-_ROCM_WINDOWS_SOURCE_MAX_BYTES = 256 * 1024
-
 
 @dataclass(frozen=True, slots=True)
 class TorchInstallPlan:
@@ -221,174 +206,6 @@ def _install_openai_clip_source(site_packages: Path) -> None:
     (dist_info / "top_level.txt").write_text("clip\n", encoding="utf-8")
 
 
-def _install_rocm_windows_source(site_packages: Path) -> None:
-    """Install AMD's pinned pure-Python ROCm meta-package without invoking PEP 517."""
-    request = urllib.request.Request(
-        ROCM_WINDOWS_SOURCE_PACKAGE_URL,
-        headers={"User-Agent": "ShotSieve-runtime/0.5"},
-    )
-    with urllib.request.urlopen(request, timeout=120) as response:
-        archive_bytes = response.read(_ROCM_WINDOWS_SOURCE_MAX_BYTES + 1)
-
-    if len(archive_bytes) > _ROCM_WINDOWS_SOURCE_MAX_BYTES:
-        raise RuntimeError(
-            "The downloaded ROCm source archive exceeded its expected size limit."
-        )
-    digest = hashlib.sha256(archive_bytes).hexdigest()
-    if digest != _ROCM_WINDOWS_SOURCE_SHA256:
-        raise RuntimeError(
-            "The downloaded ROCm source archive failed its SHA-256 verification."
-        )
-
-    package_prefix = ("src", "rocm_sdk")
-    egg_info_prefix = ("src", "rocm.egg-info")
-    egg_info_map = {
-        "PKG-INFO": "METADATA",
-        "entry_points.txt": "entry_points.txt",
-        "top_level.txt": "top_level.txt",
-    }
-    extracted_files: list[Path] = []
-    metadata_files: set[str] = set()
-    source_root = PurePosixPath(_ROCM_WINDOWS_SOURCE_ROOT)
-
-    with tarfile.open(fileobj=io.BytesIO(archive_bytes), mode="r:gz") as source_archive:
-        for member in source_archive.getmembers():
-            member_path = PurePosixPath(member.name)
-            if member_path.is_absolute() or any(
-                part in {"", ".", ".."} for part in member_path.parts
-            ):
-                raise RuntimeError(
-                    f"The ROCm source archive contains an unsafe path: {member.name!r}."
-                )
-            try:
-                relative_path = member_path.relative_to(source_root)
-            except ValueError:
-                continue
-            if not member.isfile():
-                continue
-
-            destination: Path | None = None
-            if relative_path.parts[: len(package_prefix)] == package_prefix:
-                package_parts = relative_path.parts[len(package_prefix) :]
-                if package_parts:
-                    destination = site_packages.joinpath("rocm_sdk", *package_parts)
-            elif relative_path.parts[: len(egg_info_prefix)] == egg_info_prefix:
-                egg_info_parts = relative_path.parts[len(egg_info_prefix) :]
-                if len(egg_info_parts) == 1 and egg_info_parts[0] in egg_info_map:
-                    metadata_name = egg_info_map[egg_info_parts[0]]
-                    destination = (
-                        site_packages / _ROCM_WINDOWS_SOURCE_DIST_INFO / metadata_name
-                    )
-                    metadata_files.add(metadata_name)
-
-            if destination is None:
-                continue
-            try:
-                destination.resolve().relative_to(site_packages.resolve())
-            except ValueError as exc:
-                raise RuntimeError(
-                    f"The ROCm source archive member escapes the install target: {member.name!r}."
-                ) from exc
-            source = source_archive.extractfile(member)
-            if source is None:
-                raise RuntimeError(
-                    f"The ROCm source archive member {member.name!r} could not be read."
-                )
-            destination.parent.mkdir(parents=True, exist_ok=True)
-            with source, destination.open("wb") as output:
-                shutil.copyfileobj(source, output)
-            extracted_files.append(destination)
-
-    package_init = site_packages / "rocm_sdk" / "__init__.py"
-    dist_info = site_packages / _ROCM_WINDOWS_SOURCE_DIST_INFO
-    required_metadata_files = {"METADATA", "entry_points.txt", "top_level.txt"}
-    if (
-        not package_init.is_file()
-        or not (site_packages / "rocm_sdk" / "_dist_info.py").is_file()
-    ):
-        raise RuntimeError(
-            "The ROCm source archive did not contain the expected rocm_sdk package."
-        )
-    if metadata_files != required_metadata_files:
-        raise RuntimeError(
-            "The ROCm source archive did not contain the expected distribution metadata."
-        )
-
-    metadata_path = dist_info / "METADATA"
-    metadata_text = metadata_path.read_text(encoding="utf-8")
-    metadata_text = "\n".join(
-        line
-        for line in metadata_text.splitlines()
-        if not line.casefold().startswith("dynamic:")
-    ) + "\n"
-    metadata_path.write_text(metadata_text, encoding="utf-8")
-    metadata_headers = {
-        key.strip().casefold(): value.strip()
-        for line in metadata_text.splitlines()
-        if ":" in line
-        for key, value in (line.split(":", 1),)
-    }
-    if (
-        metadata_headers.get("name", "").casefold() != "rocm"
-        or metadata_headers.get("version") != "7.2.1"
-    ):
-        raise RuntimeError(
-            "The ROCm source archive contained unexpected package metadata."
-        )
-
-    wheel_path = dist_info / "WHEEL"
-    wheel_path.write_text(
-        "Wheel-Version: 1.0\n"
-        "Generator: ShotSieve frozen-runtime bootstrap\n"
-        "Root-Is-Purelib: true\n"
-        "Tag: py3-none-any\n",
-        encoding="utf-8",
-    )
-    installer_path = dist_info / "INSTALLER"
-    installer_path.write_text("ShotSieve\n", encoding="utf-8")
-    installed_files = [
-        *extracted_files,
-        wheel_path,
-        installer_path,
-    ]
-    record_path = dist_info / "RECORD"
-    with record_path.open("w", encoding="utf-8", newline="") as record_file:
-        record_writer = csv.writer(record_file, lineterminator="\n")
-        for installed_file in installed_files:
-            relative_name = installed_file.relative_to(site_packages).as_posix()
-            file_bytes = installed_file.read_bytes()
-            encoded_digest = (
-                base64.urlsafe_b64encode(hashlib.sha256(file_bytes).digest())
-                .decode("ascii")
-                .rstrip("=")
-            )
-            record_writer.writerow(
-                (relative_name, f"sha256={encoded_digest}", len(file_bytes))
-            )
-        record_writer.writerow(
-            (record_path.relative_to(site_packages).as_posix(), "", "")
-        )
-
-
-def _build_rocm_windows_source_wheel(wheel_dir: Path) -> Path:
-    """Supply the verified SDK package to pip's resolver without a build subprocess.
-
-    Installing files into --target alone does not satisfy pip's resolution of
-    torch's rocm[libraries] dependency. A local wheel keeps that dependency in
-    the graph alongside AMD's explicit SDK wheels, without a second download
-    or a PEP 517 invocation through the frozen executable.
-    """
-    wheel_path = wheel_dir / "rocm-7.2.1-py3-none-any.whl"
-    with tempfile.TemporaryDirectory(prefix="rocm-source-", dir=wheel_dir) as source_dir:
-        source_path = Path(source_dir)
-        _install_rocm_windows_source(source_path)
-        with zipfile.ZipFile(wheel_path, "w", compression=zipfile.ZIP_DEFLATED) as wheel:
-            for source_file in sorted(source_path.rglob("*")):
-                if source_file.is_file():
-                    wheel.write(source_file, source_file.relative_to(source_path).as_posix())
-    return wheel_path
-
-
 @contextlib.contextmanager
 def _suppress_distutils_replacement_warning():
     with warnings.catch_warnings():
@@ -438,8 +255,6 @@ def _target_parts(target_id: str | None, runtime: str | None) -> tuple[str, str,
             normalized_runtime = "cuda"
         elif canonical_target.endswith("-intel-xpu"):
             normalized_runtime = "xpu"
-        elif canonical_target.endswith("-amd-rocm10-gfx1103"):
-            normalized_runtime = "rocm"
         elif canonical_target.endswith("-amd-rocm"):
             normalized_runtime = "rocm"
         elif canonical_target.endswith("-apple-mps"):
@@ -501,26 +316,15 @@ def torch_install_plan(
             "https://pypi.org/simple",
         )
     elif resolved_runtime == "rocm":
-        if resolved_target.endswith("-amd-rocm10-gfx1103"):
-            if target_platform not in {"windows", "linux"}:
-                raise ValueError(
-                    f"ROCm 10 gfx1103 is not supported for target platform '{target_platform}'."
-                )
-            packages = ROCM10_GFX1103_TORCH_REQUIREMENTS
-            index_args = (
-                "--index-url",
-                ROCM10_PYTHON_INDEX_URL,
-                "--extra-index-url",
-                "https://pypi.org/simple",
-            )
-        else:
-            if target_platform == "windows":
-                packages = ROCM_WINDOWS_PACKAGE_URLS
-            elif target_platform == "linux":
-                packages = ROCM_LINUX_PACKAGE_URLS
-            else:
-                raise ValueError(f"ROCm is not supported for target platform '{target_platform}'.")
-            index_args = ("--trusted-host", "repo.radeon.com")
+        if target_platform not in {"windows", "linux"}:
+            raise ValueError(f"ROCm is not supported for target platform '{target_platform}'.")
+        packages = ROCM_TORCH_REQUIREMENTS
+        index_args = (
+            "--index-url",
+            ROCM_PYTHON_INDEX_URL,
+            "--extra-index-url",
+            "https://pypi.org/simple",
+        )
     elif resolved_runtime == "cpu" and target_platform in {"windows", "linux"}:
         packages = TORCH_REQUIREMENTS
         index_args = ("--index-url", PYTORCH_CPU_INDEX_URL, "--trusted-host", "download.pytorch.org")
@@ -924,7 +728,7 @@ def _install_torch_sidecar_with_embedded_pip(
 
     has_torch_func = path_has_torch
     try:
-        with _sidecar_install_lock(site_packages), contextlib.ExitStack() as build_cleanup:
+        with _sidecar_install_lock(site_packages), contextlib.ExitStack():
             # Another process may have completed the exact install while this
             # process waited for the lock.
             if not force_reinstall and torch_sidecar_is_valid(
@@ -935,56 +739,10 @@ def _install_torch_sidecar_with_embedded_pip(
                 return True
 
             torch_packages = plan.packages
-            if (
-                getattr(sys, "frozen", False)
-                and plan.platform == "windows"
-                and plan.runtime == "rocm"
-                and plan.target_id.endswith("-amd-rocm")
-            ):
-                if ROCM_WINDOWS_SOURCE_PACKAGE_URL not in torch_packages:
-                    raise RuntimeError(
-                        "The Windows ROCm plan is missing its pinned source package."
-                    )
-                source_install_args = [
-                    "install-source-archive",
-                    ROCM_WINDOWS_SOURCE_PACKAGE_URL,
-                ]
-                try:
-                    wheel_dir = Path(build_cleanup.enter_context(tempfile.TemporaryDirectory(
-                        prefix=".rocm-wheel-", dir=site_packages.parent,
-                    )))
-                    rocm_wheel = _build_rocm_windows_source_wheel(wheel_dir)
-                except Exception:
-                    _append_debug_log(
-                        package_name="rocm==7.2.1",
-                        install_args=source_install_args,
-                        return_code=1,
-                        stdout_text="",
-                        stderr_text="",
-                        exception_text=traceback.format_exc(),
-                    )
-                    output_func(
-                        "ROCm Windows SDK metadata installation failed. "
-                        f"Check {pip_log_path} for details."
-                    )
-                    return False
-                _append_debug_log(
-                    package_name="rocm==7.2.1",
-                    install_args=source_install_args,
-                    return_code=0,
-                    stdout_text="Built verified pure-Python ROCm SDK wheel for dependency resolution.",
-                    stderr_text="",
-                    exception_text=None,
-                )
-                torch_packages = tuple(
-                    str(rocm_wheel) if package == ROCM_WINDOWS_SOURCE_PACKAGE_URL else package
-                    for package in torch_packages
-                )
-
             torch_install_extra_args: tuple[str, ...] = ()
             if (
                 getattr(sys, "frozen", False)
-                and plan.target_id.endswith("-amd-rocm10-gfx1103")
+                and plan.runtime == "rocm"
             ):
                 selector_wheel_dir = site_packages.parent.parent / "wheels"
                 selector_wheels = sorted(
@@ -1007,7 +765,7 @@ def _install_torch_sidecar_with_embedded_pip(
                 selector_wheel = selector_wheels[0]
                 torch_packages = tuple(
                     str(selector_wheel)
-                    if package == ROCM10_SELECTOR_REQUIREMENT
+                    if package == ROCM_SELECTOR_REQUIREMENT
                     else package
                     for package in torch_packages
                 )
@@ -1113,7 +871,6 @@ def _learned_iqa_packages_for_runtime(runtime: str) -> list[str]:
         "psutil",
         "ftfy",
         "regex",
-        "icecream",
     ]
     return packages
 

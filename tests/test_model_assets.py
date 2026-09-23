@@ -45,6 +45,8 @@ def test_model_dependency_versions_include_loader_and_clip(monkeypatch) -> None:
     versions = model_assets._dependency_versions()
     assert versions["transformers"] == "test-transformers"
     assert versions["openai-clip"] == "test-openai-clip"
+    assert versions["icecream"] == "test-icecream"
+    assert versions["setuptools"] == "test-setuptools"
 
 
 class _Backend:

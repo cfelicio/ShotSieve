@@ -14,7 +14,7 @@ def _torch_runtime(name: str, *, available: bool = True) -> ModuleType:
     torch = ModuleType("torch")
     torch.__spec__ = ModuleSpec("torch", loader=None)
     torch.device = str
-    torch.version = SimpleNamespace(hip="7.2.1" if name == "rocm" else None)
+    torch.version = SimpleNamespace(hip="10.0.0" if name == "rocm" else None)
     properties = SimpleNamespace(total_memory=8192 * 1024 * 1024)
     torch.cuda = SimpleNamespace(
         is_available=lambda: available and name in {"cuda", "rocm"},

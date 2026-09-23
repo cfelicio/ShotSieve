@@ -43,6 +43,8 @@ _VERSION_PACKAGE_NAMES = (
     "accelerate",
     "sentencepiece",
     "einops",
+    "icecream",
+    "setuptools",
 )
 _SENSITIVE_ENV_NAMES = {
     "HF_TOKEN",

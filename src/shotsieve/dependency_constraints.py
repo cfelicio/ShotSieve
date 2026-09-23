@@ -4,20 +4,22 @@ from __future__ import annotations
 import importlib.metadata
 
 COMMON_MODEL_REQUIREMENTS = (
+    # PyPI still classifies PyIQA as Alpha; keep its latest published release
+    # because no stable alternative supplies all three supported IQA models.
     "pyiqa==0.1.16",
+    # OpenAI CLIP imports pkg_resources; setuptools removed it in 82.0.0.
+    "setuptools==81.0.0",
     # PyIQA imports FaceRestoreHelper while registering TOPIQ, including for
     # the non-face topiq_nr model.
     "facexlib==0.3.0",
-    "timm==1.0.29",
-    "huggingface-hub==1.31.0",
-    # Keep the earlier Q-ReAlign-compatible pin;
-    # newer Transformers releases can expose the class while failing its
-    # deferred module import.
-    "transformers==5.14.1",
+    "timm==1.0.30",
+    "huggingface-hub==1.32.0",
+    "transformers==5.17.0",
     "openai-clip==1.0.1",
     "accelerate==1.15.0",
     "sentencepiece==0.2.2",
     "einops==0.8.2",
+    "icecream==2.2.0",
 )
 
 TORCH_REQUIREMENTS = (
@@ -29,60 +31,21 @@ PYTORCH_CPU_INDEX_URL = "https://download.pytorch.org/whl/cpu"
 PYTORCH_CUDA_INDEX_URL = "https://download.pytorch.org/whl/cu130"
 PYTORCH_XPU_INDEX_URL = "https://download.pytorch.org/whl/xpu"
 
-# Native Intel XPU wheels are intentionally separate from the CPU/CUDA/MPS
-# release pair. They are consumed by the documented source and release tracks.
+# Intel's official XPU wheels are separate from the CPU/CUDA/MPS release pair.
 XPU_TORCH_REQUIREMENTS = (
     "torch==2.14.0+xpu",
     "torchvision==0.29.0+xpu",
 )
 
-# AMD's validated ROCm 7.2.1 Radeon wheels are a separate release track. They
-# intentionally do not replace the common CPU/CUDA/MPS release pair.
+# AMD's stable ROCm 10.0 multi-architecture index publishes the 2.13/0.28
+# pair for gfx1103 on both Windows and Linux, including CPython 3.14 wheels.
 ROCM_TORCH_REQUIREMENTS = (
-    "torch==2.9.1+rocm7.2.1.lw.gitff65f5bc",
-    "torchvision==0.24.0+rocm7.2.1.gitb919bd0c",
-)
-
-ROCM_WINDOWS_TORCH_REQUIREMENTS = (
-    "torch==2.9.1+rocm7.2.1",
-    "torchvision==0.24.1",
-)
-
-# The AMD stable multi-architecture index currently publishes ROCm 10.0.0
-# with the PyTorch 2.13 / TorchVision 0.28 pair. Keep this candidate separate
-# from the legacy ROCm 7.2.1 track and scope it to the 780M's gfx1103 kernels.
-ROCM10_GFX1103_TORCH_REQUIREMENTS = (
     "torch[device-gfx1103]==2.13.0+rocm10.0.0",
     "torchvision[device-gfx1103]==0.28.0+rocm10.0.0",
     "rocm==10.0.0",
 )
-ROCM10_SELECTOR_REQUIREMENT = "rocm==10.0.0"
-ROCM10_PYTHON_INDEX_URL = "https://stable.repo.amd.com/rocm/whl-next/"
-
-# These URLs are deliberately kept as exact, target-specific inputs.  In
-# particular, XPU and ROCm must never silently resolve to the generic PyPI
-# torch wheels.  The release workflow and the frozen sidecar installer share
-# these values.
-ROCM_LINUX_PACKAGE_URLS = (
-    "https://repo.radeon.com/rocm/manylinux/rocm-rel-7.2.1/torch-2.9.1%2Brocm7.2.1.lw.gitff65f5bc-cp312-cp312-linux_x86_64.whl",
-    "https://repo.radeon.com/rocm/manylinux/rocm-rel-7.2.1/torchvision-0.24.0%2Brocm7.2.1.gitb919bd0c-cp312-cp312-linux_x86_64.whl",
-    "https://repo.radeon.com/rocm/manylinux/rocm-rel-7.2.1/torchaudio-2.9.0%2Brocm7.2.1.gite3c6ee2b-cp312-cp312-linux_x86_64.whl",
-    "https://repo.radeon.com/rocm/manylinux/rocm-rel-7.2.1/triton-3.5.1%2Brocm7.2.1.gita272dfa8-cp312-cp312-linux_x86_64.whl",
-)
-
-ROCM_WINDOWS_SOURCE_PACKAGE_URL = (
-    "https://repo.radeon.com/rocm/windows/rocm-rel-7.2.1/rocm-7.2.1.tar.gz"
-)
-
-ROCM_WINDOWS_PACKAGE_URLS = (
-    "https://repo.radeon.com/rocm/windows/rocm-rel-7.2.1/rocm_sdk_core-7.2.1-py3-none-win_amd64.whl",
-    "https://repo.radeon.com/rocm/windows/rocm-rel-7.2.1/rocm_sdk_devel-7.2.1-py3-none-win_amd64.whl",
-    "https://repo.radeon.com/rocm/windows/rocm-rel-7.2.1/rocm_sdk_libraries_custom-7.2.1-py3-none-win_amd64.whl",
-    ROCM_WINDOWS_SOURCE_PACKAGE_URL,
-    "https://repo.radeon.com/rocm/windows/rocm-rel-7.2.1/torch-2.9.1%2Brocm7.2.1-cp312-cp312-win_amd64.whl",
-    "https://repo.radeon.com/rocm/windows/rocm-rel-7.2.1/torchaudio-2.9.1%2Brocm7.2.1-cp312-cp312-win_amd64.whl",
-    "https://repo.radeon.com/rocm/windows/rocm-rel-7.2.1/torchvision-0.24.1%2Brocm7.2.1-cp312-cp312-win_amd64.whl",
-)
+ROCM_SELECTOR_REQUIREMENT = "rocm==10.0.0"
+ROCM_PYTHON_INDEX_URL = "https://stable.repo.amd.com/rocm/whl-next/"
 
 MODEL_DEPENDENCY_DISTRIBUTIONS = (
     "pyiqa",
@@ -96,25 +59,20 @@ MODEL_DEPENDENCY_DISTRIBUTIONS = (
     "accelerate",
     "sentencepiece",
     "einops",
+    "icecream",
+    "setuptools",
 )
 
 
 def model_requirements_for_runtime(
     runtime: str,
-    *,
-    platform_name: str | None = None,
 ) -> tuple[str, ...]:
     """Return the pinned model stack for a supported runtime family."""
     normalized_runtime = runtime.strip().casefold()
     if normalized_runtime == "xpu":
         torch_requirements = XPU_TORCH_REQUIREMENTS
     elif normalized_runtime in {"amd", "rocm"}:
-        normalized_platform = (platform_name or "").strip().casefold()
-        torch_requirements = (
-            ROCM_WINDOWS_TORCH_REQUIREMENTS
-            if normalized_platform in {"windows", "win32"}
-            else ROCM_TORCH_REQUIREMENTS
-        )
+        torch_requirements = ROCM_TORCH_REQUIREMENTS
     else:
         torch_requirements = TORCH_REQUIREMENTS
     return COMMON_MODEL_REQUIREMENTS + torch_requirements
@@ -139,14 +97,9 @@ __all__ = [
     "PYTORCH_CPU_INDEX_URL",
     "PYTORCH_CUDA_INDEX_URL",
     "PYTORCH_XPU_INDEX_URL",
-    "ROCM10_GFX1103_TORCH_REQUIREMENTS",
-    "ROCM10_PYTHON_INDEX_URL",
-    "ROCM10_SELECTOR_REQUIREMENT",
-    "ROCM_LINUX_PACKAGE_URLS",
+    "ROCM_PYTHON_INDEX_URL",
+    "ROCM_SELECTOR_REQUIREMENT",
     "ROCM_TORCH_REQUIREMENTS",
-    "ROCM_WINDOWS_SOURCE_PACKAGE_URL",
-    "ROCM_WINDOWS_PACKAGE_URLS",
-    "ROCM_WINDOWS_TORCH_REQUIREMENTS",
     "TORCH_REQUIREMENTS",
     "XPU_TORCH_REQUIREMENTS",
     "installed_model_dependency_versions",

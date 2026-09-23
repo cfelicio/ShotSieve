@@ -577,7 +577,7 @@ def test_current_learned_models_and_runtime_resolution() -> None:
             return True
 
     class RocmTorch:
-        version = types.SimpleNamespace(hip="7.2.1")
+        version = types.SimpleNamespace(hip="10.0.0")
         cuda = RocmCuda
 
         @staticmethod

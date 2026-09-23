@@ -35,10 +35,9 @@ Xe. Do not assume that an Iris Xe laptop is an XPU-supported device; record the
 exact adapter and CPU generation first. For an older Iris Xe system, CPU is the
 supported ShotSieve fallback unless a separate native XPU smoke test succeeds.
 
-- Python 3.13 is the reproducible ShotSieve validation interpreter for this
-  track. The current Torch 2.14.0 XPU index publishes several CPython
-  variants, but this project targets 3.13; each interpreter still needs its
-  own `pip check` and model smoke evidence.
+- Python 3.14 is the preferred release interpreter for this track. Python
+  3.13 remains the minimum supported source version; the current Torch 2.14.0
+  XPU index publishes both versions.
 - The current Intel graphics driver for Windows, or the Intel GPU/Level Zero
   driver stack for Linux. Use the driver installation instructions for the
   exact operating system and record the installed driver version.
@@ -59,14 +58,16 @@ Official references:
 Use PowerShell from the ShotSieve checkout:
 
 ```powershell
-py -3.13 -m venv .venv-xpu
+py -3.14 -m venv .venv-xpu
 .\.venv-xpu\Scripts\python.exe -m pip install --upgrade pip setuptools wheel
 .\.venv-xpu\Scripts\python.exe -m pip install `
   "torch==2.14.0+xpu" "torchvision==0.29.0+xpu" `
   --index-url https://download.pytorch.org/whl/xpu `
   --extra-index-url https://pypi.org/simple `
+  -c scripts/release-constraints.txt `
   -c scripts/source-constraints-xpu.txt
 .\.venv-xpu\Scripts\python.exe -m pip install -e ".[learned-iqa]" `
+  -c scripts/release-constraints.txt `
   -c scripts/source-constraints-xpu.txt
 .\.venv-xpu\Scripts\python.exe -m pip check
 ```
@@ -88,19 +89,21 @@ check below should be run directly to distinguish those cases.
 
 ## Install on Linux
 
-Use a distribution-supported Python 3.13 and install the Intel GPU/Level Zero
+Use Python 3.14 and install the Intel GPU/Level Zero
 driver prerequisites before creating the environment:
 
 ```bash
-python3.13 -m venv .venv-xpu
+python3.14 -m venv .venv-xpu
 . .venv-xpu/bin/activate
 python -m pip install --upgrade pip setuptools wheel
 python -m pip install \
   "torch==2.14.0+xpu" "torchvision==0.29.0+xpu" \
   --index-url https://download.pytorch.org/whl/xpu \
   --extra-index-url https://pypi.org/simple \
+  -c scripts/release-constraints.txt \
   -c scripts/source-constraints-xpu.txt
 python -m pip install -e '.[learned-iqa]' \
+  -c scripts/release-constraints.txt \
   -c scripts/source-constraints-xpu.txt
 python -m pip check
 ```

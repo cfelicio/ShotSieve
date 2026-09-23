@@ -26,7 +26,7 @@ Use the package that matches the runtime you have actually validated:
 | CPU | Any supported source or packaged install | Broadest fallback; learned models still need enough RAM and disk. |
 | NVIDIA CUDA | Supported NVIDIA GPUs | The current x64 path uses PyTorch 2.14.0 from the cu130 index and covers the architectures published by that wheel. Driver, VRAM, and model support still apply. |
 | Intel XPU | Intel GPU/OS combinations in the pinned PyTorch XPU matrix | Available as Windows/Linux runtime packs and as a source-install track. |
-| AMD ROCm | Hardware/OS/driver combinations in AMD's pinned matrix | The legacy ROCm 7.2.1 packs remain available. Separate Windows/Linux ROCm 10.0 candidate packs target `gfx1103` (including the Radeon 780M); those candidates still need real-GPU qualification. |
+| AMD ROCm | AMD's current OS/driver matrix | The Windows/Linux packs use the stable ROCm 10.0 PyTorch packages with `gfx1103` kernels, including the Radeon 780M. Hardware support remains specific to AMD's live matrix. |
 | Apple MPS | Apple Silicon Macs supported by the installed PyTorch build | Available as a macOS arm64 runtime pack; Intel Macs use CPU. |
 
 A runtime pack proves that the software stack can be built, not that every GPU
@@ -36,11 +36,10 @@ runtime is unusable. See the [build guide](docs/building.md),
 [Intel XPU guide](docs/intel-xpu.md), and [AMD ROCm guide](docs/amd-rocm.md)
 for the pinned boundaries and validation commands.
 
-The release matrix currently contains ten established runtime packs and two
-separate ROCm 10.0 `gfx1103` candidate packs:
+The release matrix contains ten runtime packs:
 
-- Windows: CPU, NVIDIA CUDA, Intel XPU, AMD ROCm 7.2.1, and the ROCm 10.0 `gfx1103` candidate
-- Linux: CPU, NVIDIA CUDA, Intel XPU, AMD ROCm 7.2.1, and the ROCm 10.0 `gfx1103` candidate
+- Windows: CPU, NVIDIA CUDA, Intel XPU, AMD ROCm
+- Linux: CPU, NVIDIA CUDA, Intel XPU, AMD ROCm
 - macOS arm64: CPU and Apple MPS
 
 Current launcher names are:
@@ -51,12 +50,10 @@ Current launcher names are:
 | Windows | NVIDIA CUDA | `ShotSieve-NVIDIA-CUDA.exe` |
 | Windows | Intel XPU | `ShotSieve-Intel-XPU.exe` |
 | Windows | AMD ROCm | `ShotSieve-AMD-ROCm.exe` |
-| Windows | AMD ROCm 10 / gfx1103 candidate | `ShotSieve-AMD-ROCm10-GFX1103.exe` |
 | Linux | CPU | `ShotSieve-CPU` |
 | Linux | NVIDIA CUDA | `ShotSieve-NVIDIA-CUDA` |
 | Linux | Intel XPU | `ShotSieve-Intel-XPU` |
 | Linux | AMD ROCm | `ShotSieve-AMD-ROCm` |
-| Linux | AMD ROCm 10 / gfx1103 candidate | `ShotSieve-AMD-ROCm10-GFX1103` |
 | macOS | CPU | `ShotSieve-CPU` |
 | macOS | Apple MPS | `ShotSieve-Apple-MPS` |
 

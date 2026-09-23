@@ -81,8 +81,6 @@ def runtime_target_id_from_executable_name(*, system_name: str | None = None) ->
         return f"{prefix}-nvidia-cuda"
     if "intel-xpu" in runtime_name:
         return f"{prefix}-intel-xpu"
-    if "amd-rocm10-gfx1103" in runtime_name:
-        return f"{prefix}-amd-rocm10-gfx1103"
     if "amd-rocm" in runtime_name:
         return f"{prefix}-amd-rocm"
     if prefix == "macos" and "apple-mps" in runtime_name:
@@ -337,7 +335,7 @@ def _runtime_name_from_target_id(target_id: str | None) -> str:
         return "cuda"
     if normalized.endswith("-intel-xpu"):
         return "xpu"
-    if normalized.endswith(("-amd-rocm", "-amd-rocm10-gfx1103")):
+    if normalized.endswith("-amd-rocm"):
         return "rocm"
     if normalized.endswith("-cpu"):
         return "cpu"

@@ -29,7 +29,7 @@ jobs:
       matrix:
         include:
           - os: ubuntu-latest
-            python-version: "3.11"
+            python-version: "3.13"
           - os: windows-latest
             python-version: "3.13"
           - os: macos-latest
@@ -87,8 +87,11 @@ jobs:
       - name: Run focused static checks
         run: python -m ruff check --select F,E9 src tests
 
-      - name: Run core test suite without accelerator or browser claims
-        run: python -m pytest -q -m "not browser"
+      - name: Install browser for frontend tests
+        run: python -m playwright install --with-deps chromium
+
+      - name: Run Python 3.14 test suite
+        run: python -m pytest -q
 
   wheel-smoke:
     name: wheel-smoke
@@ -101,7 +104,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v6
         with:
-          python-version: "3.12"
+          python-version: "3.14"
           cache: pip
 
       - name: Install wheel builder

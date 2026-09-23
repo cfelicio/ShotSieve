@@ -126,8 +126,8 @@ def test_runtime_evidence_captures_rocm_identity_and_hip_version() -> None:
             return FakeProperties()
 
     fake_torch = types.SimpleNamespace(
-        __version__="2.9.1+rocm7.2.1",
-        version=types.SimpleNamespace(hip="7.2.1"),
+        __version__="2.13.0+rocm10.0.0",
+        version=types.SimpleNamespace(hip="10.0.0"),
         cuda=FakeCuda(),
     )
 
@@ -139,8 +139,8 @@ def test_runtime_evidence_captures_rocm_identity_and_hip_version() -> None:
         elapsed_seconds=2.5,
     )
 
-    assert evidence["torch_runtime"] == "2.9.1+rocm7.2.1"
-    assert evidence["rocm_version"] == "7.2.1"
+    assert evidence["torch_runtime"] == "2.13.0+rocm10.0.0"
+    assert evidence["rocm_version"] == "10.0.0"
     assert evidence["rocm_device_count"] == 1
     assert evidence["rocm_device_name"] == "Radeon RX test device"
     assert evidence["rocm_gpu_architecture"] == "gfx1100"

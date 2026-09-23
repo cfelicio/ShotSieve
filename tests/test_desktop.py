@@ -162,11 +162,6 @@ def test_runtime_target_id_from_executable_name_ignores_a_legacy_nvidia_launcher
     (
         ("ShotSieve-Intel-XPU.exe", "windows-intel-xpu", "xpu"),
         ("ShotSieve-AMD-ROCm.exe", "windows-amd-rocm", "rocm"),
-        (
-            "ShotSieve-AMD-ROCm10-GFX1103.exe",
-            "windows-amd-rocm10-gfx1103",
-            "rocm",
-        ),
     ),
 )
 def test_experimental_windows_gpu_launcher_names_select_native_runtime(

@@ -128,7 +128,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v6
         with:
-          python-version: "3.12"
+          python-version: "3.14"
 
       - id: runtime-matrix
         name: Export runtime pack release matrix
@@ -164,7 +164,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v6
         with:
-          python-version: "3.12"
+          python-version: "3.14"
           cache: pip
 
       - name: Build sdist and wheel
@@ -220,12 +220,12 @@ jobs:
         run: |
           python -m pip install --upgrade pip setuptools wheel packaging -c ${{ env.RELEASE_CONSTRAINTS }} -c ${{ matrix.constraintsFile }}
 
-      - name: Build local ROCm 10 selector wheel
-        if: matrix.torchVariant == 'rocm10-gfx1103'
+      - name: Build local AMD ROCm selector wheel
+        if: matrix.torchVariant == 'rocm'
         run: python -m pip wheel --no-deps --wheel-dir "build/release-targets/${{ matrix.id }}/rocm-selector-wheel" rocm==10.0.0 --index-url https://stable.repo.amd.com/rocm/whl-next/ --extra-index-url https://pypi.org/simple
 
-      - name: Install pinned AMD ROCm 10 gfx1103 Torch runtime
-        if: matrix.torchVariant == 'rocm10-gfx1103'
+      - name: Install stable AMD ROCm 10 Torch runtime
+        if: matrix.torchVariant == 'rocm'
         run: python -m pip install --no-cache-dir rocm==10.0.0 "torch[device-gfx1103]==2.13.0+rocm10.0.0" "torchvision[device-gfx1103]==0.28.0+rocm10.0.0" --index-url https://stable.repo.amd.com/rocm/whl-next/ --extra-index-url https://pypi.org/simple --find-links "build/release-targets/${{ matrix.id }}/rocm-selector-wheel" --only-binary=rocm -c ${{ env.RELEASE_CONSTRAINTS }} -c ${{ matrix.constraintsFile }}
 
       - name: Install CPU Torch runtime
@@ -247,32 +247,6 @@ jobs:
         if: matrix.torchVariant == 'xpu'
         run: |
           python -m pip install torch torchvision --index-url https://download.pytorch.org/whl/xpu --extra-index-url https://pypi.org/simple -c ${{ env.RELEASE_CONSTRAINTS }} -c ${{ matrix.constraintsFile }}
-
-      - name: Install pinned AMD ROCm Linux Torch runtime
-        if: matrix.torchVariant == 'rocm' && matrix.platform == 'linux'
-        shell: bash
-        run: |
-          python -m pip install --no-cache-dir \
-            "https://repo.radeon.com/rocm/manylinux/rocm-rel-7.2.1/torch-2.9.1%2Brocm7.2.1.lw.gitff65f5bc-cp312-cp312-linux_x86_64.whl" \
-            "https://repo.radeon.com/rocm/manylinux/rocm-rel-7.2.1/torchvision-0.24.0%2Brocm7.2.1.gitb919bd0c-cp312-cp312-linux_x86_64.whl" \
-            "https://repo.radeon.com/rocm/manylinux/rocm-rel-7.2.1/torchaudio-2.9.0%2Brocm7.2.1.gite3c6ee2b-cp312-cp312-linux_x86_64.whl" \
-            "https://repo.radeon.com/rocm/manylinux/rocm-rel-7.2.1/triton-3.5.1%2Brocm7.2.1.gita272dfa8-cp312-cp312-linux_x86_64.whl" \
-            -c ${{ env.RELEASE_CONSTRAINTS }} -c ${{ matrix.constraintsFile }}
-
-      - name: Install pinned AMD ROCm Windows Torch runtime
-        if: matrix.torchVariant == 'rocm' && matrix.platform == 'windows'
-        shell: pwsh
-        run: |
-          python -m pip install --no-cache-dir `
-            "https://repo.radeon.com/rocm/windows/rocm-rel-7.2.1/rocm_sdk_core-7.2.1-py3-none-win_amd64.whl" `
-            "https://repo.radeon.com/rocm/windows/rocm-rel-7.2.1/rocm_sdk_devel-7.2.1-py3-none-win_amd64.whl" `
-            "https://repo.radeon.com/rocm/windows/rocm-rel-7.2.1/rocm_sdk_libraries_custom-7.2.1-py3-none-win_amd64.whl" `
-            "https://repo.radeon.com/rocm/windows/rocm-rel-7.2.1/rocm-7.2.1.tar.gz" `
-            "https://repo.radeon.com/rocm/windows/rocm-rel-7.2.1/torch-2.9.1%2Brocm7.2.1-cp312-cp312-win_amd64.whl" `
-            "https://repo.radeon.com/rocm/windows/rocm-rel-7.2.1/torchaudio-2.9.1%2Brocm7.2.1-cp312-cp312-win_amd64.whl" `
-            "https://repo.radeon.com/rocm/windows/rocm-rel-7.2.1/torchvision-0.24.1%2Brocm7.2.1-cp312-cp312-win_amd64.whl" `
-            --trusted-host repo.radeon.com `
-            -c ${{ env.RELEASE_CONSTRAINTS }} -c ${{ matrix.constraintsFile }}
 
       - name: Install ShotSieve build dependencies
         run: |
@@ -363,7 +337,7 @@ jobs:
       - name: Set up Python for release asset preparation
         uses: actions/setup-python@v6
         with:
-          python-version: "3.12"
+          python-version: "3.14"
 
       - name: Prepare release assets within GitHub size limits
         run: |

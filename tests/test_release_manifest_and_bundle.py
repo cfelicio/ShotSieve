@@ -64,8 +64,8 @@ def test_portable_bundle_builder_exposes_runtime_pack_target_plan() -> None:
     assert _string_value(plan["distPath"]).endswith("ShotSieve-linux-nvidia-cuda")
 
 
-def test_rocm10_candidate_bundles_its_local_selector_wheel(tmp_path: Path) -> None:
-    module_name = "build_portable_bundle_rocm10_selector"
+def test_amd_bundle_includes_its_local_selector_wheel(tmp_path: Path) -> None:
+    module_name = "build_portable_bundle_rocm_selector"
     spec = importlib.util.spec_from_file_location(module_name, BUNDLE_SCRIPT_PATH)
     assert spec is not None
     assert spec.loader is not None
@@ -76,7 +76,7 @@ def test_rocm10_candidate_bundles_its_local_selector_wheel(tmp_path: Path) -> No
 
     target = next(
         target for target in runtime_pack_release_targets()
-        if target.id == "windows-amd-rocm10-gfx1103"
+        if target.id == "windows-amd-rocm"
     )
     build_root = tmp_path / "build"
     selector_dir = build_root / target.id / "rocm-selector-wheel"
@@ -86,7 +86,7 @@ def test_rocm10_candidate_bundles_its_local_selector_wheel(tmp_path: Path) -> No
     staged_bundle = tmp_path / "staged"
     staged_bundle.mkdir()
 
-    module._bundle_rocm10_selector_wheel(
+    module._bundle_rocm_selector_wheel(
         target,
         build_root=build_root,
         staged_bundle=staged_bundle,
@@ -96,8 +96,8 @@ def test_rocm10_candidate_bundles_its_local_selector_wheel(tmp_path: Path) -> No
     assert bundled_wheel.read_bytes() == b"wheel"
 
 
-def test_rocm10_candidate_bundle_requires_one_selector_wheel(tmp_path: Path) -> None:
-    module_name = "build_portable_bundle_rocm10_selector_missing"
+def test_amd_bundle_requires_one_selector_wheel(tmp_path: Path) -> None:
+    module_name = "build_portable_bundle_rocm_selector_missing"
     spec = importlib.util.spec_from_file_location(module_name, BUNDLE_SCRIPT_PATH)
     assert spec is not None
     assert spec.loader is not None
@@ -108,10 +108,10 @@ def test_rocm10_candidate_bundle_requires_one_selector_wheel(tmp_path: Path) -> 
 
     target = next(
         target for target in runtime_pack_release_targets()
-        if target.id == "windows-amd-rocm10-gfx1103"
+        if target.id == "windows-amd-rocm"
     )
     with pytest.raises(SystemExit, match=r"Expected exactly one rocm-10\.0\.0-\*\.whl"):
-        module._bundle_rocm10_selector_wheel(
+        module._bundle_rocm_selector_wheel(
             target,
             build_root=tmp_path / "build",
             staged_bundle=tmp_path / "staged",
@@ -173,15 +173,15 @@ def test_release_constraints_file_exists_with_required_pins() -> None:
     assert RELEASE_CONSTRAINTS_PATH.exists()
 
     constraints_text = RELEASE_CONSTRAINTS_PATH.read_text(encoding="utf-8")
-    assert "pip<26" in constraints_text
-    assert "setuptools<81" in constraints_text
-    assert "pyinstaller>=6.19,<7" in constraints_text
-    assert "packaging>=26,<27" in constraints_text
+    assert "pip>=26.2.1" in constraints_text
+    assert "setuptools==81.0.0" in constraints_text
+    assert "pyinstaller>=6.22.3" in constraints_text
+    assert "packaging>=26.3" in constraints_text
     assert "pyiqa==0.1.16" in constraints_text
     assert "facexlib==0.3.0" in constraints_text
-    assert "timm==1.0.29" in constraints_text
-    assert "huggingface-hub==1.31.0" in constraints_text
-    assert "transformers==5.14.1" in constraints_text
+    assert "timm==1.0.30" in constraints_text
+    assert "huggingface-hub==1.32.0" in constraints_text
+    assert "transformers==5.17.0" in constraints_text
     assert "openai-clip==1.0.1" in constraints_text
 
     torch_constraints = (PROJECT_ROOT / "scripts" / "release-constraints-torch.txt").read_text(encoding="utf-8")

@@ -23,8 +23,6 @@ BUNDLE_SCRIPT_PATH = PROJECT_ROOT / "scripts" / "build_portable_bundle.py"
 RELEASE_CONSTRAINTS_PATH = PROJECT_ROOT / "scripts" / "release-constraints.txt"
 XPU_CONSTRAINTS_PATH = PROJECT_ROOT / "scripts" / "source-constraints-xpu.txt"
 ROCM_CONSTRAINTS_PATH = PROJECT_ROOT / "scripts" / "source-constraints-rocm.txt"
-ROCM_WINDOWS_CONSTRAINTS_PATH = PROJECT_ROOT / "scripts" / "source-constraints-rocm-windows.txt"
-ROCM10_CONSTRAINTS_PATH = PROJECT_ROOT / "scripts" / "source-constraints-rocm10-gfx1103.txt"
 RELEASE_WORKFLOW_PATH = PROJECT_ROOT / ".github" / "workflows" / "release.yml"
 LOCAL_ONLY_REPO_RELATIVE_PATHS = (
     "blog.md",
@@ -87,7 +85,7 @@ def test_ci_runs_on_main_and_has_python_314_core_coverage() -> None:
     assert "      - main" in workflow_text
     assert "core-python-314:" in workflow_text
     assert 'python-version: "3.14"' in workflow_text
-    assert 'python -m pytest -q -m "not browser"' in workflow_text
+    assert "python -m pytest -q" in workflow_text
 
 
 def test_ci_builds_and_smokes_a_wheel_outside_the_checkout() -> None:
@@ -223,7 +221,7 @@ def test_integrated_release_script_has_native_accelerator_install_paths() -> Non
     assert '"xpu"' in script_text
     assert '"rocm"' in script_text
     assert "download.pytorch.org/whl/xpu" in script_text
-    assert "repo.radeon.com/rocm/windows" in script_text
+    assert "stable.repo.amd.com/rocm/whl-next/" in script_text
 
 
 def test_integrated_release_script_installs_pinned_cuda_runtime_for_torchless_bundles() -> None:
@@ -479,16 +477,9 @@ def test_xpu_track_is_pinned_and_in_release_matrix() -> None:
 
 def test_rocm_track_is_pinned_and_in_release_matrix() -> None:
     constraints = ROCM_CONSTRAINTS_PATH.read_text(encoding="utf-8")
-    windows_constraints = ROCM_WINDOWS_CONSTRAINTS_PATH.read_text(encoding="utf-8")
-    assert "torch==2.9.1+rocm7.2.1" in constraints
-    assert "torchvision==0.24.0+rocm7.2.1" in constraints
-    assert "torch==2.9.1+rocm7.2.1" in windows_constraints
-    assert "torchvision==0.24.1" in windows_constraints
-
-    rocm10_constraints = ROCM10_CONSTRAINTS_PATH.read_text(encoding="utf-8")
-    assert "torch==2.13.0+rocm10.0.0" in rocm10_constraints
-    assert "torchvision==0.28.0+rocm10.0.0" in rocm10_constraints
-    assert "rocm==10.0.0" in rocm10_constraints
+    assert "torch[device-gfx1103]==2.13.0+rocm10.0.0" in constraints
+    assert "torchvision[device-gfx1103]==0.28.0+rocm10.0.0" in constraints
+    assert "rocm==10.0.0" in constraints
 
     windows_build = SCRIPT_PATH.read_text(encoding="utf-8")
     release_workflow = RELEASE_WORKFLOW_PATH.read_text(encoding="utf-8")
@@ -504,19 +495,15 @@ def test_rocm_track_is_pinned_and_in_release_matrix() -> None:
 
     from shotsieve.dependency_constraints import model_requirements_for_runtime
 
-    assert model_requirements_for_runtime("ROCm")[-2:] == (
-        "torch==2.9.1+rocm7.2.1.lw.gitff65f5bc",
-        "torchvision==0.24.0+rocm7.2.1.gitb919bd0c",
+    assert model_requirements_for_runtime("ROCm")[-3:] == (
+        "torch[device-gfx1103]==2.13.0+rocm10.0.0",
+        "torchvision[device-gfx1103]==0.28.0+rocm10.0.0",
+        "rocm==10.0.0",
     )
 
     matrix = run_release_matrix("runtime")
     assert {entry["id"] for entry in matrix if entry["torchVariant"] == "rocm"} == {"windows-amd-rocm", "linux-amd-rocm"}
-    assert {
-        entry["id"] for entry in matrix if entry["torchVariant"] == "rocm10-gfx1103"
-    } == {"windows-amd-rocm10-gfx1103", "linux-amd-rocm10-gfx1103"}
-
     rocm_doc = (PROJECT_ROOT / "docs" / "amd-rocm.md").read_text(encoding="utf-8")
-    assert "rocm7.2.1" in rocm_doc
     assert "rocm10.0.0" in rocm_doc
     assert "device-gfx1103" in rocm_doc
     assert "--driver-version" in rocm_doc
@@ -577,22 +564,22 @@ def test_learned_iqa_extras_include_icecream_dependency() -> None:
     assert any(entry.startswith("icecream") for entry in learned_iqa_dependencies)
 
 
-def test_windows_build_dependencies_pin_setuptools_with_pkg_resources() -> None:
+def test_windows_build_dependencies_use_current_packaging_tools() -> None:
     pyproject_text = (PROJECT_ROOT / "pyproject.toml").read_text(encoding="utf-8")
     pyproject = tomllib.loads(pyproject_text)
 
     windows_build_dependencies = pyproject["project"]["optional-dependencies"]["windows-build"]
 
-    assert any(entry.startswith("setuptools<81") for entry in windows_build_dependencies)
+    assert any(entry.startswith("setuptools>=81.0.0,<82") for entry in windows_build_dependencies)
 
 
-def test_windows_build_dependencies_pin_pip_below_26_for_embedded_runtime_installs() -> None:
+def test_windows_build_dependencies_use_current_pip() -> None:
     pyproject_text = (PROJECT_ROOT / "pyproject.toml").read_text(encoding="utf-8")
     pyproject = tomllib.loads(pyproject_text)
 
     windows_build_dependencies = pyproject["project"]["optional-dependencies"]["windows-build"]
 
-    assert any(entry.startswith("pip<26") for entry in windows_build_dependencies)
+    assert any(entry.startswith("pip>=26") for entry in windows_build_dependencies)
 
 
 def test_tier1_release_matrix_covers_all_runtime_pack_targets() -> None:
@@ -606,12 +593,10 @@ def test_tier1_release_matrix_covers_all_runtime_pack_targets() -> None:
         "windows-nvidia-cuda",
         "windows-intel-xpu",
         "windows-amd-rocm",
-        "windows-amd-rocm10-gfx1103",
         "linux-cpu",
         "linux-nvidia-cuda",
         "linux-intel-xpu",
         "linux-amd-rocm",
-        "linux-amd-rocm10-gfx1103",
         "macos-cpu",
         "macos-apple-mps",
     }
@@ -622,10 +607,8 @@ def test_tier1_release_matrix_covers_all_runtime_pack_targets() -> None:
     assert targets["linux-intel-xpu"]["torchVariant"] == "xpu"
     assert targets["windows-amd-rocm"]["torchVariant"] == "rocm"
     assert targets["linux-amd-rocm"]["torchVariant"] == "rocm"
-    assert targets["windows-amd-rocm10-gfx1103"]["torchVariant"] == "rocm10-gfx1103"
-    assert targets["linux-amd-rocm10-gfx1103"]["torchVariant"] == "rocm10-gfx1103"
-    assert targets["windows-amd-rocm10-gfx1103"]["pythonVersion"] == "3.12"
-    assert targets["linux-amd-rocm10-gfx1103"]["pythonVersion"] == "3.12"
+    assert targets["windows-amd-rocm"]["pythonVersion"] == "3.14"
+    assert targets["linux-amd-rocm"]["pythonVersion"] == "3.14"
     assert targets["macos-apple-mps"]["runsOn"] == "macos-latest"
     assert targets["windows-cpu"]["constraintsFile"] == "scripts/release-constraints-torch.txt"
     assert targets["windows-nvidia-cuda"]["constraintsFile"] == "scripts/release-constraints-torch.txt"
@@ -633,6 +616,10 @@ def test_tier1_release_matrix_covers_all_runtime_pack_targets() -> None:
     assert targets["linux-nvidia-cuda"]["constraintsFile"] == "scripts/release-constraints-torch.txt"
     assert targets["macos-cpu"]["constraintsFile"] == "scripts/release-constraints-torch.txt"
     assert targets["macos-apple-mps"]["constraintsFile"] == "scripts/release-constraints-torch.txt"
+    assert targets["windows-amd-rocm"]["constraintsFile"] == "scripts/source-constraints-rocm.txt"
+    assert targets["linux-amd-rocm"]["constraintsFile"] == "scripts/source-constraints-rocm.txt"
+    assert len(targets) == 10
+    assert {target["pythonVersion"] for target in targets.values()} == {"3.14"}
     assert targets["linux-nvidia-cuda"]["torchVariant"] == "cuda"
     assert targets["macos-apple-mps"]["runtime"] == "mps"
     assert _string_value(targets["windows-cpu"]["archiveName"]).endswith(".zip")
