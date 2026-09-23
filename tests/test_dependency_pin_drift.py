@@ -123,7 +123,13 @@ def test_accelerator_constraint_files_match_runtime_source_of_truth(
     filename: str,
     requirements: tuple[str, ...],
 ) -> None:
-    _assert_pins_match(CONSTRAINT_DIR / filename, requirements, exact=True)
+    constraint_path = CONSTRAINT_DIR / filename
+    constraint_lines = constraint_path.read_text(encoding="utf-8").splitlines()
+    assert all(
+        "[" not in line.partition("#")[0]
+        for line in constraint_lines
+    ), f"{filename} cannot use requirement extras in pip constraints"
+    _assert_pins_match(constraint_path, requirements, exact=True)
 
 
 @pytest.mark.parametrize(

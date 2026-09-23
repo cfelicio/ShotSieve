@@ -1,4 +1,5 @@
 # AMD's stable ROCm 10.0 packages for gfx1103 (Radeon 780M), Windows/Linux.
-torch[device-gfx1103]==2.13.0+rocm10.0.0
-torchvision[device-gfx1103]==0.28.0+rocm10.0.0
+# Keep device extras on install requirements: pip constraints cannot contain extras.
+torch==2.13.0+rocm10.0.0
+torchvision==0.28.0+rocm10.0.0
 rocm==10.0.0

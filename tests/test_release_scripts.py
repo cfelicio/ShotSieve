@@ -477,8 +477,8 @@ def test_xpu_track_is_pinned_and_in_release_matrix() -> None:
 
 def test_rocm_track_is_pinned_and_in_release_matrix() -> None:
     constraints = ROCM_CONSTRAINTS_PATH.read_text(encoding="utf-8")
-    assert "torch[device-gfx1103]==2.13.0+rocm10.0.0" in constraints
-    assert "torchvision[device-gfx1103]==0.28.0+rocm10.0.0" in constraints
+    assert "torch==2.13.0+rocm10.0.0" in constraints
+    assert "torchvision==0.28.0+rocm10.0.0" in constraints
     assert "rocm==10.0.0" in constraints
 
     windows_build = SCRIPT_PATH.read_text(encoding="utf-8")
