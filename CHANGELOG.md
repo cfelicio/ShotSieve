@@ -38,6 +38,8 @@ All notable changes to this project will be documented in this file.
 - Installed optional runtime sidecars in a short-lived helper process so pip's
   import audit hook cannot affect later ShotSieve imports; this covers Torch
   and learned-IQA installs across CPU, CUDA, XPU, ROCm, and MPS builds.
+- Used short sibling staging paths for Torch and learned-IQA installs so deep
+  PyTorch header paths stay below Windows' legacy path limit.
 - Skipped Python bytecode caches when staging learned-IQA repairs, avoiding
   copy failures when Windows removes transient `.pyc` files during the copy.
 - Bundled AMD's ROCm selector wheel with the AMD runtime packs so the frozen

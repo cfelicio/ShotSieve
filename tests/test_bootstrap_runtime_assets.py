@@ -6,7 +6,7 @@ import io
 import json
 import sys
 import types
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 import tarfile
 import urllib.error
 from typing import Any
@@ -350,6 +350,7 @@ def test_install_learned_iqa_sidecar_uses_helper_process(
     assert installer_calls[0][0] == "learned-iqa"
     assert installer_calls[0][1] == "cuda"
     assert installer_calls[0][2] != site_packages
+    assert len(installer_calls[0][2].name) < len(site_packages.name)
     assert installer_calls[0][3] is False
 
 
@@ -415,6 +416,57 @@ def test_prepare_learned_iqa_staging_skips_python_bytecode_caches(tmp_path: Path
     assert (staging_dir / "networkx" / "algorithms" / "centrality" / "tests" / "test_centrality.py").read_text(encoding="utf-8") == "source"
     assert not (staging_dir / "networkx" / "algorithms" / "centrality" / "tests" / "__pycache__").exists()
     assert not (staging_dir / "stale-module.pyc").exists()
+
+
+def test_sidecar_staging_directory_is_shorter_than_every_release_target(tmp_path: Path) -> None:
+    target_ids = (
+        "windows-cpu",
+        "windows-nvidia-cuda",
+        "windows-intel-xpu",
+        "windows-amd-rocm",
+        "linux-cpu",
+        "linux-nvidia-cuda",
+        "linux-intel-xpu",
+        "linux-amd-rocm",
+        "macos-cpu",
+        "macos-apple-mps",
+    )
+
+    staging_dir = sidecar_module._create_sidecar_staging_dir(tmp_path)
+    sidecar_root = (
+        PureWindowsPath(r"C:\Users\tester\Downloads\windows-intel-xpu-preview-build")
+        / "ShotSieve-windows-intel-xpu-x64"
+        / "data"
+        / "runtime"
+        / "site-packages"
+    )
+    torch_header = (
+        PureWindowsPath("torch")
+        / "include"
+        / "ATen"
+        / "native"
+        / "transformers"
+        / "cuda"
+        / "mem_eff_attention"
+        / "epilogue"
+        / "epilogue_thread_apply_logsumexp.h"
+    )
+
+    try:
+        assert staging_dir.parent == tmp_path
+        assert len(staging_dir.name) == 8
+        assert all(len(staging_dir.name) < len(target_id) for target_id in target_ids)
+        final_header_path = sidecar_root / "windows-intel-xpu" / torch_header
+        short_staged_header_path = sidecar_root / staging_dir.name / torch_header
+        long_staged_header_path = (
+            sidecar_root
+            / ".windows-intel-xpu.learned-install-7nf22g_2"
+            / torch_header
+        )
+        assert len(str(short_staged_header_path)) < len(str(final_header_path)) < 260
+        assert len(str(long_staged_header_path)) > 260
+    finally:
+        staging_dir.rmdir()
 
 
 def test_run_sidecar_install_subprocess_uses_frozen_helper_command(

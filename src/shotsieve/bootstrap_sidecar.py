@@ -11,11 +11,11 @@ import os
 import platform
 import pkgutil
 import re
+import secrets
 import shutil
 import subprocess
 import sys
 import tarfile
-import tempfile
 import time
 import traceback
 import urllib.request
@@ -621,6 +621,25 @@ def _commit_staged_sidecar(staging_dir: Path, site_packages: Path) -> None:
             shutil.rmtree(previous_dir, ignore_errors=True)
 
 
+def _create_sidecar_staging_dir(parent_dir: Path) -> Path:
+    """Create a short temporary sibling for Windows' legacy path limit.
+
+    Torch includes deeply nested headers. A descriptive temporary name based
+    on the target id can push those paths past MAX_PATH while copying an
+    existing sidecar, even when the installed path itself is still usable.
+    Every release target id is longer than this eight-character name.
+    """
+    parent_dir.mkdir(parents=True, exist_ok=True)
+    for _ in range(128):
+        staging_dir = parent_dir / f".s{secrets.token_hex(3)}"
+        try:
+            staging_dir.mkdir()
+        except FileExistsError:
+            continue
+        return staging_dir
+    raise FileExistsError(f"Could not allocate a temporary sidecar staging directory in {parent_dir}.")
+
+
 def _run_sidecar_install_subprocess(
     *,
     operation: str,
@@ -743,7 +762,7 @@ def _install_torch_sidecar_with_embedded_pip(
         pass
 
     plan = torch_install_plan(target_id=site_packages.name, runtime=runtime)
-    staging_dir = Path(tempfile.mkdtemp(prefix=f".{site_packages.name}.install-", dir=site_packages.parent))
+    staging_dir = _create_sidecar_staging_dir(site_packages.parent)
 
     def _append_debug_log(
         *,
@@ -1258,7 +1277,7 @@ def install_learned_iqa_sidecar(
     site_packages = Path(site_packages)
     site_packages.parent.mkdir(parents=True, exist_ok=True)
     embedded_install_result: bool | None = False
-    staging_dir = Path(tempfile.mkdtemp(prefix=f".{site_packages.name}.learned-install-", dir=site_packages.parent))
+    staging_dir = _create_sidecar_staging_dir(site_packages.parent)
     try:
         with _sidecar_install_lock(site_packages):
             _prepare_learned_iqa_staging(
