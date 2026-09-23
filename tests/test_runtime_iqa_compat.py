@@ -210,8 +210,15 @@ def test_runtime_warning_filter_suppresses_known_noisy_messages() -> None:
             UserWarning,
         )
         warnings.warn("unrelated warning should still be visible", UserWarning)
+        warnings.warn("unclosed <socket.socket fd=12, type=1>", ResourceWarning)
 
-    visible_messages = [str(entry.message) for entry in captured]
+    # macOS can deliver ResourceWarnings from earlier loopback-socket cleanup
+    # during this capture window; the runtime filters concern IQA User/FutureWarnings.
+    visible_messages = [
+        str(entry.message)
+        for entry in captured
+        if issubclass(entry.category, (UserWarning, FutureWarning))
+    ]
     assert visible_messages == [
         "`torch.jit.load` is not supported in Python 3.14+ and may break. Please switch to `torch.compile` or `torch.export`.",
         "unrelated warning should still be visible",
