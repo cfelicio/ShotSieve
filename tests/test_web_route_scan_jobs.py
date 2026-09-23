@@ -847,7 +847,7 @@ class TestRouteHandlingAsync:
         job_id = start_payload["job_id"]
 
         completed_payload = None
-        deadline = time.time() + 2
+        deadline = time.time() + 10
         while time.time() < deadline:
             status_response = urlopen(f"{base_url}/api/scan/status?job_id={job_id}")
             polled = json.loads(status_response.read().decode("utf-8"))

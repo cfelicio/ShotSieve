@@ -9,6 +9,7 @@ import types
 from pathlib import Path, PureWindowsPath
 import tarfile
 import urllib.error
+from types import SimpleNamespace
 from typing import Any
 import warnings
 import zipfile
@@ -951,7 +952,7 @@ def test_patch_distlib_finder_for_frozen_suppresses_distutils_warning_during_imp
 
     monkeypatch.setattr(sys, "frozen", True, raising=False)
     monkeypatch.setattr(sidecar_module.importlib, "import_module", fake_import_module)
-    monkeypatch.setattr(sidecar_module.pkgutil, "get_loader", lambda name: None, raising=False)
+    monkeypatch.setattr(sidecar_module.importlib.util, "find_spec", lambda name: None)
 
     with warnings.catch_warnings(record=True) as recorded:
         warnings.simplefilter("always")
@@ -960,7 +961,7 @@ def test_patch_distlib_finder_for_frozen_suppresses_distutils_warning_during_imp
     assert recorded == []
 
 
-def test_patch_distlib_finder_for_frozen_registers_pkgutil_loader_type(
+def test_patch_distlib_finder_for_frozen_registers_spec_loader_type(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     fake_resources_module = _new_module("pip._vendor.distlib.resources")
@@ -980,7 +981,7 @@ def test_patch_distlib_finder_for_frozen_registers_pkgutil_loader_type(
     class DistlibLoader:
         pass
 
-    class PkgutilLoader:
+    class SpecLoader:
         pass
 
     fake_distlib_module = _new_module("pip._vendor.distlib")
@@ -995,13 +996,17 @@ def test_patch_distlib_finder_for_frozen_registers_pkgutil_loader_type(
 
     monkeypatch.setattr(sys, "frozen", True, raising=False)
     monkeypatch.setattr(sidecar_module.importlib, "import_module", fake_import_module)
-    monkeypatch.setattr(sidecar_module.pkgutil, "get_loader", lambda name: PkgutilLoader(), raising=False)
+    monkeypatch.setattr(
+        sidecar_module.importlib.util,
+        "find_spec",
+        lambda name: SimpleNamespace(loader=SpecLoader()),
+    )
 
     sidecar_module._patch_distlib_finder_for_frozen()
 
     registered_types = {loader_type for loader_type, _ in register_calls}
     assert DistlibLoader in registered_types
-    assert PkgutilLoader in registered_types
+    assert SpecLoader in registered_types
 
 
 def test_patch_distlib_finder_for_frozen_wraps_finder_with_resource_fallback(
@@ -1040,7 +1045,11 @@ def test_patch_distlib_finder_for_frozen_wraps_finder_with_resource_fallback(
 
     monkeypatch.setattr(sys, "frozen", True, raising=False)
     monkeypatch.setattr(sidecar_module.importlib, "import_module", fake_import_module)
-    monkeypatch.setattr(sidecar_module.pkgutil, "get_loader", lambda name: DistlibLoader(), raising=False)
+    monkeypatch.setattr(
+        sidecar_module.importlib.util,
+        "find_spec",
+        lambda name: SimpleNamespace(loader=DistlibLoader()),
+    )
 
     sidecar_module._patch_distlib_finder_for_frozen()
 

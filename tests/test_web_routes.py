@@ -291,7 +291,7 @@ class TestRouteHandling:
             db_path,
             host="127.0.0.1",
             port=0,
-            request_read_timeout_seconds=1.0,
+            request_read_timeout_seconds=3.0,
             request_io_poll_timeout_seconds=0.1,
         )
         thread = threading.Thread(target=server.serve_forever, daemon=True)

@@ -35,6 +35,8 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- Replaced deprecated `pkgutil.get_loader` use with the importlib module spec
+  lookup when registering frozen pip resource loaders.
 - Installed optional runtime sidecars in a short-lived helper process so pip's
   import audit hook cannot affect later ShotSieve imports; this covers Torch
   and learned-IQA installs across CPU, CUDA, XPU, ROCm, and MPS builds.

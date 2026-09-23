@@ -5,11 +5,11 @@ import csv
 import errno
 import hashlib
 import importlib
+import importlib.util
 import io
 import json
 import os
 import platform
-import pkgutil
 import re
 import secrets
 import shutil
@@ -473,7 +473,6 @@ def _patch_distlib_finder_for_frozen() -> None:
         return
 
     imp_mod = importlib
-    pkg_mod = pkgutil
     suppress_func = _suppress_distutils_replacement_warning
 
     try:
@@ -495,16 +494,17 @@ def _patch_distlib_finder_for_frozen() -> None:
     if loader is not None:
         loader_types.add(type(loader))
 
-    get_loader = getattr(pkg_mod, "get_loader", None)
-    if callable(get_loader):
+    find_spec = getattr(importlib.util, "find_spec", None)
+    if callable(find_spec):
         try:
-            pkgutil_loader = get_loader("pip._vendor.distlib")
+            distlib_spec = find_spec("pip._vendor.distlib")
         except Exception:
-            pkgutil_loader = None
+            distlib_spec = None
     else:
-        pkgutil_loader = None
-    if pkgutil_loader is not None:
-        loader_types.add(type(pkgutil_loader))
+        distlib_spec = None
+    spec_loader = getattr(distlib_spec, "loader", None)
+    if spec_loader is not None:
+        loader_types.add(type(spec_loader))
 
     try:
         pyi_importers = imp_mod.import_module("pyimod02_importers")
