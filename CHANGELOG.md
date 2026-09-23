@@ -2,7 +2,7 @@
 
 All notable changes to this project will be documented in this file.
 
-## [Unreleased]
+## [0.5.0] - Unreleased
 
 ### Changed
 
@@ -35,6 +35,11 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- Installed optional runtime sidecars in a short-lived helper process so pip's
+  import audit hook cannot affect later ShotSieve imports; this covers Torch
+  and learned-IQA installs across CPU, CUDA, XPU, ROCm, and MPS builds.
+- Skipped Python bytecode caches when staging learned-IQA repairs, avoiding
+  copy failures when Windows removes transient `.pyc` files during the copy.
 - Bundled AMD's ROCm selector wheel with the AMD runtime packs so the frozen
   sidecar installer resolves stable ROCm 10 packages without a source-build
   subprocess.
@@ -74,8 +79,7 @@ All notable changes to this project will be documented in this file.
 
 ### Documentation
 
-- Renamed the README release heading to cover the 0.4 series and corrected the
-  malformed AMD ROCm Windows prerequisite bullet.
+- Corrected the malformed AMD ROCm Windows prerequisite bullet.
 - Updated `audit.md` with dispositions and verification for all 16 findings,
   documented remaining evidence limits, clarified the local-only `--host`
   contract, aligned the learned-IQA source install with tested constraints, and

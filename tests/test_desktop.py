@@ -107,6 +107,19 @@ def test_main_uses_default_data_dir_and_no_browser(monkeypatch: pytest.MonkeyPat
     assert called["open_browser"] is False
 
 
+def test_main_dispatches_private_sidecar_helper_command(monkeypatch: pytest.MonkeyPatch) -> None:
+    import multiprocessing
+
+    monkeypatch.setattr(multiprocessing, "freeze_support", lambda: None)
+    monkeypatch.setattr(sys, "argv", ["shotsieve-desktop", "--_shotsieve-install-sidecar"])
+    monkeypatch.setattr(desktop_module, "dispatch_sidecar_install_command", lambda: 7)
+
+    with pytest.raises(SystemExit) as exc_info:
+        desktop_module.main()
+
+    assert exc_info.value.code == 7
+
+
 def test_main_uses_custom_data_dir(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     custom_data_dir = tmp_path / "custom-data"
     called: dict[str, object] = {}

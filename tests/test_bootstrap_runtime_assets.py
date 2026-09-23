@@ -311,45 +311,46 @@ def test_extract_archive_accepts_regular_tar_files(tmp_path: Path) -> None:
     assert extracted.read_bytes() == b"runtime-binary"
 
 
-def test_install_torch_sidecar_uses_embedded_installer(
+def test_install_torch_sidecar_uses_helper_process(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     site_packages = tmp_path / "site-packages"
-    embedded_calls: list[tuple[str, Path, bool]] = []
+    installer_calls: list[tuple[str, Path, bool]] = []
 
-    def fake_embedded_install(*, runtime: str, site_packages: Path, force_reinstall: bool = False, output_func=print):
-        embedded_calls.append((runtime, site_packages, force_reinstall))
+    def fake_subprocess_install(*, operation: str, runtime: str, site_packages: Path, force_reinstall: bool, output_func=print):
+        installer_calls.append((operation, site_packages, force_reinstall))
         return True
 
-    monkeypatch.setattr(sidecar_module, "_install_torch_sidecar_with_embedded_pip", fake_embedded_install)
+    monkeypatch.setattr(sidecar_module, "_run_sidecar_install_subprocess", fake_subprocess_install)
 
     installed = sidecar_module.install_torch_sidecar(runtime="cuda", site_packages=site_packages)
 
     assert installed is True
-    assert embedded_calls == [("cuda", site_packages, False)]
+    assert installer_calls == [("torch", site_packages, False)]
 
 
-def test_install_learned_iqa_sidecar_uses_embedded_installer(
+def test_install_learned_iqa_sidecar_uses_helper_process(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     site_packages = tmp_path / "site-packages"
-    embedded_calls: list[tuple[str, Path, bool]] = []
+    installer_calls: list[tuple[str, str, Path, bool]] = []
 
-    def fake_embedded_install(*, runtime: str, site_packages: Path, force_reinstall: bool = False, output_func=print):
-        embedded_calls.append((runtime, site_packages, force_reinstall))
+    def fake_subprocess_install(*, operation: str, runtime: str, site_packages: Path, force_reinstall: bool, output_func=print):
+        installer_calls.append((operation, runtime, site_packages, force_reinstall))
         return True
 
-    monkeypatch.setattr(sidecar_module, "_install_learned_iqa_sidecar_with_embedded_pip", fake_embedded_install, raising=False)
+    monkeypatch.setattr(sidecar_module, "_run_sidecar_install_subprocess", fake_subprocess_install)
 
     installed = sidecar_module.install_learned_iqa_sidecar(runtime="cuda", site_packages=site_packages)
 
     assert installed is True
-    assert len(embedded_calls) == 1
-    assert embedded_calls[0][0] == "cuda"
-    assert embedded_calls[0][1] != site_packages
-    assert embedded_calls[0][2] is False
+    assert len(installer_calls) == 1
+    assert installer_calls[0][0] == "learned-iqa"
+    assert installer_calls[0][1] == "cuda"
+    assert installer_calls[0][2] != site_packages
+    assert installer_calls[0][3] is False
 
 
 def test_install_learned_iqa_sidecar_replaces_old_tree_after_clean_staged_install(
@@ -365,7 +366,8 @@ def test_install_learned_iqa_sidecar_replaces_old_tree_after_clean_staged_instal
     (site_packages / "transformers").mkdir()
     (site_packages / "transformers" / "stale-module.py").write_text("stale", encoding="utf-8")
 
-    def fake_embedded_install(*, runtime: str, site_packages: Path, force_reinstall: bool = False, output_func=print):
+    def fake_subprocess_install(*, operation: str, runtime: str, site_packages: Path, force_reinstall: bool, output_func=print):
+        assert operation == "learned-iqa"
         assert runtime == "cuda"
         assert force_reinstall is True
         assert (site_packages / "torch" / "__init__.py").read_text(encoding="utf-8") == "torch"
@@ -377,7 +379,7 @@ def test_install_learned_iqa_sidecar_replaces_old_tree_after_clean_staged_instal
         (site_packages / "transformers" / "fresh-module.py").write_text("fresh", encoding="utf-8")
         return True
 
-    monkeypatch.setattr(sidecar_module, "_install_learned_iqa_sidecar_with_embedded_pip", fake_embedded_install)
+    monkeypatch.setattr(sidecar_module, "_run_sidecar_install_subprocess", fake_subprocess_install)
 
     installed = sidecar_module.install_learned_iqa_sidecar(
         runtime="cuda",
@@ -391,6 +393,121 @@ def test_install_learned_iqa_sidecar_replaces_old_tree_after_clean_staged_instal
     state = json.loads((site_packages / ".shotsieve-runtime.json").read_text(encoding="utf-8"))
     assert state["plan"]["target_id"] == site_packages.name
     assert state["learned_iqa_complete"] is True
+
+
+def test_prepare_learned_iqa_staging_skips_python_bytecode_caches(tmp_path: Path) -> None:
+    source_dir = tmp_path / "source"
+    staging_dir = tmp_path / "staging"
+    regular_package = source_dir / "networkx" / "algorithms" / "centrality" / "tests"
+    regular_package.mkdir(parents=True)
+    (regular_package / "test_centrality.py").write_text("source", encoding="utf-8")
+    cache_dir = regular_package / "__pycache__"
+    cache_dir.mkdir()
+    (cache_dir / "test_centrality.cpython-314.pyc").write_bytes(b"bytecode")
+    (source_dir / "stale-module.pyc").write_bytes(b"bytecode")
+
+    sidecar_module._prepare_learned_iqa_staging(
+        source_dir=source_dir,
+        staging_dir=staging_dir,
+        runtime="cuda",
+    )
+
+    assert (staging_dir / "networkx" / "algorithms" / "centrality" / "tests" / "test_centrality.py").read_text(encoding="utf-8") == "source"
+    assert not (staging_dir / "networkx" / "algorithms" / "centrality" / "tests" / "__pycache__").exists()
+    assert not (staging_dir / "stale-module.pyc").exists()
+
+
+def test_run_sidecar_install_subprocess_uses_frozen_helper_command(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    site_packages = tmp_path / "site packages"
+    calls: list[dict[str, Any]] = []
+    messages: list[str] = []
+
+    def fake_run(command, **kwargs):
+        calls.append({"command": command, **kwargs})
+        return type("Completed", (), {"returncode": 0, "stdout": "installed\n", "stderr": ""})()
+
+    monkeypatch.setattr(sidecar_module.sys, "frozen", True, raising=False)
+    monkeypatch.setattr(sidecar_module.subprocess, "run", fake_run)
+
+    installed = sidecar_module._run_sidecar_install_subprocess(
+        operation="torch",
+        runtime="xpu",
+        site_packages=site_packages,
+        force_reinstall=True,
+        output_func=messages.append,
+    )
+
+    assert installed is True
+    assert calls[0]["command"][0] == sys.executable
+    assert calls[0]["command"][1:] == [
+        sidecar_module.SIDECAR_INSTALL_COMMAND,
+        "torch",
+        "xpu",
+        str(site_packages),
+        "1",
+    ]
+    assert calls[0]["env"] is None
+    assert calls[0]["capture_output"] is True
+    assert messages == ["installed"]
+
+
+def test_run_sidecar_install_subprocess_uses_source_module(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[dict[str, Any]] = []
+
+    def fake_run(command, **kwargs):
+        calls.append({"command": command, **kwargs})
+        return type("Completed", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+
+    monkeypatch.setattr(sidecar_module.sys, "frozen", False, raising=False)
+    monkeypatch.setattr(sidecar_module.subprocess, "run", fake_run)
+
+    installed = sidecar_module._run_sidecar_install_subprocess(
+        operation="learned-iqa",
+        runtime="cpu",
+        site_packages=tmp_path / "staging",
+        force_reinstall=False,
+    )
+
+    assert installed is True
+    assert calls[0]["command"][:3] == [
+        sys.executable,
+        "-m",
+        "shotsieve.bootstrap_sidecar",
+    ]
+    assert calls[0]["command"][3] == sidecar_module.SIDECAR_INSTALL_COMMAND
+    assert str(Path(sidecar_module.__file__).resolve().parent.parent) in calls[0]["env"]["PYTHONPATH"]
+
+
+def test_dispatch_sidecar_install_command_runs_requested_installer(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    site_packages = tmp_path / "staging"
+    calls: list[tuple[str, str, Path, bool]] = []
+
+    def fake_torch_install(*, runtime: str, site_packages: Path, force_reinstall: bool = False):
+        calls.append(("torch", runtime, site_packages, force_reinstall))
+        return True
+
+    monkeypatch.setattr(sidecar_module, "_install_torch_sidecar_with_embedded_pip", fake_torch_install)
+    command_args = [
+        sidecar_module.SIDECAR_INSTALL_COMMAND,
+        "torch",
+        "xpu",
+        str(site_packages),
+        "1",
+    ]
+
+    exit_code = sidecar_module.dispatch_sidecar_install_command(command_args)
+
+    assert exit_code == 0
+    assert calls == [("torch", "xpu", site_packages, True)]
 
 
 def test_embedded_install_learned_iqa_sidecar_installs_expected_packages(

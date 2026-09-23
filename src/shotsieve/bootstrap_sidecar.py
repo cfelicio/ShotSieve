@@ -12,6 +12,7 @@ import platform
 import pkgutil
 import re
 import shutil
+import subprocess
 import sys
 import tarfile
 import tempfile
@@ -55,6 +56,7 @@ SIDECAR_LOCK_SUFFIX = ".install.lock"
 SIDECAR_STATE_VERSION = 2
 SIDECAR_LOCK_TIMEOUT_SECONDS = 300.0
 SIDECAR_LOCK_POLL_SECONDS = 0.2
+SIDECAR_INSTALL_COMMAND = "--_shotsieve-install-sidecar"
 DISTUTILS_REPLACEMENT_WARNING_PATTERN = r"Setuptools is replacing distutils\..*"
 PIP_UNEXPECTED_IMPORT_WARNING_PATTERN = r"DEPRECATION: Unexpected import of '.*' after pip install started\..*"
 
@@ -147,7 +149,7 @@ def _install_openai_clip_source(site_packages: Path) -> None:
     """Install the pinned pure-Python openai-clip source package in place."""
     request = urllib.request.Request(
         _OPENAI_CLIP_SOURCE_URL,
-        headers={"User-Agent": "ShotSieve-runtime/0.4"},
+        headers={"User-Agent": "ShotSieve-runtime/0.5.0"},
     )
     with urllib.request.urlopen(request, timeout=120) as response:
         archive_bytes = response.read()
@@ -619,6 +621,101 @@ def _commit_staged_sidecar(staging_dir: Path, site_packages: Path) -> None:
             shutil.rmtree(previous_dir, ignore_errors=True)
 
 
+def _run_sidecar_install_subprocess(
+    *,
+    operation: str,
+    runtime: str,
+    site_packages: Path,
+    force_reinstall: bool,
+    output_func=print,
+) -> bool:
+    """Run embedded pip outside the long-lived app process.
+
+    pip installs a process-wide audit hook that warns about later imports and
+    will reject them starting in pip 26.3. Isolating each sidecar install keeps
+    that hook inside a short-lived helper instead of the desktop application.
+    """
+    helper_args = [
+        SIDECAR_INSTALL_COMMAND,
+        operation,
+        runtime,
+        str(site_packages),
+        "1" if force_reinstall else "0",
+    ]
+    if getattr(sys, "frozen", False):
+        command = [sys.executable, *helper_args]
+        env = None
+    else:
+        command = [sys.executable, "-m", "shotsieve.bootstrap_sidecar", *helper_args]
+        env = os.environ.copy()
+        package_root = str(Path(__file__).resolve().parent.parent)
+        existing_pythonpath = env.get("PYTHONPATH")
+        pythonpath_entries = [package_root]
+        if existing_pythonpath:
+            pythonpath_entries.append(existing_pythonpath)
+        env["PYTHONPATH"] = os.pathsep.join(pythonpath_entries)
+
+    try:
+        completed = subprocess.run(
+            command,
+            env=env,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            check=False,
+        )
+    except OSError as exc:
+        output_func(f"Could not start the {operation} sidecar installer: {exc}")
+        return False
+
+    for stream in (completed.stdout, completed.stderr):
+        if stream:
+            message = stream.rstrip()
+            if message:
+                output_func(message)
+    if completed.returncode != 0:
+        output_func(
+            f"The {operation} sidecar installer exited with code "
+            f"{completed.returncode}."
+        )
+        return False
+    return True
+
+
+def dispatch_sidecar_install_command(argv: list[str] | None = None) -> int | None:
+    """Dispatch the private helper command used by source and frozen builds."""
+    command_args = list(sys.argv[1:] if argv is None else argv)
+    if not command_args or command_args[0] != SIDECAR_INSTALL_COMMAND:
+        return None
+    if len(command_args) != 5:
+        print(f"Invalid {SIDECAR_INSTALL_COMMAND} arguments.", file=sys.stderr)
+        return 2
+
+    _, operation, runtime, raw_site_packages, raw_force_reinstall = command_args
+    if operation not in {"torch", "learned-iqa"} or raw_force_reinstall not in {"0", "1"}:
+        print(f"Invalid {SIDECAR_INSTALL_COMMAND} arguments.", file=sys.stderr)
+        return 2
+
+    installer = {
+        "torch": _install_torch_sidecar_with_embedded_pip,
+        "learned-iqa": _install_learned_iqa_sidecar_with_embedded_pip,
+    }[operation]
+    try:
+        installed = installer(
+            runtime=runtime,
+            site_packages=Path(raw_site_packages),
+            force_reinstall=raw_force_reinstall == "1",
+        )
+    except Exception:
+        traceback.print_exc()
+        return 1
+    if installed is None:
+        print("Bundled pip runtime installer is unavailable in this build.", file=sys.stderr)
+        return 1
+    return 0 if installed else 1
+
+
 def _install_torch_sidecar_with_embedded_pip(
     *,
     runtime: str,
@@ -838,20 +935,13 @@ def install_torch_sidecar(
     output_func=print,
     force_reinstall: bool = False,
 ) -> bool:
-    embedded_install_result = _install_torch_sidecar_with_embedded_pip(
+    return _run_sidecar_install_subprocess(
+        operation="torch",
         runtime=runtime,
         site_packages=site_packages,
         force_reinstall=force_reinstall,
         output_func=output_func,
     )
-    if embedded_install_result is None:
-        output_func(
-            "Bundled pip runtime installer is unavailable in this build. "
-            "The app will continue without GPU-accelerated learned models."
-        )
-        return False
-
-    return embedded_install_result
 
 
 def _learned_iqa_packages_for_runtime(runtime: str) -> list[str]:
@@ -982,14 +1072,30 @@ def _prepare_learned_iqa_staging(*, source_dir: Path, staging_dir: Path, runtime
     """Copy the Torch base and remove learned packages before reinstalling."""
     if source_dir.exists():
         for source_path in source_dir.iterdir():
+            if _is_python_bytecode_artifact(source_path.name):
+                continue
             destination_path = staging_dir / source_path.name
             if source_path.is_dir() and not source_path.is_symlink():
-                shutil.copytree(source_path, destination_path, dirs_exist_ok=True)
+                shutil.copytree(
+                    source_path,
+                    destination_path,
+                    dirs_exist_ok=True,
+                    ignore=_ignore_python_bytecode_artifacts,
+                )
             else:
                 shutil.copy2(source_path, destination_path)
 
     for package_name in _learned_iqa_packages_for_runtime(runtime):
         _purge_sidecar_distribution(staging_dir, package_name)
+
+
+def _is_python_bytecode_artifact(name: str) -> bool:
+    normalized_name = name.casefold()
+    return normalized_name == "__pycache__" or normalized_name.endswith((".pyc", ".pyo"))
+
+
+def _ignore_python_bytecode_artifacts(_directory: str, names: list[str]) -> list[str]:
+    return [name for name in names if _is_python_bytecode_artifact(name)]
 
 
 def _install_learned_iqa_sidecar_with_embedded_pip(
@@ -1160,7 +1266,8 @@ def install_learned_iqa_sidecar(
                 staging_dir=staging_dir,
                 runtime=runtime,
             )
-            embedded_install_result = _install_learned_iqa_sidecar_with_embedded_pip(
+            embedded_install_result = _run_sidecar_install_subprocess(
+                operation="learned-iqa",
                 runtime=runtime,
                 # A --target reinstall does not remove files from an older
                 # package version. Build in a clean tree so Transformers and
@@ -1182,13 +1289,6 @@ def install_learned_iqa_sidecar(
     finally:
         if staging_dir.exists():
             shutil.rmtree(staging_dir, ignore_errors=True)
-    if embedded_install_result is None:
-        output_func(
-            "Bundled pip runtime installer is unavailable in this build. "
-            "The app will continue with learned backends disabled."
-        )
-        return False
-
     return embedded_install_result
 
 
@@ -1239,3 +1339,8 @@ def _sidecar_environment(site_packages: Path) -> dict[str, str]:
     if runtime_path and runtime_path != (existing_path or ""):
         updates["PATH"] = runtime_path
     return updates
+
+
+if __name__ == "__main__":
+    helper_exit_code = dispatch_sidecar_install_command()
+    raise SystemExit(2 if helper_exit_code is None else helper_exit_code)

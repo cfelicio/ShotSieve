@@ -11,6 +11,7 @@ import traceback
 from pathlib import Path
 
 from shotsieve.bootstrap_sidecar import (
+    dispatch_sidecar_install_command,
     install_learned_iqa_sidecar,
     install_torch_sidecar,
     sidecar_site_packages_dir,
@@ -564,6 +565,10 @@ def build_parser() -> argparse.ArgumentParser:
 def main() -> None:
     import multiprocessing
     multiprocessing.freeze_support()
+
+    helper_exit_code = dispatch_sidecar_install_command()
+    if helper_exit_code is not None:
+        raise SystemExit(helper_exit_code)
 
     parser = build_parser()
     args = parser.parse_args()
