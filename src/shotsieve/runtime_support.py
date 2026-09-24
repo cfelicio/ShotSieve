@@ -132,6 +132,13 @@ def prepare_runtime_dll_search_path(sidecar_path: Path) -> tuple[Path, ...]:
     if sys.platform != "win32":
         return ()
 
+    # Intel's SYCL runtime also loads dependencies through LoadLibraryW.
+    # AddDllDirectory alone does not cover that search path. This is required
+    # for direct EXE launches as well as launches through the bootstrap helper.
+    os.environ["PATH"] = compose_runtime_dll_path(
+        existing=os.environ.get("PATH"), sidecar_path=sidecar_path,
+    )
+
     add_dll_directory = getattr(os, "add_dll_directory", None)
     if not callable(add_dll_directory):
         return ()

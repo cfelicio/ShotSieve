@@ -79,13 +79,37 @@ the native tensor check below is required. If the device or driver is outside
 the PyTorch matrix, select CPU.
 
 Portable XPU bundles install Torch and its native Intel dependencies on first
-use. The launcher also exposes the sidecar's `Library/bin` and Torch library
-directories to Windows DLL loading. A fixed 0.5.x build invalidates an older
-incomplete sidecar and installs the dependency-complete set again. If the
-runtime still reports `WinError 126` after that repair, the missing component
-is outside the application bundle—most commonly the Intel graphics/Level Zero
-driver, Microsoft Visual C++ runtime, or unsupported hardware—and the native
-check below should be run directly to distinguish those cases.
+use. Direct EXE launches now expose the sidecar's `Library/bin`, Torch library,
+and other runtime directories through both Windows DLL directory registration
+and the process `PATH`. Intel's runtime also uses `LoadLibraryW`; registering
+DLL directories alone left `c10_xpu.dll` unloadable even when every wheel was
+installed. This was reproduced with the pinned 2.14.0 XPU wheel and fixed by
+setting the process `PATH` before the first Torch import.
+
+A successful Torch import with no usable XPU device permits learned models to
+run on CPU under automatic device selection. The launcher does not offer to
+reinstall an importable XPU runtime just because no XPU device was found. A
+native import failure is reported separately and prevents a redundant learned
+dependency installation. `WinError 126` alone does not identify the missing
+library and must not be treated as proof of an unsupported GPU or bad driver.
+
+For an older Iris Xe laptop, use the Windows CPU bundle for the supported CPU
+path without the Intel GPU runtime dependencies. Installing XPU wheels or
+repairing their DLL search path does not extend PyTorch's validated GPU list.
+
+After updating to the fixed preview, check the portable runtime from PowerShell:
+
+```powershell
+.\ShotSieve-Intel-XPU.exe --check-runtime
+```
+
+This performs the normal dependency preparation, then checks a CPU tensor
+operation, TorchVision's native NMS operation, and learned-IQA imports without
+downloading model weights or starting the UI. It exits nonzero on failure and
+prints `accelerator_available` separately; `false` with passing CPU operations
+means CPU learned models remain usable. If an accelerator is available, the
+check also runs a tensor operation on it. Preview and release CI run this
+check on the frozen Windows XPU executable after a fresh sidecar installation.
 
 ## Install on Linux
 

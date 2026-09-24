@@ -35,6 +35,16 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- Fixed `c10_xpu.dll` load failures on direct Windows EXE launches by adding
+  sidecar DLL directories to the process `PATH` as well as `AddDllDirectory`.
+  Verified the pinned XPU wheel with real CPU tensor and TorchVision native
+  operations after reproducing the failure without the path correction.
+- Distinguished Torch import failures from an unavailable GPU. An importable
+  XPU runtime can run learned models on CPU without repeated repair prompts;
+  broken Torch imports no longer trigger an ineffective learned-IQA install.
+- Added `--check-runtime` and a frozen Windows XPU first-run check to preview
+  and release CI, covering dependency installation, native operations, and
+  learned imports beyond the existing launcher help check.
 - Replaced deprecated `pkgutil.get_loader` use with the importlib module spec
   lookup when registering frozen pip resource loaders.
 - Installed optional runtime sidecars in a short-lived helper process so pip's

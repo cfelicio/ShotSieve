@@ -299,6 +299,22 @@ jobs:
 
           & $launcher --help | Out-Null
 
+      - name: Exercise frozen Windows XPU first-run installation and native imports
+        if: matrix.id == 'windows-intel-xpu'
+        shell: pwsh
+        env:
+          SHOTSIEVE_BOOTSTRAP_AUTO_INSTALL_TORCH: "1"
+          SHOTSIEVE_BOOTSTRAP_AUTO_INSTALL_LEARNED_IQA: "1"
+          HF_HUB_OFFLINE: "1"
+          TRANSFORMERS_OFFLINE: "1"
+        run: |
+          $plan = Get-Content bundle-plan.json -Raw | ConvertFrom-Json
+          $launcher = Join-Path $plan.distPath $plan.target.executableName
+          & $launcher --check-runtime --no-browser
+          if ($LASTEXITCODE -ne 0) {
+            throw "Frozen XPU runtime installation or native import check failed"
+          }
+
       - name: Upload portable bundle artifact
         uses: actions/upload-artifact@v6
         with:

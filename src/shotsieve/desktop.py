@@ -4,6 +4,7 @@ import argparse
 import importlib
 import importlib.util
 import inspect
+import json
 import os
 import platform
 import sys
@@ -239,6 +240,26 @@ def runtime_bundle_has_usable_cuda_torch(*, force_reload: bool = False) -> bool:
     return cuda_runtime_is_usable(torch_module)
 
 
+def _torch_runtime_import_diagnostic() -> str | None:
+    """Separate a broken native import from an unavailable accelerator."""
+    _clear_failed_torch_imports()
+    try:
+        importlib.invalidate_caches()
+        importlib.import_module("torch")
+    except Exception as exc:
+        return f"{type(exc).__name__}: {exc}"
+    return None
+
+
+def _report_xpu_cpu_fallback(output_func) -> None:
+    output_func(
+        "PyTorch loaded successfully, but no usable XPU device was found. "
+        "Learned models can run on CPU with automatic device selection. "
+        "Older Intel Iris Xe graphics are outside the validated PyTorch XPU hardware list; "
+        "reinstalling the XPU wheels will not add hardware support."
+    )
+
+
 def runtime_bundle_has_usable_torch(target_id: str | None, *, force_reload: bool = False) -> bool:
     """Probe the already-importable runtime for the selected target family."""
     normalized_target = canonical_release_target_id(target_id or "")
@@ -323,7 +344,10 @@ def _target_torch_package_is_available(data_dir: Path, target_id: str) -> bool:
     runtime_root = (data_dir / "runtime").resolve()
     runtime_name = _runtime_name_from_target_id(target_id)
     site_packages = sidecar_site_packages_dir(runtime_root, target_id)
-    return torch_sidecar_is_valid(site_packages, target_id=target_id, runtime=runtime_name) and path_has_torch(site_packages)
+    if not (torch_sidecar_is_valid(site_packages, target_id=target_id, runtime=runtime_name) and path_has_torch(site_packages)):
+        return False
+    _prepend_runtime_pythonpath(site_packages)
+    return _torch_runtime_import_diagnostic() is None
 
 
 def _runtime_has_learned_iqa() -> bool:
@@ -368,7 +392,7 @@ def maybe_prepare_learned_iqa_runtime(
 ) -> bool:
     if torch_available is False:
         output_func(
-            "Learned IQA remains unavailable because the target PyTorch sidecar is not installed. "
+            "Learned IQA remains unavailable because the target PyTorch runtime could not be loaded. "
             "The catalog and Review UI will continue to work."
         )
         return False
@@ -487,6 +511,9 @@ def maybe_prepare_torch_runtime(
             sidecar_usable = _sidecar_torch_has_usable_runtime(site_packages, resolved_target_id)
         if sidecar_usable:
             return False
+        if runtime == "xpu" and not force_install and _torch_runtime_import_diagnostic() is None:
+            _report_xpu_cpu_fallback(output_func)
+            return False
 
     configured_install = parse_env_bool(os.environ.get(TORCH_AUTO_INSTALL_ENV))
     auto_install = True if force_install else configured_install
@@ -537,15 +564,65 @@ def maybe_prepare_torch_runtime(
             sidecar_usable = _sidecar_torch_has_usable_cuda(site_packages)
         else:
             sidecar_usable = _sidecar_torch_has_usable_runtime(site_packages, resolved_target_id)
-        if runtime not in {"cpu", "default"} and not sidecar_usable:
+        if not sidecar_usable:
+            diagnostic = _torch_runtime_import_diagnostic()
+            if diagnostic is not None:
+                output_func(f"PyTorch files were installed, but the runtime failed to load: {diagnostic}")
+                output_func(f"PyTorch pip log: {site_packages / 'pip-install.log'}")
+                return False
+            if runtime == "xpu":
+                _report_xpu_cpu_fallback(output_func)
+                return True
             output_func(
-                f"PyTorch runtime is installed, but {runtime} remains unavailable. "
-                "The app will continue without GPU-accelerated learned models."
+                f"PyTorch loaded successfully, but {runtime} remains unavailable. "
+                "Learned models can run on CPU with automatic device selection."
             )
-            return False
         return True
 
     return False
+
+
+def check_runtime(data_dir: Path, *, output_func=print) -> bool:
+    """Exercise native libraries and learned imports without downloading models."""
+    target_id = runtime_target_id_from_executable_name() or _fallback_runtime_target_id()
+    site_packages = sidecar_site_packages_dir(data_dir / "runtime", target_id)
+    try:
+        if not path_has_torch(site_packages):
+            raise RuntimeError(f"Torch sidecar is missing: {site_packages}")
+        _prepend_runtime_pythonpath(site_packages)
+        torch = importlib.import_module("torch")
+        torchvision = importlib.import_module("torchvision")
+        if not Path(torch.__file__).resolve().is_relative_to(site_packages.resolve()):
+            raise RuntimeError("Torch was loaded from outside the selected sidecar")
+        if torch.ones(3).sum().item() != 3:
+            raise RuntimeError("CPU tensor operation returned an incorrect result")
+        boxes = torch.tensor([[0.0, 0.0, 1.0, 1.0], [0.0, 0.0, 1.0, 1.0]])
+        if torchvision.ops.nms(boxes, torch.tensor([0.9, 0.8]), 0.5).tolist() != [0]:
+            raise RuntimeError("TorchVision native NMS operation returned an incorrect result")
+        diagnostic = _learned_iqa_runtime_import_diagnostic()
+        if diagnostic is not None:
+            raise RuntimeError(diagnostic)
+        accelerator_available = runtime_bundle_has_usable_torch(target_id)
+        runtime = _runtime_name_from_target_id(target_id)
+        if accelerator_available and runtime in {"xpu", "cuda", "rocm", "mps"}:
+            device = "cuda" if runtime == "rocm" else runtime
+            if torch.ones(3, device=device).sum().item() != 3:
+                raise RuntimeError(f"{runtime} tensor operation returned an incorrect result")
+        else:
+            accelerator_available = False
+        output_func(json.dumps({
+            "target": target_id,
+            "torch": torch.__version__,
+            "torchvision": torchvision.__version__,
+            "cpu_tensor_ok": True,
+            "torchvision_nms_ok": True,
+            "learned_imports_ok": True,
+            "accelerator_available": accelerator_available,
+        }, sort_keys=True))
+        return True
+    except Exception as exc:
+        output_func(f"Runtime check failed: {type(exc).__name__}: {exc}")
+        return False
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -559,6 +636,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--host", default="127.0.0.1", help="Host interface for the local review server")
     parser.add_argument("--port", type=int, default=8765, help="Port for the local review server")
     parser.add_argument("--no-browser", action="store_true", help="Do not automatically open the default browser")
+    parser.add_argument(
+        "--check-runtime", action="store_true",
+        help="Check native Torch/TorchVision operations and learned imports, then exit without starting the UI",
+    )
     return parser
 
 
@@ -597,6 +678,8 @@ def main() -> None:
     ):
         prepare_call_kwargs["torch_available"] = torch_available
     _call_prepare_learned_iqa_runtime(data_dir, **prepare_call_kwargs)
+    if args.check_runtime:
+        raise SystemExit(0 if check_runtime(data_dir) else 1)
     db_path = data_dir / "shotsieve.db"
 
     serve_review_ui(

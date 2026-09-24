@@ -18,6 +18,76 @@ def test_desktop_parser_accepts_optional_model_cache_dir() -> None:
     assert args.model_cache_dir == "./models"
 
 
+def test_existing_importable_xpu_without_device_does_not_prompt_for_repair(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    monkeypatch.setattr(desktop_module, "runtime_bundle_has_usable_torch", lambda *a, **kw: False)
+    monkeypatch.setattr(desktop_module, "torch_sidecar_is_valid", lambda *a, **kw: True)
+    monkeypatch.setattr(desktop_module, "path_has_torch", lambda path: True)
+    monkeypatch.setattr(desktop_module, "_sidecar_torch_has_usable_runtime", lambda *a: False)
+    monkeypatch.setattr(desktop_module, "_torch_runtime_import_diagnostic", lambda: None)
+    monkeypatch.setattr(desktop_module, "install_torch_sidecar", lambda **kw: pytest.fail("must not reinstall"))
+    monkeypatch.setattr(desktop_module, "is_interactive_console", lambda: pytest.fail("must not prompt"))
+    messages = []
+
+    assert desktop_module.maybe_prepare_torch_runtime(
+        tmp_path, target_id="windows-intel-xpu", output_func=messages.append,
+    ) is False
+    assert any("Learned models can run on CPU" in message for message in messages)
+
+
+@pytest.mark.parametrize("diagnostic", [None, "OSError: [WinError 126] c10_xpu.dll"])
+def test_xpu_install_distinguishes_missing_device_from_broken_import(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, diagnostic: str | None,
+) -> None:
+    monkeypatch.setenv("SHOTSIEVE_BOOTSTRAP_AUTO_INSTALL_TORCH", "1")
+    monkeypatch.setattr(desktop_module, "runtime_bundle_has_usable_torch", lambda *a, **kw: False)
+    monkeypatch.setattr(desktop_module, "torch_sidecar_is_valid", lambda *a, **kw: False)
+    monkeypatch.setattr(desktop_module, "path_has_torch", lambda path: True)
+    monkeypatch.setattr(desktop_module, "_prepend_runtime_pythonpath", lambda path: None)
+    monkeypatch.setattr(desktop_module, "_sidecar_torch_has_usable_runtime", lambda *a: False)
+    monkeypatch.setattr(desktop_module, "_torch_runtime_import_diagnostic", lambda: diagnostic)
+    monkeypatch.setattr(desktop_module, "install_torch_sidecar", lambda **kw: True)
+    messages = []
+
+    installed = desktop_module.maybe_prepare_torch_runtime(
+        tmp_path, target_id="windows-intel-xpu", output_func=messages.append,
+    )
+
+    assert installed is (diagnostic is None)
+    assert any("Learned models can run on CPU" in message for message in messages) is (diagnostic is None)
+    if diagnostic:
+        assert any(diagnostic in message for message in messages)
+
+
+@pytest.mark.parametrize("diagnostic", [None, "OSError: [WinError 126] c10_xpu.dll"])
+def test_learned_install_requires_importable_torch_not_just_package_files(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, diagnostic: str | None,
+) -> None:
+    monkeypatch.setattr(desktop_module, "runtime_bundle_has_usable_torch", lambda *a, **kw: False)
+    monkeypatch.setattr(desktop_module, "torch_sidecar_is_valid", lambda *a, **kw: True)
+    monkeypatch.setattr(desktop_module, "path_has_torch", lambda path: True)
+    monkeypatch.setattr(desktop_module, "_prepend_runtime_pythonpath", lambda path: None)
+    monkeypatch.setattr(desktop_module, "_torch_runtime_import_diagnostic", lambda: diagnostic)
+
+    assert desktop_module._target_torch_package_is_available(tmp_path, "windows-intel-xpu") is (diagnostic is None)
+
+
+@pytest.mark.parametrize("success", [False, True])
+def test_runtime_check_exits_with_check_result_without_starting_ui(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, success: bool,
+) -> None:
+    monkeypatch.setattr(sys, "argv", ["shotsieve-desktop", "--data-dir", str(tmp_path), "--check-runtime"])
+    monkeypatch.setattr(desktop_module, "maybe_prepare_torch_runtime", lambda path: False)
+    monkeypatch.setattr(desktop_module, "_target_torch_package_is_available", lambda *a: True)
+    monkeypatch.setattr(desktop_module, "_call_prepare_learned_iqa_runtime", lambda *a, **kw: None)
+    monkeypatch.setattr(desktop_module, "check_runtime", lambda path: success)
+    monkeypatch.setattr(desktop_module, "serve_review_ui", lambda **kw: pytest.fail("must not start UI"))
+    with pytest.raises(SystemExit) as result:
+        desktop_module.main()
+    assert result.value.code == (0 if success else 1)
+
+
 def test_default_data_dir_prefers_local_app_data(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     local_app_data = tmp_path / "AppData" / "Local"
     monkeypatch.setenv("LOCALAPPDATA", str(local_app_data))

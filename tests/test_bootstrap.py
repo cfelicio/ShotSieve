@@ -58,6 +58,33 @@ def test_runtime_sidecar_dll_paths_include_target_library_bin_and_torch_lib(
     assert parts[-2:] == ["existing-a", "existing-b"]
 
 
+@pytest.mark.parametrize("supports_dll_directory", [False, True])
+def test_direct_sidecar_activation_updates_path_for_native_loadlibrary(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, supports_dll_directory: bool,
+) -> None:
+    sidecar = tmp_path / "windows-intel-xpu"
+    native = sidecar / "Library" / "bin"
+    native.mkdir(parents=True)
+    (sidecar / "torch" / "lib").mkdir(parents=True)
+    calls = []
+    monkeypatch.setattr(runtime_support.sys, "platform", "win32")
+    monkeypatch.setattr(runtime_support, "_WINDOWS_DLL_DIRECTORY_HANDLES", {})
+    monkeypatch.setenv("PATH", "original-search-path")
+    monkeypatch.setattr(
+        runtime_support.os, "add_dll_directory",
+        (lambda path: calls.append(path) or object()) if supports_dll_directory else None,
+        raising=False,
+    )
+
+    runtime_support.prepare_runtime_dll_search_path(sidecar)
+    runtime_support.prepare_runtime_dll_search_path(sidecar)
+
+    parts = os.environ["PATH"].split(os.pathsep)
+    assert parts.count(str(native.resolve())) == 1
+    assert parts[-1] == "original-search-path"
+    assert calls.count(str(native.resolve())) == int(supports_dll_directory)
+
+
 def test_select_runtime_target_prefers_nvidia_cuda_on_windows_and_linux() -> None:
     assert bootstrap_module.select_runtime_target(system_name="Windows", machine_name="AMD64", has_nvidia=True) == "windows-nvidia-cuda"
     assert bootstrap_module.select_runtime_target(system_name="Linux", machine_name="x86_64", has_nvidia=True) == "linux-nvidia-cuda"
