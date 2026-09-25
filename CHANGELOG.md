@@ -39,6 +39,9 @@ All notable changes to this project will be documented in this file.
   sidecar DLL directories to the process `PATH` as well as `AddDllDirectory`.
   Verified the pinned XPU wheel with real CPU tensor and TorchVision native
   operations after reproducing the failure without the path correction.
+- Fixed Windows learned-IQA first-run installs after Torch startup by merging
+  learned packages into the active sidecar instead of renaming a directory
+  whose native Torch/XPU DLLs are still in use.
 - Distinguished Torch import failures from an unavailable GPU. An importable
   XPU runtime can run learned models on CPU without repeated repair prompts;
   broken Torch imports no longer trigger an ineffective learned-IQA install.

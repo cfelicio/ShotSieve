@@ -382,6 +382,11 @@ def test_install_learned_iqa_sidecar_replaces_old_tree_after_clean_staged_instal
         return True
 
     monkeypatch.setattr(sidecar_module, "_run_sidecar_install_subprocess", fake_subprocess_install)
+    monkeypatch.setattr(
+        sidecar_module,
+        "_commit_staged_sidecar",
+        lambda *_args, **_kwargs: pytest.fail("learned-IQA repair must not rename the live sidecar"),
+    )
 
     installed = sidecar_module.install_learned_iqa_sidecar(
         runtime="cuda",
@@ -395,6 +400,38 @@ def test_install_learned_iqa_sidecar_replaces_old_tree_after_clean_staged_instal
     state = json.loads((site_packages / ".shotsieve-runtime.json").read_text(encoding="utf-8"))
     assert state["plan"]["target_id"] == site_packages.name
     assert state["learned_iqa_complete"] is True
+
+
+def test_learned_iqa_merge_preserves_loaded_runtime_entries(tmp_path: Path) -> None:
+    site_packages = tmp_path / "windows-intel-xpu"
+    staging_dir = tmp_path / ".staging"
+    (site_packages / "torch" / "lib").mkdir(parents=True)
+    (site_packages / "torch" / "lib" / "c10_xpu.dll").write_bytes(b"loaded-native-runtime")
+    (site_packages / "Library" / "bin").mkdir(parents=True)
+    (site_packages / "Library" / "bin" / "sycl9.dll").write_bytes(b"loaded-sycl-runtime")
+    (site_packages / "transformers").mkdir()
+    (site_packages / "transformers" / "stale.py").write_text("stale", encoding="utf-8")
+
+    (staging_dir / "torch" / "lib").mkdir(parents=True)
+    (staging_dir / "torch" / "lib" / "c10_xpu.dll").write_bytes(b"new-staged-runtime")
+    (staging_dir / "Library" / "bin").mkdir(parents=True)
+    (staging_dir / "Library" / "bin" / "sycl9.dll").write_bytes(b"new-staged-sycl-runtime")
+    (staging_dir / "pyiqa").mkdir()
+    (staging_dir / "pyiqa" / "__init__.py").write_text("", encoding="utf-8")
+    (staging_dir / "transformers").mkdir()
+    (staging_dir / "transformers" / "fresh.py").write_text("fresh", encoding="utf-8")
+
+    sidecar_module._merge_staged_learned_iqa_sidecar(
+        staging_dir=staging_dir,
+        site_packages=site_packages,
+        runtime="xpu",
+    )
+
+    assert (site_packages / "torch" / "lib" / "c10_xpu.dll").read_bytes() == b"loaded-native-runtime"
+    assert (site_packages / "Library" / "bin" / "sycl9.dll").read_bytes() == b"loaded-sycl-runtime"
+    assert not (site_packages / "transformers" / "stale.py").exists()
+    assert (site_packages / "transformers" / "fresh.py").read_text(encoding="utf-8") == "fresh"
+    assert (site_packages / "pyiqa" / "__init__.py").exists()
 
 
 def test_prepare_learned_iqa_staging_skips_python_bytecode_caches(tmp_path: Path) -> None:

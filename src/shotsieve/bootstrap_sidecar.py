@@ -1108,6 +1108,56 @@ def _prepare_learned_iqa_staging(*, source_dir: Path, staging_dir: Path, runtime
         _purge_sidecar_distribution(staging_dir, package_name)
 
 
+# A learned-IQA repair runs in the already-running desktop process.  On
+# Windows, importing Torch keeps its native DLLs open, so renaming the whole
+# sidecar is not safe at that point.  Preserve the package trees that belong
+# to the native runtime and merge the pure-Python learned packages into the
+# existing sidecar instead.
+_PRESERVED_RUNTIME_SIDECAR_ENTRIES = frozenset(
+    {
+        "Library",
+        "bin",
+        "lib",
+        "torch",
+        "torchgen",
+        "torchvision",
+        "torchaudio",
+        "functorch",
+        "triton",
+    }
+)
+
+
+def _merge_staged_learned_iqa_sidecar(
+    *, staging_dir: Path, site_packages: Path, runtime: str
+) -> None:
+    """Merge a completed learned install without replacing loaded Torch.
+
+    The staging directory starts as a copy of the current sidecar and then
+    receives a clean learned-IQA install.  Copy only its non-Torch entries
+    back into the live sidecar; the native Torch tree remains in place, so
+    Windows never has to rename or overwrite DLLs held by this process.
+    """
+    site_packages.mkdir(parents=True, exist_ok=True)
+    for package_name in _learned_iqa_packages_for_runtime(runtime):
+        _purge_sidecar_distribution(site_packages, package_name)
+
+    for source_path in staging_dir.iterdir():
+        entry_name = source_path.name
+        if entry_name in _PRESERVED_RUNTIME_SIDECAR_ENTRIES:
+            continue
+        destination_path = site_packages / entry_name
+        if source_path.is_dir() and not source_path.is_symlink():
+            shutil.copytree(
+                source_path,
+                destination_path,
+                dirs_exist_ok=True,
+                ignore=_ignore_python_bytecode_artifacts,
+            )
+        else:
+            shutil.copy2(source_path, destination_path)
+
+
 def _is_python_bytecode_artifact(name: str) -> bool:
     normalized_name = name.casefold()
     return normalized_name == "__pycache__" or normalized_name.endswith((".pyc", ".pyo"))
@@ -1296,14 +1346,24 @@ def install_learned_iqa_sidecar(
                 output_func=output_func,
             )
             if embedded_install_result and path_has_pyiqa(staging_dir):
+                _merge_staged_learned_iqa_sidecar(
+                    staging_dir=staging_dir,
+                    site_packages=site_packages,
+                    runtime=runtime,
+                )
                 _write_sidecar_state(
-                    staging_dir,
+                    site_packages,
                     torch_install_plan(target_id=site_packages.name, runtime=runtime),
                     learned_iqa=True,
                 )
-                _commit_staged_sidecar(staging_dir, site_packages)
     except TimeoutError as exc:
         output_func(f"Learned IQA installation is already in progress: {exc}")
+        return False
+    except Exception as exc:
+        output_func(
+            "Learned IQA runtime installation could not update the existing sidecar: "
+            f"{type(exc).__name__}: {exc}"
+        )
         return False
     finally:
         if staging_dir.exists():
