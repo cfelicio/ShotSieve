@@ -10,9 +10,45 @@ import pytest
 from shotsieve.db import connect, database, initialize_database
 from shotsieve.models import ScanSummary
 from shotsieve.preview import PreviewResult
+import shotsieve.scanner as scanner_module
 from shotsieve.scanner import FileDiscoveryError, ScanInterrupted, _process_scan_batch, scan_root
 
 from conftest import create_image as shared_create_image
+
+
+def _patch_synthetic_scan_inputs(
+    monkeypatch: pytest.MonkeyPatch,
+    paths: list[Path],
+    sizes: dict[str, int],
+) -> None:
+    """Exercise scan collision accounting without host filesystem name rules."""
+
+    monkeypatch.setattr(scanner_module, "discover_files", lambda *args, **kwargs: iter(paths))
+
+    def fake_gather_file_metadata(path: Path, **kwargs: object) -> dict[str, object]:
+        return {
+            "path": str(path),
+            "path_key": scanner_module.canonical_path_key(path),
+            "size_bytes": sizes[str(path)],
+            "modified_time": 1.0,
+            "format": path.suffix.casefold().lstrip("."),
+            "last_scan_time": "2026-01-01T00:00:00+00:00",
+            "width": None,
+            "height": None,
+            "capture_time": None,
+            "preview_path": None,
+            "preview_status": "pending",
+            "preview_conversion_version": None,
+            "last_error": None,
+            "scan_status": "new",
+            "analysis_status": "pending",
+            "analysis_error": None,
+            "last_analysis_time": None,
+            "preserve_metadata": False,
+        }
+
+    monkeypatch.setattr(scanner_module, "gather_file_metadata", fake_gather_file_metadata)
+
 
 def test_scan_populates_cache_and_preview(tmp_path: Path) -> None:
     db_path = tmp_path / "data" / "shotsieve.db"
@@ -57,8 +93,12 @@ def test_scan_skips_windows_unicode_path_key_collisions(
     preview_dir = tmp_path / "previews"
     photo_dir = tmp_path / "photos"
     photo_dir.mkdir()
-    (photo_dir / "straße.jpg").write_bytes(b"german sharp s")
-    (photo_dir / "strasse.jpg").write_bytes(b"ss spelling")
+    paths = [photo_dir / "stra\u00dfe.jpg", photo_dir / "strasse.jpg"]
+    _patch_synthetic_scan_inputs(
+        monkeypatch,
+        paths,
+        {str(paths[0]): len(b"german sharp s"), str(paths[1]): len(b"ss spelling")},
+    )
     initialize_database(db_path)
 
     with connect(db_path) as connection:
@@ -94,9 +134,16 @@ def test_scan_reports_mixed_batch_path_key_collisions_after_unrelated_file(
     preview_dir = tmp_path / "previews"
     photo_dir = tmp_path / "photos"
     photo_dir.mkdir()
-    (photo_dir / "aaa.jpg").write_bytes(b"safe")
-    (photo_dir / "straße.jpg").write_bytes(b"german sharp s")
-    (photo_dir / "strasse.jpg").write_bytes(b"ss spelling")
+    paths = [photo_dir / "aaa.jpg", photo_dir / "stra\u00dfe.jpg", photo_dir / "strasse.jpg"]
+    _patch_synthetic_scan_inputs(
+        monkeypatch,
+        paths,
+        {
+            str(paths[0]): len(b"safe"),
+            str(paths[1]): len(b"german sharp s"),
+            str(paths[2]): len(b"ss spelling"),
+        },
+    )
     initialize_database(db_path)
 
     with connect(db_path) as connection:
@@ -131,8 +178,11 @@ def test_scan_preserves_existing_row_on_incoming_path_key_collision(
     preview_dir = tmp_path / "previews"
     photo_dir = tmp_path / "photos"
     photo_dir.mkdir()
-    existing_path = photo_dir / "straße.jpg"
-    existing_path.write_bytes(b"original")
+    existing_path = photo_dir / "stra\u00dfe.jpg"
+    incoming_path = photo_dir / "strasse.jpg"
+    paths = [existing_path]
+    sizes = {str(existing_path): len(b"original"), str(incoming_path): len(b"replacement")}
+    _patch_synthetic_scan_inputs(monkeypatch, paths, sizes)
     initialize_database(db_path)
 
     with connect(db_path) as connection:
@@ -144,9 +194,7 @@ def test_scan_preserves_existing_row_on_incoming_path_key_collision(
             preview_dir=preview_dir,
             generate_previews=False,
         )
-        existing_path.unlink()
-        incoming_path = photo_dir / "strasse.jpg"
-        incoming_path.write_bytes(b"replacement")
+        paths[:] = [incoming_path]
         second_summary = scan_root(
             connection,
             root=photo_dir,
@@ -174,9 +222,16 @@ def test_scan_preserves_existing_row_on_mixed_batch_incoming_collision(
     preview_dir = tmp_path / "previews"
     photo_dir = tmp_path / "photos"
     photo_dir.mkdir()
-    existing_path = photo_dir / "straße.jpg"
-    existing_path.write_bytes(b"original")
-    (photo_dir / "aaa.jpg").write_bytes(b"safe")
+    existing_path = photo_dir / "stra\u00dfe.jpg"
+    incoming_path = photo_dir / "strasse.jpg"
+    safe_path = photo_dir / "aaa.jpg"
+    paths = [existing_path, safe_path]
+    sizes = {
+        str(existing_path): len(b"original"),
+        str(incoming_path): len(b"replacement"),
+        str(safe_path): len(b"safe"),
+    }
+    _patch_synthetic_scan_inputs(monkeypatch, paths, sizes)
     initialize_database(db_path)
 
     with connect(db_path) as connection:
@@ -188,9 +243,7 @@ def test_scan_preserves_existing_row_on_mixed_batch_incoming_collision(
             preview_dir=preview_dir,
             generate_previews=False,
         )
-        existing_path.unlink()
-        incoming_path = photo_dir / "strasse.jpg"
-        incoming_path.write_bytes(b"replacement")
+        paths[:] = [incoming_path, safe_path]
         second_summary = scan_root(
             connection,
             root=photo_dir,
@@ -204,8 +257,8 @@ def test_scan_preserves_existing_row_on_mixed_batch_incoming_collision(
     assert first_summary.files_added == 2
     assert second_summary.files_added == 0
     assert second_summary.files_failed == 1
-    assert [Path(row["path"]).name for row in rows] == ["aaa.jpg", "straße.jpg"]
-    existing_row = next(row for row in rows if Path(row["path"]).name == "straße.jpg")
+    assert [Path(row["path"]).name for row in rows] == ["aaa.jpg", existing_path.name]
+    existing_row = next(row for row in rows if Path(row["path"]).name == existing_path.name)
     assert existing_row["size_bytes"] == len(b"original")
 
 
