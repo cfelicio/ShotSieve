@@ -19,15 +19,13 @@ binds to loopback; your photo library is not uploaded by ShotSieve.
 
 ## Choose a package or runtime
 
-Use the package that matches the runtime you have actually validated:
-
 | Runtime | Best fit | Boundary |
 |---|---|---|
-| CPU | Any supported source or packaged install | Broadest fallback; learned models still need enough RAM and disk. |
+| CPU | Any supported source install; packaged support is platform/architecture-specific | Broadest fallback; learned models still need enough RAM and disk. |
 | NVIDIA CUDA | Supported NVIDIA GPUs | The current x64 path uses PyTorch 2.14.0 from the cu130 index and covers the architectures published by that wheel. Driver, VRAM, and model support still apply. |
 | Intel XPU | Intel GPU/OS combinations in the pinned PyTorch XPU matrix | Available as Windows/Linux runtime packs and as a source-install track. |
-| AMD ROCm | AMD's current OS/driver matrix | The Windows/Linux packs use the stable ROCm 10.0 PyTorch packages with `gfx1103` kernels, including the Radeon 780M. Hardware support remains specific to AMD's live matrix. |
-| Apple MPS | Apple Silicon Macs supported by the installed PyTorch build | Available as a macOS arm64 runtime pack; Intel Macs use CPU. |
+| AMD ROCm | AMD's current OS/driver matrix | The Windows/Linux packs use the stable ROCm 10.0 PyTorch packages with `gfx1103` kernels. Hardware support remains specific to AMD's live matrix. |
+| Apple MPS | Apple Silicon Macs supported by the installed PyTorch build | Available as a macOS arm64 runtime pack. Intel Macs must use a source CPU installation; no packaged Intel macOS runtime is published. |
 
 A runtime pack proves that the software stack can be built, not that every GPU
 from that vendor is supported. Auto mode can fall back to CPU and reports the
@@ -42,6 +40,10 @@ The release matrix contains ten runtime packs:
 - Linux: CPU, NVIDIA CUDA, Intel XPU, AMD ROCm
 - macOS arm64: CPU and Apple MPS
 
+Packaged macOS runtimes are Apple Silicon (arm64) only. The bootstrap launcher
+rejects Intel macOS rather than selecting an incompatible arm64 archive. Intel
+Macs can use the source installation with CPU scoring.
+
 Current launcher names are:
 
 | Platform | Runtime | Launcher |
@@ -54,8 +56,8 @@ Current launcher names are:
 | Linux | NVIDIA CUDA | `ShotSieve-NVIDIA-CUDA` |
 | Linux | Intel XPU | `ShotSieve-Intel-XPU` |
 | Linux | AMD ROCm | `ShotSieve-AMD-ROCm` |
-| macOS | CPU | `ShotSieve-CPU` |
-| macOS | Apple MPS | `ShotSieve-Apple-MPS` |
+| macOS arm64 | CPU | `ShotSieve-CPU` |
+| macOS arm64 | Apple MPS | `ShotSieve-Apple-MPS` |
 
 The current target and launcher names are required for fresh downloads. Retired
 vendor-only names and target aliases are not accepted by the current release
@@ -110,10 +112,9 @@ archive. Use Settings > **Prepare selected model** after the runtime is ready.
 
 The supported model catalog is intentionally small:
 
-- `topiq_nr` - TOPIQ, the default all-rounder.
+- `topiq_nr` - TOPIQ, the default all-rounder. Recommended for a first run.
 - `clipiqa` - a complementary CLIP-based scorer.
-- `qrealign-mini` - the compact Q-ReAlign Mini model; first use downloads
-  approximately 2.2 GB of safetensors plus its processor and configuration.
+- `qrealign-mini` - the compact Q-ReAlign Mini model
 
 Model availability is discovered from the installed runtime. A model listed in
 the catalog is not a certification of every accelerator; the local runtime

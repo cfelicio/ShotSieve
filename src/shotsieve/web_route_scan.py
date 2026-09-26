@@ -502,5 +502,3 @@ def _run_scan_job(
             attempts,
             unexpected_error=exc,
         )
-    finally:
-        context.operation_lock.release()

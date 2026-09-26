@@ -11,6 +11,7 @@ from shotsieve.web_route_common import (
     _finish_consistent_snapshot,
     _frozen_selection_batches,
     _parse_selection_payload,
+    _validate_page_revision,
     _validate_selection_revision,
     route_callback,
     send_bytes,
@@ -244,11 +245,25 @@ def _handle_review_post_routes(handler: Any, context: WebRouteContext, parsed: A
                 "updated_time": deps.utc_now(),
             }
             if selection is None:
-                updated = deps.update_review_state_batch(
-                    connection,
-                    file_ids=deps.required_int_list(payload.get("file_ids"), name="file_ids"),
-                    **batch_kwargs,
-                )
+                file_ids = deps.required_int_list(payload.get("file_ids"), name="file_ids")
+                snapshot_active = _begin_consistent_snapshot(connection)
+                try:
+                    _route(context, "_validate_page_revision", _validate_page_revision)(
+                        connection,
+                        deps,
+                        payload,
+                        file_ids=file_ids,
+                    )
+                    updated = deps.update_review_state_batch(
+                        connection,
+                        file_ids=file_ids,
+                        **batch_kwargs,
+                    )
+                except Exception:
+                    _finish_consistent_snapshot(connection, active=snapshot_active, success=False)
+                    raise
+                else:
+                    _finish_consistent_snapshot(connection, active=snapshot_active, success=True)
             else:
                 snapshot_active = _begin_consistent_snapshot(connection)
                 try:

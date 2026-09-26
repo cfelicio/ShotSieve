@@ -36,16 +36,17 @@
     } = operationResults;
 
     async function saveReview(payload) {
-      if (!state.activeId) {
+      const submittedId = state.activeId;
+      if (!submittedId) {
         showToast("Pick a file first.", "error");
         return;
       }
-      if (Number(state.detail?.id) !== Number(state.activeId)) {
+      if (Number(state.detail?.id) !== Number(submittedId)) {
         showToast("Wait for the selected photo to finish loading before reviewing it.", "error");
         return;
       }
-      const updatedDetail = await postJson("/api/review", { file_id: state.activeId, ...payload });
-      if (typeof applyReviewUpdate === "function" && applyReviewUpdate(updatedDetail)) {
+      const updatedDetail = await postJson("/api/review", { file_id: submittedId, ...payload });
+      if (typeof applyReviewUpdate === "function" && applyReviewUpdate(updatedDetail, { submittedId })) {
         await refreshOverview();
         if (typeof renderPagination === "function") {
           renderPagination();

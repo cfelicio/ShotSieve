@@ -98,6 +98,94 @@ def test_compare_learned_models_returns_side_by_side_rows(tmp_path: Path, monkey
     assert row["clipiqa_confidence"] == 85.0
 
 
+def test_compare_refreshes_source_fingerprints_before_using_cached_preview(tmp_path: Path) -> None:
+    db_path = tmp_path / "data" / "shotsieve.db"
+    photo_dir = tmp_path / "photos"
+    preview_dir = tmp_path / "previews"
+    photo_dir.mkdir()
+    sample_path = photo_dir / "sample.jpg"
+    create_image(sample_path)
+    stale_preview = preview_dir / "stale.jpg"
+    stale_preview.parent.mkdir()
+    stale_preview.write_bytes(b"stale-preview")
+    observed_paths: list[Path] = []
+
+    class RecordingBackend:
+        name = "topiq_nr"
+        model_version = "fake:recording"
+
+        def score_paths(self, image_paths, *, batch_size: int = 4, resource_profile: str | None = None, max_decode_pixels: int | None = None):
+            observed_paths.extend(image_paths)
+            return [LearnedScoreResult(raw_score=0.8, normalized_score=80.0, confidence=90.0) for _ in image_paths]
+
+    initialize_database(db_path)
+    with connect(db_path) as connection:
+        scan_root(
+            connection,
+            root=photo_dir,
+            recursive=True,
+            extensions=(".jpg",),
+            preview_dir=preview_dir,
+        )
+        connection.execute(
+            "UPDATE files SET preview_path = ?, preview_status = 'ready' WHERE path = ?",
+            (str(stale_preview), str(sample_path)),
+        )
+        sample_path.write_bytes(b"changed-source")
+
+        comparison = compare_learned_models(
+            connection,
+            model_names=["topiq_nr"],
+            preview_dir=None,
+            learned_backend_factory=lambda _model_name: RecordingBackend(),
+        )
+        row = connection.execute(
+            "SELECT preview_path, preview_status, size_bytes FROM files WHERE path = ?",
+            (str(sample_path),),
+        ).fetchone()
+
+    assert comparison.files_compared == 1
+    assert observed_paths == [sample_path]
+    assert row["preview_path"] is None
+    assert row["preview_status"] == "missing"
+    assert row["size_bytes"] == len(b"changed-source")
+
+
+def test_compare_rejects_nonfinite_learned_results(tmp_path: Path) -> None:
+    db_path = tmp_path / "data" / "shotsieve.db"
+    photo_dir = tmp_path / "photos"
+    photo_dir.mkdir()
+    create_image(photo_dir / "sample.jpg")
+
+    class NonFiniteBackend:
+        name = "topiq_nr"
+        model_version = "fake:non-finite"
+
+        def score_paths(self, image_paths, *, batch_size: int = 4, resource_profile: str | None = None, max_decode_pixels: int | None = None):
+            return [LearnedScoreResult(raw_score=float("nan"), normalized_score=50.0, confidence=float("inf")) for _ in image_paths]
+
+    initialize_database(db_path)
+    with connect(db_path) as connection:
+        scan_root(
+            connection,
+            root=photo_dir,
+            recursive=True,
+            extensions=(".jpg",),
+            preview_dir=tmp_path / "previews",
+        )
+        comparison = compare_learned_models(
+            connection,
+            model_names=["topiq_nr"],
+            learned_backend_factory=lambda _model_name: NonFiniteBackend(),
+        )
+
+    row = comparison.rows[0]
+    assert comparison.files_failed == 1
+    assert row["topiq_nr_score"] is None
+    assert row["topiq_nr_raw"] is None
+    assert "non-finite" in row["topiq_nr_error"]
+
+
 def test_compare_learned_models_reports_failed_results_without_fake_scores(tmp_path: Path) -> None:
     db_path = tmp_path / "data" / "shotsieve.db"
     preview_dir = tmp_path / "previews"

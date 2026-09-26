@@ -72,6 +72,73 @@ def test_ensure_runtime_asset_falls_back_to_local_archive_when_download_fails(
     assert not (tmp_path / "runtime" / "downloads" / archive_name).exists()
 
 
+def test_ensure_runtime_asset_validates_and_repairs_cached_runtime_tree(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    build_root = tmp_path / "local-build"
+    build_root.mkdir(parents=True)
+    archive_name = "ShotSieve-windows-cpu-x64.zip"
+    executable_name = "ShotSieve-CPU.exe"
+    variant_folder = "ShotSieve-windows-cpu"
+    support_path = f"{variant_folder}/runtime-support.bin"
+    support_bytes = b"payload-123456"
+
+    local_archive = build_root / archive_name
+    with zipfile.ZipFile(local_archive, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr(f"{variant_folder}/{executable_name}", "fake-binary")
+        archive.writestr(support_path, support_bytes)
+    archive_sha256 = bootstrap_module.sha256_file(local_archive)
+
+    monkeypatch.chdir(build_root)
+    attempted_urls: list[str] = []
+
+    def fake_open_url(url: str):
+        attempted_urls.append(url)
+        raise _not_found_http_error(url)
+
+    monkeypatch.setattr(bootstrap_module, "open_url", fake_open_url)
+
+    asset = bootstrap_module.RuntimeAsset(
+        id="windows-cpu",
+        platform="windows",
+        runtime="cpu",
+        url="https://example.invalid/ShotSieve-windows-cpu-x64.zip",
+        archive_name=archive_name,
+        executable_name=executable_name,
+        variant_folder_name=variant_folder,
+        sha256=archive_sha256,
+    )
+    runtime_root = tmp_path / "runtime"
+    install_dir = runtime_root / "installs" / asset.id
+
+    bootstrap_module.ensure_runtime_asset(asset, runtime_root=runtime_root)
+    manifest = json.loads((install_dir / bootstrap_module.RUNTIME_MANIFEST_NAME).read_text(encoding="utf-8"))
+    assert manifest["asset_id"] == asset.id
+    assert {entry["path"] for entry in manifest["files"]} == {
+        f"{variant_folder}/{executable_name}",
+        support_path,
+    }
+
+    attempted_urls.clear()
+    bootstrap_module.ensure_runtime_asset(asset, runtime_root=runtime_root)
+    assert attempted_urls == []
+
+    (install_dir / support_path).write_bytes(b"payload-654321")
+    bootstrap_module.ensure_runtime_asset(asset, runtime_root=runtime_root)
+    assert (install_dir / support_path).read_bytes() == support_bytes
+
+    (install_dir / support_path).unlink()
+    bootstrap_module.ensure_runtime_asset(asset, runtime_root=runtime_root)
+    assert (install_dir / support_path).read_bytes() == support_bytes
+
+    unexpected_path = install_dir / "unexpected-runtime-file"
+    unexpected_path.write_bytes(b"unexpected")
+    bootstrap_module.ensure_runtime_asset(asset, runtime_root=runtime_root)
+    assert not unexpected_path.exists()
+    assert len(attempted_urls) == 3
+
+
 def test_download_archive_reassembles_verified_split_parts(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -312,6 +379,107 @@ def test_extract_archive_accepts_regular_tar_files(tmp_path: Path) -> None:
     assert extracted.read_bytes() == b"runtime-binary"
 
 
+def test_extract_archive_restores_safe_tar_permissions(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    archive_path = tmp_path / "runtime.tar.gz"
+    with tarfile.open(archive_path, "w:gz") as archive:
+        directory = tarfile.TarInfo("runtime/bin")
+        directory.type = tarfile.DIRTYPE
+        directory.mode = 0o555
+        archive.addfile(directory)
+
+        executable = tarfile.TarInfo("runtime/bin/launcher")
+        executable.mode = 0o755
+        executable_data = b"launcher"
+        executable.size = len(executable_data)
+        archive.addfile(executable, io.BytesIO(executable_data))
+
+        data_file = tarfile.TarInfo("runtime/config.ini")
+        data_file.mode = 0o644
+        data = b"config"
+        data_file.size = len(data)
+        archive.addfile(data_file, io.BytesIO(data))
+
+    chmod_calls: dict[Path, int] = {}
+    real_chmod = bootstrap_module.os.chmod
+
+    def record_chmod(path, mode, *, dir_fd=None, follow_symlinks=True):
+        chmod_calls[Path(path).resolve()] = mode
+        return real_chmod(path, mode, dir_fd=dir_fd, follow_symlinks=follow_symlinks)
+
+    monkeypatch.setattr(bootstrap_module.os, "chmod", record_chmod)
+    destination = tmp_path / "out"
+    bootstrap_module.extract_archive(archive_path, destination)
+
+    assert chmod_calls[(destination / "runtime" / "bin").resolve()] == 0o555
+    assert chmod_calls[(destination / "runtime" / "bin" / "launcher").resolve()] == 0o755
+    assert chmod_calls[(destination / "runtime" / "config.ini").resolve()] == 0o644
+
+
+def test_runtime_publish_failure_restores_previous_install(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    runtime_root = tmp_path / "runtime"
+    install_dir = runtime_root / "installs" / "windows-cpu"
+    old_executable = install_dir / "ShotSieve-windows-cpu" / "ShotSieve-CPU.exe"
+    old_executable.parent.mkdir(parents=True, exist_ok=True)
+    old_executable.write_bytes(b"old-runtime")
+    (install_dir / ".asset-sha256").write_text("b" * 64, encoding="utf-8")
+
+    archive_name = "ShotSieve-windows-cpu-x64.zip"
+    archive_path = runtime_root / "downloads" / archive_name
+    archive_path.parent.mkdir(parents=True, exist_ok=True)
+    with zipfile.ZipFile(archive_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr("ShotSieve-windows-cpu/ShotSieve-CPU.exe", "new-runtime")
+    asset = bootstrap_module.RuntimeAsset(
+        id="windows-cpu",
+        platform="windows",
+        runtime="cpu",
+        url="https://example.invalid/runtime.zip",
+        archive_name=archive_name,
+        executable_name="ShotSieve-CPU.exe",
+        variant_folder_name="ShotSieve-windows-cpu",
+        sha256=bootstrap_module.sha256_file(archive_path),
+    )
+
+    real_move = bootstrap_module.shutil.move
+
+    def fail_new_publish(source, destination):
+        if Path(destination).resolve() == install_dir.resolve() and Path(source).name.startswith("shotsieve-bootstrap-"):
+            raise OSError("simulated runtime publication failure")
+        return real_move(source, destination)
+
+    monkeypatch.setattr(bootstrap_module.shutil, "move", fail_new_publish)
+    with pytest.raises(OSError, match="simulated runtime publication failure"):
+        bootstrap_module.ensure_runtime_asset(asset, runtime_root=runtime_root)
+
+    assert old_executable.read_bytes() == b"old-runtime"
+    assert (install_dir / ".asset-sha256").read_text(encoding="utf-8") == "b" * 64
+    assert not list((runtime_root / "installs").glob(".windows-cpu.backup-*"))
+
+
+def test_runtime_publish_recovery_restores_orphaned_backup(tmp_path: Path) -> None:
+    runtime_root = tmp_path / "runtime"
+    backup_dir = runtime_root / "installs" / ".windows-cpu.backup-crash"
+    executable = backup_dir / "ShotSieve-windows-cpu" / "ShotSieve-CPU.exe"
+    executable.parent.mkdir(parents=True, exist_ok=True)
+    executable.write_bytes(b"recovered-runtime")
+    (backup_dir / ".asset-sha256").write_text("a" * 64, encoding="utf-8")
+    asset = bootstrap_module.RuntimeAsset(
+        id="windows-cpu",
+        platform="windows",
+        runtime="cpu",
+        url="https://example.invalid/runtime.zip",
+        archive_name="ShotSieve-windows-cpu-x64.zip",
+        executable_name="ShotSieve-CPU.exe",
+        variant_folder_name="ShotSieve-windows-cpu",
+        sha256="a" * 64,
+    )
+    bootstrap_module._write_runtime_manifest(backup_dir, asset, "a" * 64)
+
+    resolved = bootstrap_module.ensure_runtime_asset(asset, runtime_root=runtime_root)
+
+    assert resolved.read_bytes() == b"recovered-runtime"
+    assert not backup_dir.exists()
+
+
 def test_install_torch_sidecar_uses_helper_process(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -432,6 +600,93 @@ def test_learned_iqa_merge_preserves_loaded_runtime_entries(tmp_path: Path) -> N
     assert not (site_packages / "transformers" / "stale.py").exists()
     assert (site_packages / "transformers" / "fresh.py").read_text(encoding="utf-8") == "fresh"
     assert (site_packages / "pyiqa" / "__init__.py").exists()
+
+
+def test_learned_iqa_merge_rolls_back_after_live_package_purge_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    site_packages = tmp_path / "windows-intel-xpu"
+    staging_dir = tmp_path / ".staging"
+    (site_packages / "torch" / "lib").mkdir(parents=True)
+    (site_packages / "torch" / "lib" / "c10_xpu.dll").write_bytes(b"loaded-native-runtime")
+    (site_packages / "pyiqa").mkdir()
+    (site_packages / "pyiqa" / "old.py").write_text("old-pyiqa", encoding="utf-8")
+    (site_packages / "transformers").mkdir()
+    (site_packages / "transformers" / "old.py").write_text("old-transformers", encoding="utf-8")
+    (staging_dir / "pyiqa").mkdir(parents=True)
+    (staging_dir / "pyiqa" / "fresh.py").write_text("fresh-pyiqa", encoding="utf-8")
+    (staging_dir / "transformers").mkdir()
+    (staging_dir / "transformers" / "fresh.py").write_text("fresh-transformers", encoding="utf-8")
+
+    real_copytree = sidecar_module.shutil.copytree
+
+    def fail_fresh_copy(source, destination, *args, **kwargs):
+        if Path(source).resolve() == (staging_dir / "transformers").resolve():
+            raise OSError("simulated learned package copy failure")
+        return real_copytree(source, destination, *args, **kwargs)
+
+    monkeypatch.setattr(sidecar_module.shutil, "copytree", fail_fresh_copy)
+    with pytest.raises(OSError, match="simulated learned package copy failure"):
+        sidecar_module._merge_staged_learned_iqa_sidecar(
+            staging_dir=staging_dir,
+            site_packages=site_packages,
+            runtime="xpu",
+        )
+
+    assert (site_packages / "torch" / "lib" / "c10_xpu.dll").read_bytes() == b"loaded-native-runtime"
+    assert (site_packages / "pyiqa" / "old.py").read_text(encoding="utf-8") == "old-pyiqa"
+    assert (site_packages / "transformers" / "old.py").read_text(encoding="utf-8") == "old-transformers"
+    assert not (site_packages / "pyiqa" / "fresh.py").exists()
+    assert not list(tmp_path.glob(".windows-intel-xpu.learned-backup-*"))
+
+
+def test_learned_iqa_merge_retains_backup_when_rollback_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    site_packages = tmp_path / "windows-intel-xpu"
+    staging_dir = tmp_path / ".staging"
+    (site_packages / "torch" / "lib").mkdir(parents=True)
+    (site_packages / "torch" / "lib" / "c10_xpu.dll").write_bytes(b"loaded-native-runtime")
+    (site_packages / "pyiqa").mkdir()
+    (site_packages / "pyiqa" / "old.py").write_text("old-pyiqa", encoding="utf-8")
+    (site_packages / "transformers").mkdir()
+    (site_packages / "transformers" / "old.py").write_text("old-transformers", encoding="utf-8")
+    (staging_dir / "pyiqa").mkdir(parents=True)
+    (staging_dir / "pyiqa" / "fresh.py").write_text("fresh-pyiqa", encoding="utf-8")
+    (staging_dir / "transformers").mkdir(parents=True)
+    (staging_dir / "transformers" / "fresh.py").write_text("fresh-transformers", encoding="utf-8")
+
+    real_copytree = sidecar_module.shutil.copytree
+
+    def fail_forward_and_restore(source, destination, *args, **kwargs):
+        source_path = Path(source).resolve()
+        if source_path == (staging_dir / "transformers").resolve():
+            raise OSError("simulated learned package copy failure")
+        if source_path.name == "transformers" and source_path.parent.name.startswith(
+            ".windows-intel-xpu.learned-backup-"
+        ):
+            raise OSError("simulated rollback copy failure")
+        return real_copytree(source, destination, *args, **kwargs)
+
+    monkeypatch.setattr(sidecar_module.shutil, "copytree", fail_forward_and_restore)
+    with pytest.raises(RuntimeError, match="rollback failed") as exc_info:
+        sidecar_module._merge_staged_learned_iqa_sidecar(
+            staging_dir=staging_dir,
+            site_packages=site_packages,
+            runtime="xpu",
+        )
+
+    backups = list(tmp_path.glob(".windows-intel-xpu.learned-backup-*"))
+    assert len(backups) == 1
+    backup_dir = backups[0]
+    assert (backup_dir / "pyiqa" / "old.py").read_text(encoding="utf-8") == "old-pyiqa"
+    assert (backup_dir / "transformers" / "old.py").read_text(encoding="utf-8") == "old-transformers"
+    assert str(backup_dir) in str(exc_info.value)
+    assert "simulated learned package copy failure" in str(exc_info.value)
+    assert "simulated rollback copy failure" in str(exc_info.value)
+    assert (site_packages / "torch" / "lib" / "c10_xpu.dll").read_bytes() == b"loaded-native-runtime"
 
 
 def test_prepare_learned_iqa_staging_skips_python_bytecode_caches(tmp_path: Path) -> None:

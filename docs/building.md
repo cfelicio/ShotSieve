@@ -68,7 +68,7 @@ certification of every device from a vendor.
 | NVIDIA CUDA | PyTorch 2.14.0 from the cu130 index. The active GPU must be covered by the wheel's compiled kernels, and the driver and model VRAM must also be suitable. |
 | Intel XPU | PyTorch 2.14.0 + XPU on the Intel GPU/OS/driver combinations listed by the pinned PyTorch guide. |
 | AMD ROCm | AMD's stable ROCm 10.0.0 / PyTorch 2.13.0 / TorchVision 0.28.0 packages on Windows and Linux; the current target selects `gfx1103` kernels and uses Python 3.14. Check AMD's live OS/driver matrix for the exact host. |
-| Apple MPS | Apple Silicon with an MPS-capable PyTorch build and supported macOS. |
+| Apple MPS | Apple Silicon with an MPS-capable PyTorch build and supported macOS. Packaged macOS runtimes are arm64-only; Intel Macs must use a source CPU installation. |
 
 Auto mode may fall back to CPU when an accelerator is unavailable. An explicit
 accelerator request remains an error. A successful package install or
@@ -109,6 +109,10 @@ The current release matrix defines ten runtime-pack targets:
 - `windows-cpu`, `windows-nvidia-cuda`, `windows-intel-xpu`, `windows-amd-rocm`
 - `linux-cpu`, `linux-nvidia-cuda`, `linux-intel-xpu`, `linux-amd-rocm`
 - `macos-cpu`, `macos-apple-mps`
+
+Both macOS targets are arm64. The bootstrap launcher rejects Intel macOS
+instead of downloading the arm64 `macos-cpu` archive; use the source install
+for Intel CPU use.
 
 The authoritative target metadata is in
 [`src/shotsieve/release_targets.py`](../src/shotsieve/release_targets.py) and
@@ -151,6 +155,12 @@ the archives as Actions artifacts for seven days. It does not create or update a
 GitHub Release; do not use the `ci-release` workflow for branch previews because
 its manual path publishes a release. Actions artifacts are separate from the
 Releases page, but anyone with repository read access can download them.
+
+The portable release smoke checks archive shape, the launcher, the torchless
+boundary, and launcher `--help` for every target. Frozen `--check-runtime`
+installation/native-import coverage currently runs only for the Windows XPU
+target; other target families require their target-appropriate runtime or model
+smoke workflow before publication.
 
 On first use, the frozen launcher derives its target from its current launcher
 name and may install the matching Torch sidecar under

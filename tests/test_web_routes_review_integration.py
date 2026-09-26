@@ -21,6 +21,183 @@ from conftest import create_image
 
 
 class TestWebRoutesReviewIntegration:
+    def test_explicit_bulk_ids_require_current_bound_selection_and_preserve_scope(self, test_server):
+        base_url, db_path, tmp_path = test_server
+        root_a = tmp_path / "library-a"
+        root_b = tmp_path / "library-b"
+        root_a.mkdir()
+        root_b.mkdir()
+        source_review = root_a / "review.jpg"
+        source_export = root_a / "export.jpg"
+        source_delete = root_a / "delete.jpg"
+        source_other = root_b / "other.jpg"
+        for source in (source_review, source_export, source_delete, source_other):
+            create_image(source)
+
+        with database(db_path) as connection:
+            scan_root(
+                connection,
+                root=root_a,
+                recursive=True,
+                extensions=(".jpg",),
+                preview_dir=tmp_path / "previews",
+            )
+            scan_root(
+                connection,
+                root=root_b,
+                recursive=True,
+                extensions=(".jpg",),
+                preview_dir=tmp_path / "previews",
+            )
+            ids_by_name = {
+                Path(row["path"]).name: int(row["id"])
+                for row in connection.execute("SELECT id, path FROM files").fetchall()
+            }
+
+        review_id = ids_by_name["review.jpg"]
+        export_id = ids_by_name["export.jpg"]
+        delete_id = ids_by_name["delete.jpg"]
+        other_id = ids_by_name["other.jpg"]
+        root_a_text = str(root_a.resolve())
+        selection = {"scope": "review-state", "marked": "none", "root": root_a_text}
+        export_destination = tmp_path / "exported"
+        export_destination.mkdir()
+
+        def selection_payload() -> tuple[dict[str, object], str]:
+            query = quote(root_a_text, safe="")
+            response = json.loads(
+                urlopen(f"{base_url}/api/review/file-ids?marked=none&root={query}").read().decode("utf-8")
+            )
+            return selection, response["selection_revision"]
+
+        def post_json(path: str, payload: dict[str, object]) -> tuple[int, dict[str, object]]:
+            request = Request(
+                f"{base_url}{path}",
+                data=json.dumps(payload).encode("utf-8"),
+                headers={"Content-Type": "application/json", "Origin": base_url},
+                method="POST",
+            )
+            try:
+                response = urlopen(request)
+            except HTTPError as exc:
+                return exc.code, json.loads(exc.read().decode("utf-8"))
+            return response.status, json.loads(response.read().decode("utf-8"))
+
+        _, current_revision = selection_payload()
+        bound_payload = {
+            "selection_revision": current_revision,
+            "page_selection": selection,
+        }
+
+        for path, extra in (
+            (
+                "/api/review/batch",
+                {"decision_state": "delete", "delete_marked": True, "export_marked": False},
+            ),
+            ("/api/files/delete", {"delete_from_disk": True}),
+            (
+                "/api/files/export",
+                {"destination": str(export_destination), "mode": "copy"},
+            ),
+        ):
+            status, error = post_json(path, {**bound_payload, "file_ids": [other_id], **extra})
+            assert status == HTTPStatus.BAD_REQUEST
+            assert "page_selection" in error["error"]
+
+        _, current_revision = selection_payload()
+        for path, extra in (
+            (
+                "/api/review/batch",
+                {"decision_state": "delete", "delete_marked": True, "export_marked": False},
+            ),
+            ("/api/files/delete", {"delete_from_disk": False}),
+            (
+                "/api/files/export",
+                {"destination": str(export_destination), "mode": "copy"},
+            ),
+        ):
+            status, error = post_json(path, {"file_ids": [review_id], **extra})
+            assert status == HTTPStatus.BAD_REQUEST
+            assert "selection_revision" in error["error"]
+
+        _, stale_revision = selection_payload()
+        status, _ = post_json(
+            "/api/review",
+            {
+                "file_id": review_id,
+                "decision_state": "delete",
+                "delete_marked": True,
+                "export_marked": False,
+            },
+        )
+        assert status == HTTPStatus.OK
+        status, error = post_json(
+            "/api/review/batch",
+            {
+                "file_ids": [export_id],
+                "selection_revision": stale_revision,
+                "page_selection": selection,
+                "decision_state": "delete",
+                "delete_marked": True,
+                "export_marked": False,
+            },
+        )
+        assert status == HTTPStatus.BAD_REQUEST
+        assert "Selected results changed" in error["error"]
+
+        _, current_revision = selection_payload()
+        status, result = post_json(
+            "/api/review/batch",
+            {
+                "file_ids": [export_id],
+                "selection_revision": current_revision,
+                "page_selection": selection,
+                "decision_state": "delete",
+                "delete_marked": True,
+                "export_marked": False,
+            },
+        )
+        assert status == HTTPStatus.OK
+        assert result == {"updated": 1}
+
+        _, current_revision = selection_payload()
+        status, result = post_json(
+            "/api/files/export",
+            {
+                "file_ids": [delete_id],
+                "selection_revision": current_revision,
+                "page_selection": selection,
+                "destination": str(export_destination),
+                "mode": "copy",
+            },
+        )
+        assert status == HTTPStatus.OK
+        assert result["copied"] == 1
+        assert (export_destination / source_delete.name).exists()
+
+        _, current_revision = selection_payload()
+        status, result = post_json(
+            "/api/files/delete",
+            {
+                "file_ids": [delete_id],
+                "selection_revision": current_revision,
+                "page_selection": selection,
+                "delete_from_disk": True,
+            },
+        )
+        assert status == HTTPStatus.OK
+        assert result["deleted_ids"] == [delete_id]
+
+        assert source_other.exists()
+        assert source_review.exists()
+        assert source_export.exists()
+        assert not source_delete.exists()
+        assert not (export_destination / source_other.name).exists()
+        with database(db_path) as connection:
+            assert connection.execute("SELECT 1 FROM review_state WHERE file_id = ?", (other_id,)).fetchone() is None
+            assert connection.execute("SELECT 1 FROM files WHERE id = ?", (other_id,)).fetchone() is not None
+            assert connection.execute("SELECT 1 FROM files WHERE id = ?", (delete_id,)).fetchone() is None
+
     def test_decision_csv_exports_all_marked_rows_for_one_root(self, test_server):
         base_url, db_path, tmp_path = test_server
         root_a = tmp_path / "library-a"

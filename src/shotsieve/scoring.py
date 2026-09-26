@@ -1013,6 +1013,8 @@ def compare_learned_models(
     summary.max_rows = COMPARE_MAX_ROWS
 
     rows = fetch_score_rows(connection, raw_root=raw_root, limit=effective_limit, offset=offset)
+    if _refresh_scoring_source_fingerprints(connection, rows):
+        rows = fetch_score_rows(connection, raw_root=raw_root, limit=effective_limit, offset=offset)
     summary.processed_rows_total = len(rows)
     summary.truncated = summary.processed_rows_total < summary.requested_rows_total
     summary.files_considered = len(rows)

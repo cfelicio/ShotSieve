@@ -4,6 +4,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from functools import partial
 from http import HTTPStatus
+import threading
 from typing import Any, cast
 from urllib.parse import parse_qs, urlparse
 
@@ -227,8 +228,13 @@ def _handle_cache_post_routes(handler: Any, context: WebRouteContext, parsed: An
     emit_json = _route(context, "send_json", send_json)
     if parsed.path == "/api/cache/missing/apply":
         payload = deps.read_json_body(handler, max_body_size=context.max_request_body_size)
-        result = _route(context, "_execute_missing_cache_apply_request", _execute_missing_cache_apply_request)(context, payload)
-        emit_json(handler, result)
+        admitted, result = _run_admitted_operation(
+            handler,
+            context,
+            lambda: _route(context, "_execute_missing_cache_apply_request", _execute_missing_cache_apply_request)(context, payload),
+        )
+        if admitted:
+            emit_json(handler, result)
         return True
 
     if parsed.path == "/api/cache/clear/start":
@@ -240,10 +246,15 @@ def _handle_cache_post_routes(handler: Any, context: WebRouteContext, parsed: An
         return False
 
     payload = deps.read_json_body(handler, max_body_size=context.max_request_body_size)
-    result = _route(context, "_execute_cache_clear_request", _execute_cache_clear_request)(
-        context, payload, progress_callback=None, cancel_check=None
+    admitted, result = _run_admitted_operation(
+        handler,
+        context,
+        lambda: _route(context, "_execute_cache_clear_request", _execute_cache_clear_request)(
+            context, payload, progress_callback=None, cancel_check=None
+        ),
     )
-    emit_json(handler, result)
+    if admitted:
+        emit_json(handler, result)
     return True
 
 
@@ -264,8 +275,10 @@ def _start_operation_job(
     deps = cast(WebRouteDependencies, context.dependency_views.jobs)
     server = getattr(handler, "server", None)
     lifecycle_lock = getattr(server, "operation_lifecycle_lock", None)
+    response_payload: dict[str, object] | None = None
 
     def start_job() -> None:
+        nonlocal response_payload
         if server is not None and not getattr(server, "accepting_operations", True):
             _route(context, "send_json_error", send_json_error)(
                 handler,
@@ -314,13 +327,118 @@ def _start_operation_job(
             registry.fail(job_id, error=str(exc))
             context.operation_lock.release()
             raise
-        _route(context, "send_json", send_json)(handler, {"job_id": job_id, "status": "running"})
+        response_payload = {"job_id": job_id, "status": "running"}
 
     if lifecycle_lock is None:
         start_job()
     else:
         with lifecycle_lock:
             start_job()
+    if response_payload is not None:
+        _route(context, "send_json", send_json)(handler, response_payload)
+
+
+def _run_admitted_operation(
+    handler: Any,
+    context: WebRouteContext,
+    operation: Callable[[], object],
+) -> tuple[bool, object | None]:
+    """Run one synchronous compatibility operation under shared admission."""
+    server = getattr(handler, "server", None)
+    lifecycle_lock = getattr(server, "operation_lifecycle_lock", None)
+
+    def admit_operation() -> bool:
+        if server is not None and not getattr(server, "accepting_operations", True):
+            _route(context, "send_json_error", send_json_error)(
+                handler,
+                HTTPStatus.SERVICE_UNAVAILABLE,
+                "The server is shutting down and cannot start new work.",
+            )
+            return False
+        if not _route(context, "try_acquire_operation_lock", try_acquire_operation_lock)(handler, context):
+            return False
+        return True
+
+    if lifecycle_lock is None:
+        admitted = admit_operation()
+    else:
+        with lifecycle_lock:
+            admitted = admit_operation()
+    if not admitted:
+        return False, None
+    try:
+        return True, operation()
+    finally:
+        context.operation_lock.release()
+
+
+def _start_analysis_job(
+    handler: Any,
+    context: WebRouteContext,
+    *,
+    registry: JobRegistry,
+    label: str,
+    initial_progress: dict[str, object],
+    worker_factory: Callable[[str], Callable[[], None]],
+) -> None:
+    """Admit and start a scan/score/compare job with common cleanup."""
+    deps = cast(WebRouteDependencies, context.dependency_views.jobs)
+    server = getattr(handler, "server", None)
+    lifecycle_lock = getattr(server, "operation_lifecycle_lock", None)
+    response_payload: dict[str, object] | None = None
+
+    def start_job() -> None:
+        nonlocal response_payload
+        if server is not None and not getattr(server, "accepting_operations", True):
+            _route(context, "send_json_error", send_json_error)(
+                handler,
+                HTTPStatus.SERVICE_UNAVAILABLE,
+                "The server is shutting down and cannot start new work.",
+            )
+            return
+        if not _route(context, "try_acquire_operation_lock", try_acquire_operation_lock)(handler, context):
+            return
+
+        lock_release_guard = threading.Lock()
+        lock_released = False
+
+        def release_operation_lock() -> None:
+            nonlocal lock_released
+            with lock_release_guard:
+                if lock_released:
+                    return
+                lock_released = True
+                context.operation_lock.release()
+
+        try:
+            job_id = registry.create(initial_progress=initial_progress)
+        except Exception:
+            release_operation_lock()
+            raise
+
+        try:
+            worker = worker_factory(job_id)
+
+            def run_job() -> None:
+                try:
+                    worker()
+                finally:
+                    release_operation_lock()
+
+            deps.thread_factory(target=run_job, daemon=True).start()
+        except Exception as exc:
+            registry.fail(job_id, error=f"{label} job failed to start: {exc}")
+            release_operation_lock()
+            raise
+        response_payload = {"job_id": job_id, "status": "running"}
+
+    if lifecycle_lock is None:
+        start_job()
+    else:
+        with lifecycle_lock:
+            start_job()
+    if response_payload is not None:
+        _route(context, "send_json", send_json)(handler, response_payload)
 
 
 def start_delete_job(handler: Any, context: WebRouteContext, payload: dict[str, object]) -> None:
@@ -434,23 +552,19 @@ def start_scan_job(handler: Any, context: WebRouteContext, payload: dict[str, ob
         handler.send_error(HTTPStatus.BAD_REQUEST, f"Overlapping folders detected: '{child}' is a subfolder of '{parent}'. Please remove the subfolder.")
         return
 
-    if not _route(context, "try_acquire_operation_lock", try_acquire_operation_lock)(handler, context):
-        return
-
     total_hint = request.files_total_hint
-    job_id = scan_registry.create(initial_progress={
-        "phase": "indexing",
-        "files_processed": 0,
-        "files_total": total_hint,
-    })
-
-    worker = partial(_run_scan_job, context, request, scan_registry, job_id)
-    try:
-        deps.thread_factory(target=worker, daemon=True).start()
-    except Exception:
-        context.operation_lock.release()
-        raise
-    _route(context, "send_json", send_json)(handler, {"job_id": job_id, "status": "running"})
+    _start_analysis_job(
+        handler,
+        context,
+        registry=scan_registry,
+        label="Scan",
+        initial_progress={
+            "phase": "indexing",
+            "files_processed": 0,
+            "files_total": total_hint,
+        },
+        worker_factory=lambda job_id: partial(_run_scan_job, context, request, scan_registry, job_id),
+    )
 
 
 def start_score_job(handler: Any, context: WebRouteContext, payload: dict[str, object]) -> None:
@@ -465,70 +579,68 @@ def start_score_job(handler: Any, context: WebRouteContext, payload: dict[str, o
         validate_model_name(requested_model)
     deps.require_learned_runtime(resource_profile=resource_profile, preferred_device=learned_device)
 
-    if not _route(context, "try_acquire_operation_lock", try_acquire_operation_lock)(handler, context):
-        return
+    def build_score_worker(job_id: str) -> Callable[[], None]:
+        def run_score_job() -> None:
+            try:
+                def publish_progress(progress: AnalysisProgress) -> None:
+                    score_registry.update_progress(job_id, _route(context, "progress_payload", progress_payload)(progress))
 
-    job_id = score_registry.create(initial_progress={
-        "model_name": None,
-        "model_index": 1,
-        "model_count": 1,
-        "files_processed": 0,
-        "files_total": 0,
-    })
+                with deps.database(context.db_path) as connection:
+                    preview_dir = deps.get_preview_cache_root(connection, db_path=context.db_path, persist=False)
+                    summary = deps.score_files(
+                        connection,
+                        limit=deps.optional_int(payload.get("limit"), minimum=1),
+                        offset=deps.optional_int(payload.get("offset"), minimum=0) or 0,
+                        raw_root=deps.optional_string(payload.get("root")),
+                        force=deps.coerce_bool(payload.get("force"), default=False),
+                        learned_backend_name=deps.optional_string(payload.get("learned_backend_name")),
+                        learned_device=learned_device,
+                        learned_batch_size=deps.optional_int(payload.get("batch_size"), minimum=1) or deps.default_batch_size(),
+                        preview_dir=preview_dir,
+                        raw_preview_mode=raw_preview_mode,
+                        max_decode_pixels=max_decode_pixels,
+                        progress_callback=publish_progress,
+                        resource_profile=resource_profile,
+                    )
 
-    def run_score_job() -> None:
-        try:
-            def publish_progress(progress: AnalysisProgress) -> None:
-                score_registry.update_progress(job_id, _route(context, "progress_payload", progress_payload)(progress))
-
-            with deps.database(context.db_path) as connection:
-                preview_dir = deps.get_preview_cache_root(connection, db_path=context.db_path, persist=False)
-                summary = deps.score_files(
-                    connection,
-                    limit=deps.optional_int(payload.get("limit"), minimum=1),
-                    offset=deps.optional_int(payload.get("offset"), minimum=0) or 0,
-                    raw_root=deps.optional_string(payload.get("root")),
-                    force=deps.coerce_bool(payload.get("force"), default=False),
-                    learned_backend_name=deps.optional_string(payload.get("learned_backend_name")),
-                    learned_device=learned_device,
-                    learned_batch_size=deps.optional_int(payload.get("batch_size"), minimum=1) or deps.default_batch_size(),
-                    preview_dir=preview_dir,
-                    raw_preview_mode=raw_preview_mode,
-                    max_decode_pixels=max_decode_pixels,
-                    progress_callback=publish_progress,
-                    resource_profile=resource_profile,
+                score_registry.complete(job_id, summary={
+                    "rows_loaded": summary.rows_loaded,
+                    "files_considered": summary.files_considered,
+                    "files_scored": summary.files_scored,
+                    "learned_scored": summary.learned_scored,
+                    "files_skipped": summary.files_skipped,
+                    "files_failed": summary.files_failed,
+                })
+            except Exception as exc:
+                failure = _model_failure_summary(
+                    exc,
+                    model_name=requested_model or DEFAULT_MODEL_NAME,
+                    requested_runtime=learned_device,
+                    phase="score_job",
+                )
+                diagnostic = failure["diagnostic"]
+                score_registry.fail(
+                    job_id,
+                    error=str(diagnostic.get("cause") or "Scoring failed."),
+                    summary=failure,
                 )
 
-            score_registry.complete(job_id, summary={
-                "rows_loaded": summary.rows_loaded,
-                "files_considered": summary.files_considered,
-                "files_scored": summary.files_scored,
-                "learned_scored": summary.learned_scored,
-                "files_skipped": summary.files_skipped,
-                "files_failed": summary.files_failed,
-            })
-        except Exception as exc:
-            failure = _model_failure_summary(
-                exc,
-                model_name=requested_model or DEFAULT_MODEL_NAME,
-                requested_runtime=learned_device,
-                phase="score_job",
-            )
-            diagnostic = failure["diagnostic"]
-            score_registry.fail(
-                job_id,
-                error=str(diagnostic.get("cause") or "Scoring failed."),
-                summary=failure,
-            )
-        finally:
-            context.operation_lock.release()
+        return run_score_job
 
-    try:
-        deps.thread_factory(target=run_score_job, daemon=True).start()
-    except Exception:
-        context.operation_lock.release()
-        raise
-    _route(context, "send_json", send_json)(handler, {"job_id": job_id, "status": "running"})
+    _start_analysis_job(
+        handler,
+        context,
+        registry=score_registry,
+        label="Score",
+        initial_progress={
+            "model_name": None,
+            "model_index": 1,
+            "model_count": 1,
+            "files_processed": 0,
+            "files_total": 0,
+        },
+        worker_factory=build_score_worker,
+    )
 
 
 def _model_prepare_progress(record: dict[str, object]) -> dict[str, object]:
@@ -649,64 +761,62 @@ def start_compare_job(handler: Any, context: WebRouteContext, payload: dict[str,
         preferred_device=compare_request.get("device"),
     )
 
-    if not _route(context, "try_acquire_operation_lock", try_acquire_operation_lock)(handler, context):
-        return
+    def build_compare_worker(job_id: str) -> Callable[[], None]:
+        def run_compare_job() -> None:
+            try:
+                def publish_progress(progress: AnalysisProgress) -> None:
+                    compare_registry.update_progress(job_id, _route(context, "progress_payload", progress_payload)(progress))
 
-    job_id = compare_registry.create(initial_progress={
-        "model_name": None,
-        "model_index": 0,
-        "model_count": len(_route(context, "_compare_request_models", _compare_request_models)(compare_request)),
-        "files_processed": 0,
-        "files_total": 0,
-    })
+                with deps.database(context.db_path) as connection:
+                    preview_dir = deps.get_preview_cache_root(connection, db_path=context.db_path, persist=False)
+                    summary = deps.compare_learned_models(
+                        connection,
+                        model_names=_route(context, "_compare_request_models", _compare_request_models)(compare_request),
+                        limit=compare_request["limit"],
+                        offset=compare_request["offset"],
+                        raw_root=compare_request["root"],
+                        learned_device=compare_request["device"],
+                        learned_batch_size=compare_request["batch_size"],
+                        compare_chunk_size=compare_request["compare_chunk_size"],
+                        progress_callback=publish_progress,
+                        preview_dir=preview_dir,
+                        raw_preview_mode=raw_preview_mode,
+                        max_decode_pixels=compare_request["max_decode_pixels"],
+                        resource_profile=compare_request.get("resource_profile"),
+                    )
 
-    def run_compare_job() -> None:
-        try:
-            def publish_progress(progress: AnalysisProgress) -> None:
-                compare_registry.update_progress(job_id, _route(context, "progress_payload", progress_payload)(progress))
-
-            with deps.database(context.db_path) as connection:
-                preview_dir = deps.get_preview_cache_root(connection, db_path=context.db_path, persist=False)
-                summary = deps.compare_learned_models(
-                    connection,
-                    model_names=_route(context, "_compare_request_models", _compare_request_models)(compare_request),
-                    limit=compare_request["limit"],
-                    offset=compare_request["offset"],
-                    raw_root=compare_request["root"],
-                    learned_device=compare_request["device"],
-                    learned_batch_size=compare_request["batch_size"],
-                    compare_chunk_size=compare_request["compare_chunk_size"],
-                    progress_callback=publish_progress,
-                    preview_dir=preview_dir,
-                    raw_preview_mode=raw_preview_mode,
-                    max_decode_pixels=compare_request["max_decode_pixels"],
-                    resource_profile=compare_request.get("resource_profile"),
+                compare_registry.complete(job_id, summary=_route(context, "comparison_summary_payload", comparison_summary_payload)(summary))
+            except Exception as exc:
+                model_names = _route(context, "_compare_request_models", _compare_request_models)(compare_request)
+                failure = _model_failure_summary(
+                    exc,
+                    model_name=",".join(model_names) if model_names else None,
+                    requested_runtime=compare_request.get("device"),
+                    phase="compare_job",
+                )
+                diagnostic = failure["diagnostic"]
+                compare_registry.fail(
+                    job_id,
+                    error=str(diagnostic.get("cause") or "Model comparison failed."),
+                    summary=failure,
                 )
 
-            compare_registry.complete(job_id, summary=_route(context, "comparison_summary_payload", comparison_summary_payload)(summary))
-        except Exception as exc:
-            model_names = _route(context, "_compare_request_models", _compare_request_models)(compare_request)
-            failure = _model_failure_summary(
-                exc,
-                model_name=",".join(model_names) if model_names else None,
-                requested_runtime=compare_request.get("device"),
-                phase="compare_job",
-            )
-            diagnostic = failure["diagnostic"]
-            compare_registry.fail(
-                job_id,
-                error=str(diagnostic.get("cause") or "Model comparison failed."),
-                summary=failure,
-            )
-        finally:
-            context.operation_lock.release()
+        return run_compare_job
 
-    try:
-        deps.thread_factory(target=run_compare_job, daemon=True).start()
-    except Exception:
-        context.operation_lock.release()
-        raise
-    _route(context, "send_json", send_json)(handler, {"job_id": job_id, "status": "running"})
+    _start_analysis_job(
+        handler,
+        context,
+        registry=compare_registry,
+        label="Compare",
+        initial_progress={
+            "model_name": None,
+            "model_index": 0,
+            "model_count": len(_route(context, "_compare_request_models", _compare_request_models)(compare_request)),
+            "files_processed": 0,
+            "files_total": 0,
+        },
+        worker_factory=build_compare_worker,
+    )
 
 
 def comparison_summary_payload(summary: Any) -> dict[str, object]:

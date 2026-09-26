@@ -19,6 +19,57 @@ def test_reset_everything_clears_persisted_ui_state(frontend_server: str) -> Non
     assert 'previewModeSelect.value = state.options?.default_preview_mode || "auto";' not in events_body
 
 
+def test_reset_filters_clears_edge_filters_and_queue_query(chromium_page) -> None:
+    page, _ = chromium_page
+    _open_review_tab(page)
+    page.locator("#toggle-advanced-filters").click()
+
+    page.evaluate(
+        """
+        () => {
+          const values = {
+            'query-filter': 'stale', 'min-score': '10', 'max-score': '90',
+            'filter-min-mp': '12', 'filter-max-mp': '50',
+            'filter-min-edge': '1920', 'filter-max-edge': '4000',
+            'filter-min-size': '1', 'filter-max-size': '100',
+            'marked-filter': 'delete', 'issues-filter': 'issues',
+            'filter-metadata-status': 'unknown', 'sort-filter': 'path',
+          };
+          for (const [id, value] of Object.entries(values)) {
+            document.getElementById(id).value = value;
+          }
+          document.querySelector("input[name='format-filter']").checked = false;
+        }
+        """,
+    )
+
+    with page.expect_request(lambda request: "/api/files?" in request.url) as request_info:
+        page.locator("#clear-filters").click()
+    request = request_info.value
+
+    page.wait_for_function(
+        """
+        () => [
+          'query-filter', 'min-score', 'max-score', 'filter-min-mp',
+          'filter-max-mp', 'filter-min-edge', 'filter-max-edge',
+          'filter-min-size', 'filter-max-size',
+        ].every((id) => document.getElementById(id)?.value === '')
+          && document.getElementById('marked-filter')?.value === 'all'
+          && document.getElementById('issues-filter')?.value === 'all'
+          && document.getElementById('filter-metadata-status')?.value === 'all'
+          && document.getElementById('sort-filter')?.value === 'learned_asc'
+          && [...document.querySelectorAll("input[name='format-filter']")].every((input) => input.checked)
+        """,
+    )
+
+    assert "min_edge" not in request.url
+    assert "max_edge" not in request.url
+    assert "min_mp" not in request.url
+    assert "max_mp" not in request.url
+    assert "min_size" not in request.url
+    assert "max_size" not in request.url
+
+
 def test_ui_state_is_scoped_to_database_marker(chromium_page) -> None:
     page, _ = chromium_page
     page.wait_for_function("() => Boolean(document.body?.dataset?.databasePath)")

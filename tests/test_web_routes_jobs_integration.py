@@ -21,6 +21,56 @@ from conftest import create_image, find_free_port
 
 
 class TestWebRoutesJobsIntegration:
+    def test_shutdown_tracks_all_job_families_and_direct_operations(self, tmp_path: Path):
+        db_path = tmp_path / "data" / "shotsieve.db"
+        initialize_database(db_path)
+        handler = build_handler(db_path)
+        server = BoundedReviewHTTPServer(("127.0.0.1", 0), handler)
+        registries = (
+            server.scan_registry,
+            server.score_registry,
+            server.compare_registry,
+            server.operation_registry,
+            server.model_registry,
+        )
+        assert all(registry is not None for registry in registries)
+        assert server.operation_lock is handler._shotsieve_operation_lock
+
+        job_ids = [
+            registry.create(initial_progress={"phase": "running"})
+            for registry in registries
+            if registry is not None
+        ]
+        server.operation_lock.acquire()
+        wait_finished = threading.Event()
+        try:
+            server.begin_operation_shutdown()
+            assert all(
+                registry is not None and registry.is_cancelled(job_id)
+                for registry, job_id in zip(registries, job_ids)
+            )
+            assert server.has_running_operations()
+
+            def wait_for_shutdown() -> None:
+                server.wait_for_operations()
+                wait_finished.set()
+
+            waiter = threading.Thread(target=wait_for_shutdown)
+            waiter.start()
+            assert not wait_finished.wait(timeout=0.1)
+
+            for registry, job_id in zip(registries, job_ids):
+                assert registry is not None
+                registry.complete(job_id, summary={"state": "cancelled"})
+            server.operation_lock.release()
+            waiter.join(timeout=2)
+            assert wait_finished.is_set()
+            assert not server.has_running_operations()
+        finally:
+            if server.operation_lock.locked():
+                server.operation_lock.release()
+            server.server_close()
+
     def test_shutdown_waits_for_inflight_move_catalog_commit(self, tmp_path: Path, monkeypatch):
         from shotsieve import export as export_module
 
@@ -38,7 +88,8 @@ class TestWebRoutesJobsIntegration:
             file_id = connection.execute("SELECT id FROM files LIMIT 1").fetchone()["id"]
             selection_revision = review_selection_revision(
                 connection,
-                scope="review-browser",
+                scope="review-state",
+                root=str(photo_dir.resolve()),
                 marked="all",
             )
 
@@ -68,7 +119,11 @@ class TestWebRoutesJobsIntegration:
             "destination": str(destination),
             "mode": "move",
             "selection_revision": selection_revision,
-            "page_selection": {"scope": "review-browser", "marked": "all"},
+            "page_selection": {
+                "scope": "review-state",
+                "root": str(photo_dir.resolve()),
+                "marked": "all",
+            },
         }).encode("utf-8")
         start_request = Request(
             f"http://127.0.0.1:{server.server_port}/api/files/export/start",

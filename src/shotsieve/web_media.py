@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from http import HTTPStatus
 from pathlib import Path
 from typing import Any, Callable
+from urllib.parse import quote
 
 from .db import normalize_resolved_path
 
@@ -13,6 +14,22 @@ DatabaseFactory = Callable[[Path], Any]
 BuildConfigFunc = Callable[[str], Any]
 PreviewNameFunc = Callable[[Path], str]
 GuessMediaTypeFunc = Callable[[str], tuple[str | None, str | None]]
+
+_ACTIVE_MEDIA_TYPES = frozenset(
+    {
+        "application/ecmascript",
+        "application/javascript",
+        "application/xhtml+xml",
+        "application/xml",
+        "image/svg+xml",
+        "text/html",
+        "text/javascript",
+        "text/xml",
+    }
+)
+_ACTIVE_MEDIA_EXTENSIONS = frozenset(
+    {".htm", ".html", ".js", ".mjs", ".svg", ".svgz", ".xhtml", ".xml", ".xsl", ".xslt"}
+)
 
 
 @dataclass(frozen=True)
@@ -30,6 +47,11 @@ class MediaDependencies:
     stable_preview_name: PreviewNameFunc
     guess_media_type: GuessMediaTypeFunc
     is_within_any_root: Callable[[Path, list[Path]], bool]
+
+
+def _is_active_media(path: Path, content_type: str | None) -> bool:
+    normalized_type = str(content_type or "").split(";", 1)[0].strip().casefold()
+    return normalized_type in _ACTIVE_MEDIA_TYPES or path.suffix.casefold() in _ACTIVE_MEDIA_EXTENSIONS
 
 
 def resolve_media_request(
@@ -117,6 +139,9 @@ def serve_media_response(
     file_size = path.stat().st_size
     if not content_type:
         content_type = mime_fallbacks.get(path.suffix.casefold(), "application/octet-stream")
+    active_media = _is_active_media(path, content_type)
+    if active_media:
+        content_type = "application/octet-stream"
 
     range_header = handler.headers.get("Range")
     start = 0
@@ -151,6 +176,16 @@ def serve_media_response(
     handler.send_header("Content-Type", content_type)
     handler.send_header("Content-Length", str(content_length))
     handler.send_header("Accept-Ranges", "bytes")
+    if active_media:
+        # Active source formats must never be interpreted in the application's
+        # origin.  The global response security headers add nosniff; the
+        # attachment and sandbox headers also protect direct/custom extension
+        # requests when this helper is used outside the normal handler.
+        handler.send_header(
+            "Content-Disposition",
+            f"attachment; filename*=UTF-8''{quote(path.name, safe='')}",
+        )
+        handler.send_header("Content-Security-Policy", "sandbox")
     # Media URLs are keyed by catalog ID, while previews and source files can
     # be replaced in place.  Clients must revalidate instead of reusing stale
     # bytes from a long-lived immutable cache entry.

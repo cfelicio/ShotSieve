@@ -834,6 +834,7 @@ def _load_existing_rows(connection, paths: Sequence[Path]) -> dict[str, dict]:
     placeholders = ",".join("?" for _ in path_keys)
     return {
         row["path_key"]: {
+            "path": row["path"],
             "modified_time": row["modified_time"],
             "size_bytes": row["size_bytes"],
             "width": row["width"],
@@ -848,7 +849,7 @@ def _load_existing_rows(connection, paths: Sequence[Path]) -> dict[str, dict]:
             "last_analysis_time": row["last_analysis_time"],
         }
         for row in connection.execute(
-            f"SELECT path_key, modified_time, size_bytes, width, height, capture_time, preview_status, preview_conversion_version, preview_path, last_error, analysis_status, analysis_error, last_analysis_time FROM files WHERE path_key IN ({placeholders})",
+            f"SELECT path, path_key, modified_time, size_bytes, width, height, capture_time, preview_status, preview_conversion_version, preview_path, last_error, analysis_status, analysis_error, last_analysis_time FROM files WHERE path_key IN ({placeholders})",
             path_keys,
         ).fetchall()
     }
@@ -1002,14 +1003,27 @@ def commit_batch(connection, batch: list[dict], summary: ScanSummary, *, existin
         placeholders = ",".join("?" for _ in path_keys)
         existing_rows = {
             row["path_key"]: {
+                "path": row["path"],
                 "modified_time": row["modified_time"],
                 "size_bytes": row["size_bytes"],
             }
             for row in connection.execute(
-                f"SELECT path_key, modified_time, size_bytes FROM files WHERE path_key IN ({placeholders})",
+                f"SELECT path, path_key, modified_time, size_bytes FROM files WHERE path_key IN ({placeholders})",
                 path_keys,
             ).fetchall()
         }
+
+    batch, collision_errors = _exclude_path_key_collisions(batch, existing_rows)
+    for item, error_text in collision_errors:
+        # Colliding items are excluded from the normal commit/accounting loop.
+        # Count each collision even when preview generation already marked the
+        # item as an error, otherwise a collision plus preview failure appears
+        # to be a clean scan.
+        summary.files_failed += 1
+        summary.last_batch_error = error_text
+
+    if not batch:
+        return
 
     connection.executemany(
         """
@@ -1094,6 +1108,67 @@ def commit_batch(connection, batch: list[dict], summary: ScanSummary, *, existin
             summary.files_failed += 1
             if item.get("last_error"):
                 summary.last_batch_error = item["last_error"]
+
+
+def _exclude_path_key_collisions(
+    batch: list[dict],
+    existing_rows: dict[str, dict],
+) -> tuple[list[dict], list[tuple[dict, str]]]:
+    """Exclude distinct paths that would otherwise share one catalog key."""
+    items_by_key: dict[str, list[tuple[int, dict]]] = {}
+    for index, item in enumerate(batch):
+        items_by_key.setdefault(item["path_key"], []).append((index, item))
+
+    conflicting_indices: set[int] = set()
+    collision_errors: list[tuple[dict, str]] = []
+    for path_key, items in items_by_key.items():
+        existing_path = existing_rows.get(path_key, {}).get("path")
+        key_conflicting_indices: set[int] = set()
+        conflicting_paths: set[str] = set()
+
+        for item_index, item in items:
+            item_path = str(item["path"])
+            if existing_path is not None and not _paths_refer_to_same_file(item_path, existing_path):
+                conflicting_indices.add(item_index)
+                key_conflicting_indices.add(item_index)
+                conflicting_paths.update((item_path, str(existing_path)))
+
+            for other_index, other_item in items:
+                if item_index == other_index:
+                    continue
+                other_path = str(other_item["path"])
+                if not _paths_refer_to_same_file(item_path, other_path):
+                    conflicting_indices.update((item_index, other_index))
+                    key_conflicting_indices.update((item_index, other_index))
+                    conflicting_paths.update((item_path, other_path))
+
+        if conflicting_paths:
+            paths_text = ", ".join(sorted(conflicting_paths))
+            error_text = f"Path-key collision detected for '{path_key}'; skipped conflicting paths: {paths_text}"
+            collision_errors.extend(
+                (item, error_text)
+                for item_index, item in items
+                if item_index in key_conflicting_indices
+            )
+
+    safe_batch = [
+        item for index, item in enumerate(batch) if index not in conflicting_indices
+    ]
+    return safe_batch, collision_errors
+
+
+def _paths_refer_to_same_file(left: str, right: str) -> bool:
+    """Compare path spellings without weakening the configured path-key policy."""
+    try:
+        if os.path.normcase(os.path.abspath(left)) == os.path.normcase(os.path.abspath(right)):
+            return True
+    except (OSError, TypeError, ValueError):
+        pass
+
+    try:
+        return os.path.samefile(left, right)
+    except (OSError, TypeError, ValueError):
+        return False
 
 
 def utc_now() -> str:

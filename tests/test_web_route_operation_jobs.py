@@ -89,6 +89,126 @@ def test_operation_job_launcher_owns_shared_lifecycle(monkeypatch, tmp_path: Pat
     assert status["summary"] == {"result": {"done": True}}
 
 
+def test_synchronous_compatibility_operation_uses_lifecycle_admission(monkeypatch, tmp_path: Path):
+    from shotsieve import web_routes as route_module
+    from shotsieve.web_route_jobs import _run_admitted_operation
+
+    operation_lock = threading.Lock()
+    lifecycle_lock = threading.Lock()
+    server = SimpleNamespace(
+        operation_lifecycle_lock=lifecycle_lock,
+        accepting_operations=True,
+    )
+    handler = SimpleNamespace(server=server)
+    context = route_module.WebRouteContext(
+        db_path=tmp_path / "shotsieve.db",
+        operation_lock=operation_lock,
+        scan_registry=None,
+        score_registry=None,
+        compare_registry=None,
+        max_request_body_size=1024,
+        static_dir=tmp_path,
+        media_mime_fallbacks={},
+        dependencies=SimpleNamespace(),
+    )
+    errors: list[tuple[HTTPStatus, str]] = []
+    started = threading.Event()
+    release = threading.Event()
+    result: list[tuple[bool, object | None]] = []
+
+    monkeypatch.setattr(
+        route_module,
+        "send_json_error",
+        lambda _handler, status, message: errors.append((status, message)),
+    )
+
+    def run_operation() -> None:
+        result.append(
+            _run_admitted_operation(
+                handler,
+                context,
+                lambda: (started.set(), release.wait(timeout=2), "done")[-1],
+            )
+        )
+
+    worker = threading.Thread(target=run_operation)
+    worker.start()
+    assert started.wait(timeout=1)
+
+    admitted, value = _run_admitted_operation(handler, context, lambda: "unexpected")
+    assert (admitted, value) == (False, None)
+    assert errors[-1][0] == HTTPStatus.CONFLICT
+
+    with lifecycle_lock:
+        server.accepting_operations = False
+    admitted, value = _run_admitted_operation(handler, context, lambda: "unexpected")
+    assert (admitted, value) == (False, None)
+    assert errors[-1][0] == HTTPStatus.SERVICE_UNAVAILABLE
+
+    release.set()
+    worker.join(timeout=2)
+    assert not worker.is_alive()
+    assert result == [(True, "done")]
+    assert not operation_lock.locked()
+
+
+def test_analysis_job_launcher_releases_operation_lock_after_worker_finishes(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    from shotsieve import web_routes as route_module
+    from shotsieve import web_route_jobs
+
+    operation_lock = threading.Lock()
+    registry = JobRegistry()
+    captured: dict[str, object] = {}
+
+    class SynchronousThread:
+        def __init__(self, target):
+            self.target = target
+
+        def start(self):
+            self.target()
+
+    dependencies = SimpleNamespace(
+        thread_factory=lambda *, target, daemon: SynchronousThread(target),
+    )
+    context = route_module.WebRouteContext(
+        db_path=tmp_path / "analysis.db",
+        operation_lock=operation_lock,
+        scan_registry=registry,
+        score_registry=None,
+        compare_registry=None,
+        max_request_body_size=1024,
+        static_dir=tmp_path,
+        media_mime_fallbacks={},
+        dependencies=dependencies,
+    )
+    monkeypatch.setattr(
+        route_module,
+        "try_acquire_operation_lock",
+        lambda _handler, ctx: ctx.operation_lock.acquire(blocking=False),
+    )
+    monkeypatch.setattr(
+        route_module,
+        "send_json",
+        lambda _handler, payload: captured.setdefault("start", payload),
+    )
+
+    web_route_jobs._start_analysis_job(
+        SimpleNamespace(),
+        context,
+        registry=registry,
+        label="Scan",
+        initial_progress={"phase": "starting"},
+        worker_factory=lambda job_id: lambda: registry.complete(job_id, summary={"done": True}),
+    )
+
+    job_id = captured["start"]["job_id"]
+    assert not operation_lock.locked()
+    assert registry.status(job_id)["status"] == "completed"
+
+
 class _ThreadStartFailure:
     def start(self) -> None:
         raise RuntimeError("thread start failed")
@@ -140,6 +260,9 @@ def test_scan_job_releases_operation_lock_if_worker_start_fails(monkeypatch, tmp
         web_route_jobs.start_scan_job(SimpleNamespace(), context, {})
 
     assert not operation_lock.locked()
+    assert not registry.has_running_jobs()
+    assert [record["status"] for record in registry._jobs.values()] == ["failed"]
+    assert "Scan job failed to start" in next(iter(registry._jobs.values()))["error"]
 
 
 def test_score_job_releases_operation_lock_if_worker_start_fails(monkeypatch, tmp_path: Path) -> None:
@@ -159,6 +282,9 @@ def test_score_job_releases_operation_lock_if_worker_start_fails(monkeypatch, tm
         web_route_jobs.start_score_job(SimpleNamespace(), context, {})
 
     assert not operation_lock.locked()
+    assert not registry.has_running_jobs()
+    assert [record["status"] for record in registry._jobs.values()] == ["failed"]
+    assert "Score job failed to start" in next(iter(registry._jobs.values()))["error"]
 
 
 def test_compare_job_releases_operation_lock_if_worker_start_fails(monkeypatch, tmp_path: Path) -> None:
@@ -190,6 +316,9 @@ def test_compare_job_releases_operation_lock_if_worker_start_fails(monkeypatch, 
         web_route_jobs.start_compare_job(SimpleNamespace(), context, {})
 
     assert not operation_lock.locked()
+    assert not registry.has_running_jobs()
+    assert [record["status"] for record in registry._jobs.values()] == ["failed"]
+    assert "Compare job failed to start" in next(iter(registry._jobs.values()))["error"]
 
 
 class TestRouteHandlingAsync:
@@ -310,7 +439,12 @@ class TestRouteHandlingAsync:
                 preview_dir=tmp_path / "previews",
             )
             file_ids = [row["id"] for row in connection.execute("SELECT id FROM files ORDER BY id ASC").fetchall()]
-            current_rev = web_module.review_selection_revision(connection, scope="review-browser", marked="all")
+            current_rev = web_module.review_selection_revision(
+                connection,
+                scope="review-state",
+                root=str(photo_dir.resolve()),
+                marked="all",
+            )
 
         port = find_free_port()
         server = ThreadingHTTPServer(("127.0.0.1", port), build_handler(db_path))
@@ -324,7 +458,11 @@ class TestRouteHandlingAsync:
                     "delete_from_disk": True,
                     "count": len(file_ids),
                     "selection_revision": current_rev,
-                    "page_selection": {"scope": "review-browser", "marked": "all"},
+                    "page_selection": {
+                        "scope": "review-state",
+                        "root": str(photo_dir.resolve()),
+                        "marked": "all",
+                    },
                 }).encode("utf-8"),
                 headers={"Content-Type": "application/json"},
                 method="POST",

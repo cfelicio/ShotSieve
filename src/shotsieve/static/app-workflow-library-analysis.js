@@ -123,11 +123,24 @@
         setBusyProgress(100);
         setBusyPhaseProgress({ percent: 100, phaseIndex: 2, phaseCount: 2, phaseLabel: "Scanning files" });
       }
-      setBusyMessage(`Scan completed. Processed ${result.files_seen} file(s).`);
-
-      showToast("Scan completed.");
+      const scanStatus = String(result?.overall_status || "completed").toLowerCase();
+      if (scanStatus === "completed_with_errors") {
+        const failedCount = Number(result?.files_failed || 0);
+        setBusyMessage(
+          `Scan completed with ${failedCount} file(s) failed. Open Analysis Diagnostics for details.`,
+        );
+        showToast(
+          `Scan completed with ${failedCount} file(s) failed. Open Analysis Diagnostics for details.`,
+          "warning",
+        );
+      } else {
+        setBusyMessage(`Scan completed. Processed ${result.files_seen} file(s).`);
+        showToast("Scan completed.");
+      }
       await refreshWorkspace();
-      syncReviewRoot(root);
+      if (currentLibraryRoot() === root) {
+        syncReviewRoot(root);
+      }
     }
 
     async function runScore(rootOverride = null, { pipeline = null } = {}) {
@@ -214,7 +227,9 @@
 
       showToast("Scoring completed.");
       await refreshWorkspace();
-      syncReviewRoot(root);
+      if (currentLibraryRoot() === root) {
+        syncReviewRoot(root);
+      }
       return true;
     }
 

@@ -39,6 +39,7 @@ from shotsieve.bootstrap_assets import (
     select_manifest_asset,
     select_runtime_target,
     sha256_file,
+    validate_runtime_target_for_host,
 )
 from shotsieve import bootstrap_sidecar
 
@@ -76,6 +77,7 @@ __all__ = [
     "select_manifest_asset",
     "select_runtime_target",
     "sha256_file",
+    "validate_runtime_target_for_host",
 ]
 
 
@@ -99,11 +101,18 @@ def build_plan(args: argparse.Namespace) -> dict[str, Any]:
     runtime_root = Path(args.runtime_root).expanduser().resolve() if args.runtime_root else default_runtime_root()
     manifest_url = resolve_manifest_url(args.manifest_url)
     has_nvidia = detect_nvidia_runtime()
+    system_name = platform.system()
+    machine_name = platform.machine()
 
     selected_target = args.target or select_runtime_target(
-        system_name=platform.system(),
-        machine_name=platform.machine(),
+        system_name=system_name,
+        machine_name=machine_name,
         has_nvidia=has_nvidia,
+    )
+    validate_runtime_target_for_host(
+        target_id=selected_target,
+        system_name=system_name,
+        machine_name=machine_name,
     )
 
     manifest = fetch_manifest(manifest_url)

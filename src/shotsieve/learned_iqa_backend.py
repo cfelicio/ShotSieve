@@ -5,6 +5,7 @@ from dataclasses import dataclass
 import gc
 import io
 import logging
+import math
 import os
 import sys
 import threading
@@ -45,6 +46,17 @@ class LearnedScoreResult:
     normalized_score: float | None
     confidence: float | None = None
     error: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.error is not None:
+            return
+        values = (self.raw_score, self.normalized_score, self.confidence)
+        try:
+            finite = all(value is None or math.isfinite(float(value)) for value in values)
+        except (TypeError, ValueError):
+            finite = False
+        if not finite:
+            self.error = "Learned model returned a non-finite score or confidence."
 
     @property
     def failed(self) -> bool:

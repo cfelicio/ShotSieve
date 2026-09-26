@@ -16,6 +16,7 @@ import shutil
 import subprocess
 import sys
 import tarfile
+import tempfile
 import time
 import traceback
 import urllib.request
@@ -1128,6 +1129,33 @@ _PRESERVED_RUNTIME_SIDECAR_ENTRIES = frozenset(
 )
 
 
+def _copy_learned_sidecar_entries(source_dir: Path, destination_dir: Path) -> None:
+    destination_dir.mkdir(parents=True, exist_ok=True)
+    for source_path in source_dir.iterdir():
+        if source_path.name in _PRESERVED_RUNTIME_SIDECAR_ENTRIES:
+            continue
+        destination_path = destination_dir / source_path.name
+        if source_path.is_dir() and not source_path.is_symlink():
+            shutil.copytree(
+                source_path,
+                destination_path,
+                dirs_exist_ok=True,
+                ignore=_ignore_python_bytecode_artifacts,
+            )
+        else:
+            shutil.copy2(source_path, destination_path)
+
+
+def _remove_learned_sidecar_entries(site_packages: Path) -> None:
+    for entry in site_packages.iterdir():
+        if entry.name in _PRESERVED_RUNTIME_SIDECAR_ENTRIES:
+            continue
+        if entry.is_dir() and not entry.is_symlink():
+            shutil.rmtree(entry, ignore_errors=True)
+        else:
+            entry.unlink(missing_ok=True)
+
+
 def _merge_staged_learned_iqa_sidecar(
     *, staging_dir: Path, site_packages: Path, runtime: str
 ) -> None:
@@ -1139,23 +1167,29 @@ def _merge_staged_learned_iqa_sidecar(
     Windows never has to rename or overwrite DLLs held by this process.
     """
     site_packages.mkdir(parents=True, exist_ok=True)
-    for package_name in _learned_iqa_packages_for_runtime(runtime):
-        _purge_sidecar_distribution(site_packages, package_name)
-
-    for source_path in staging_dir.iterdir():
-        entry_name = source_path.name
-        if entry_name in _PRESERVED_RUNTIME_SIDECAR_ENTRIES:
-            continue
-        destination_path = site_packages / entry_name
-        if source_path.is_dir() and not source_path.is_symlink():
-            shutil.copytree(
-                source_path,
-                destination_path,
-                dirs_exist_ok=True,
-                ignore=_ignore_python_bytecode_artifacts,
-            )
-        else:
-            shutil.copy2(source_path, destination_path)
+    rollback_dir = Path(tempfile.mkdtemp(prefix=f".{site_packages.name}.learned-backup-", dir=site_packages.parent))
+    remove_rollback_dir = True
+    try:
+        _copy_learned_sidecar_entries(site_packages, rollback_dir)
+        try:
+            for package_name in _learned_iqa_packages_for_runtime(runtime):
+                _purge_sidecar_distribution(site_packages, package_name)
+            _copy_learned_sidecar_entries(staging_dir, site_packages)
+        except BaseException as merge_error:
+            _remove_learned_sidecar_entries(site_packages)
+            try:
+                _copy_learned_sidecar_entries(rollback_dir, site_packages)
+            except BaseException as restore_error:
+                remove_rollback_dir = False
+                raise RuntimeError(
+                    "Learned-IQA sidecar merge failed and rollback failed; "
+                    f"the recovery backup was retained at '{rollback_dir}'. "
+                    f"Merge error: {merge_error}; rollback error: {restore_error}"
+                ) from merge_error
+            raise
+    finally:
+        if remove_rollback_dir:
+            shutil.rmtree(rollback_dir, ignore_errors=True)
 
 
 def _is_python_bytecode_artifact(name: str) -> bool:

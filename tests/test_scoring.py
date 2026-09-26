@@ -14,6 +14,43 @@ from shotsieve.scanner import scan_root
 from shotsieve.scoring import score_files
 
 
+def test_score_rejects_nonfinite_learned_results_without_persisting_them(tmp_path: Path) -> None:
+    db_path = tmp_path / "data" / "shotsieve.db"
+    photo_dir = tmp_path / "photos"
+    photo_dir.mkdir()
+    create_image(photo_dir / "sample.jpg")
+
+    class NonFiniteBackend:
+        name = "topiq_nr"
+        model_version = "fake:non-finite"
+
+        def score_paths(self, image_paths, *, batch_size: int = 4, resource_profile: str | None = None, max_decode_pixels: int | None = None):
+            return [LearnedScoreResult(raw_score=float("nan"), normalized_score=50.0, confidence=float("inf")) for _ in image_paths]
+
+    initialize_database(db_path)
+    with connect(db_path) as connection:
+        scan_root(
+            connection,
+            root=photo_dir,
+            recursive=True,
+            extensions=(".jpg",),
+            preview_dir=tmp_path / "previews",
+        )
+        summary = score_files(
+            connection,
+            learned_backend_name="topiq_nr",
+            learned_backend_factory=lambda _model_name: NonFiniteBackend(),
+            learned_model_version_resolver=lambda _model_name: "fake:non-finite",
+        )
+        score_row = connection.execute("SELECT * FROM scores").fetchone()
+        file_row = connection.execute("SELECT analysis_status, analysis_error FROM files").fetchone()
+
+    assert summary.files_failed == 1
+    assert score_row is None
+    assert file_row["analysis_status"] == "failed"
+    assert "non-finite" in file_row["analysis_error"]
+
+
 def test_score_accepts_the_current_qrealign_mini_model(tmp_path: Path) -> None:
     db_path = tmp_path / "data" / "shotsieve.db"
     preview_dir = tmp_path / "previews"

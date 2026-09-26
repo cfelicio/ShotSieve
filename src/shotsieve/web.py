@@ -136,6 +136,10 @@ class BoundedReviewHTTPServer(ThreadingHTTPServer):
         request_read_timeout_seconds: float = _DEFAULT_REQUEST_BODY_READ_TIMEOUT_SECONDS,
         request_io_poll_timeout_seconds: float = _DEFAULT_REQUEST_IO_POLL_TIMEOUT_SECONDS,
         response_write_timeout_seconds: float = _DEFAULT_RESPONSE_WRITE_TIMEOUT_SECONDS,
+        operation_lock: threading.Lock | None = None,
+        scan_registry: JobRegistry | None = None,
+        score_registry: JobRegistry | None = None,
+        compare_registry: JobRegistry | None = None,
         operation_registry: JobRegistry | None = None,
         model_registry: JobRegistry | None = None,
     ) -> None:
@@ -146,6 +150,22 @@ class BoundedReviewHTTPServer(ThreadingHTTPServer):
         self.request_io_poll_timeout_seconds = max(0.05, float(request_io_poll_timeout_seconds))
         self.response_write_timeout_seconds = max(0.1, float(response_write_timeout_seconds))
         self._request_slots = threading.BoundedSemaphore(max(1, int(max_concurrent_requests)))
+        if operation_lock is None:
+            operation_lock = getattr(handler_class, "_shotsieve_operation_lock", None)
+        if scan_registry is None:
+            scan_registry = getattr(handler_class, "_shotsieve_scan_registry", None)
+        if score_registry is None:
+            score_registry = getattr(handler_class, "_shotsieve_score_registry", None)
+        if compare_registry is None:
+            compare_registry = getattr(handler_class, "_shotsieve_compare_registry", None)
+        if operation_registry is None:
+            operation_registry = getattr(handler_class, "_shotsieve_operation_registry", None)
+        if model_registry is None:
+            model_registry = getattr(handler_class, "_shotsieve_model_registry", None)
+        self.operation_lock = operation_lock
+        self.scan_registry = scan_registry
+        self.score_registry = score_registry
+        self.compare_registry = compare_registry
         self.operation_registry = operation_registry
         self.model_registry = model_registry
         self.operation_lifecycle_lock = threading.Lock()
@@ -155,20 +175,32 @@ class BoundedReviewHTTPServer(ThreadingHTTPServer):
         """Reject new mutation jobs and ask active file operations to stop."""
         with self.operation_lifecycle_lock:
             self.accepting_operations = False
-        for registry in (self.operation_registry, self.model_registry):
+        for registry in self._operation_registries():
             if registry is not None:
                 registry.cancel_running()
 
     def has_running_operations(self) -> bool:
-        return any(
-            registry is not None and registry.has_running_jobs()
-            for registry in (self.operation_registry, self.model_registry)
+        return (
+            any(registry is not None and registry.has_running_jobs() for registry in self._operation_registries())
+            or (self.operation_lock is not None and self.operation_lock.locked())
         )
 
     def wait_for_operations(self) -> None:
-        for registry in (self.operation_registry, self.model_registry):
+        for registry in self._operation_registries():
             if registry is not None:
                 registry.wait_until_idle()
+        if self.operation_lock is not None:
+            self.operation_lock.acquire()
+            self.operation_lock.release()
+
+    def _operation_registries(self) -> tuple[JobRegistry | None, ...]:
+        return (
+            self.scan_registry,
+            self.score_registry,
+            self.compare_registry,
+            self.operation_registry,
+            self.model_registry,
+        )
 
     def process_request(self, request, client_address) -> None:
         request_socket = cast(socket.socket, request)
@@ -290,6 +322,10 @@ def build_review_server(
         request_read_timeout_seconds=request_read_timeout_seconds,
         request_io_poll_timeout_seconds=request_io_poll_timeout_seconds,
         response_write_timeout_seconds=response_write_timeout_seconds,
+        operation_lock=handler._shotsieve_operation_lock,
+        scan_registry=handler._shotsieve_scan_registry,
+        score_registry=handler._shotsieve_score_registry,
+        compare_registry=handler._shotsieve_compare_registry,
         operation_registry=handler._shotsieve_operation_registry,
         model_registry=handler._shotsieve_model_registry,
     )
@@ -460,6 +496,10 @@ def build_handler(db_path: Path):
 
     class ReviewHandler(BaseHTTPRequestHandler):
         _shotsieve_route_dependencies = route_context.dependencies
+        _shotsieve_operation_lock = operation_lock
+        _shotsieve_scan_registry = scan_registry
+        _shotsieve_score_registry = score_registry
+        _shotsieve_compare_registry = compare_registry
         _shotsieve_operation_registry = operation_registry
         _shotsieve_model_registry = model_registry
         protocol_version = "HTTP/1.1"

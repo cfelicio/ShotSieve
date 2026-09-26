@@ -13,6 +13,7 @@ import warnings
 
 import pytest
 
+from shotsieve import bootstrap as bootstrap_launcher
 from shotsieve import bootstrap_assets as bootstrap_module
 from shotsieve import bootstrap_sidecar
 from shotsieve import runtime_support
@@ -97,7 +98,40 @@ def test_select_runtime_target_prefers_mps_on_apple_silicon() -> None:
 def test_select_runtime_target_falls_back_to_cpu_when_no_accelerator() -> None:
     assert bootstrap_module.select_runtime_target(system_name="Windows", machine_name="AMD64", has_nvidia=False) == "windows-cpu"
     assert bootstrap_module.select_runtime_target(system_name="Linux", machine_name="x86_64", has_nvidia=False) == "linux-cpu"
-    assert bootstrap_module.select_runtime_target(system_name="Darwin", machine_name="x86_64", has_nvidia=False) == "macos-cpu"
+
+
+def test_select_runtime_target_rejects_intel_macos_packaged_runtime() -> None:
+    with pytest.raises(SystemExit, match="Apple Silicon.*Intel macOS"):
+        bootstrap_module.select_runtime_target(system_name="Darwin", machine_name="x86_64", has_nvidia=False)
+
+
+def test_validate_runtime_target_rejects_explicit_macos_target_on_intel() -> None:
+    with pytest.raises(SystemExit, match="Apple Silicon.*Intel macOS"):
+        bootstrap_module.validate_runtime_target_for_host(
+            target_id="macos-cpu",
+            system_name="Darwin",
+            machine_name="x86_64",
+        )
+
+
+def test_validate_runtime_target_allows_arm64_macos_targets_on_apple_silicon() -> None:
+    bootstrap_module.validate_runtime_target_for_host(
+        target_id="macos-cpu",
+        system_name="Darwin",
+        machine_name="arm64",
+    )
+
+
+def test_build_plan_rejects_explicit_macos_target_before_manifest_fetch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(bootstrap_launcher.platform, "system", lambda: "Darwin")
+    monkeypatch.setattr(bootstrap_launcher.platform, "machine", lambda: "x86_64")
+    monkeypatch.setattr(bootstrap_launcher, "fetch_manifest", lambda _url: pytest.fail("manifest fetch should not run"))
+
+    args = bootstrap_launcher.build_parser().parse_args(["--target", "macos-cpu"])
+    with pytest.raises(SystemExit, match="Apple Silicon.*Intel macOS"):
+        bootstrap_launcher.build_plan(args)
 
 
 def test_select_manifest_asset_returns_target_entry() -> None:

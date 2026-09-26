@@ -86,6 +86,10 @@ data/
 /performance-reports/
 /.performance-data/
 
+# Local Codex agent state
+/.agent/
+/AGENTS.md
+
 # OS generated files
 .DS_Store
 Thumbs.db

@@ -79,6 +79,19 @@
         || target?.closest?.("[role='tablist']");
     }
 
+    function hasOpenOverlay() {
+      return [...document.querySelectorAll("dialog, [role='dialog']")].some((overlay) => {
+        if (overlay instanceof HTMLDialogElement) {
+          return overlay.open;
+        }
+        return overlay.hasAttribute("open") && !overlay.classList.contains("overlay-closed");
+      });
+    }
+
+    function reviewShortcutsEnabled() {
+      return state.tab === "review" && !state.isBusy && !hasOpenOverlay();
+    }
+
     function confirmAndRun(buttonId, busyMsg, cacheKey, successMsg, { onSuccess } = {}) {
       document.getElementById(buttonId).addEventListener("click", () => {
         const btn = document.getElementById(buttonId);
@@ -241,7 +254,7 @@
 
       document.getElementById("refresh-all").addEventListener("click", () => withBusy("Refreshing workspace...", () => refreshWorkspace()).catch(handleError));
       document.getElementById("clear-filters").addEventListener("click", () => {
-        ["query-filter", "min-score", "max-score", "filter-min-mp", "filter-max-mp", "filter-min-size", "filter-max-size"].forEach((id) => {
+        ["query-filter", "min-score", "max-score", "filter-min-mp", "filter-max-mp", "filter-min-edge", "filter-max-edge", "filter-min-size", "filter-max-size"].forEach((id) => {
           const el = document.getElementById(id);
           if (el) el.value = "";
         });
@@ -667,7 +680,14 @@
       }
 
       document.addEventListener("keydown", (event) => {
+        if (event.key === "Escape") {
+          closeOverlay("lightbox-overlay");
+          return;
+        }
         if (isShortcutTarget(event.target)) {
+          return;
+        }
+        if (!reviewShortcutsEnabled()) {
           return;
         }
         if (event.key === "ArrowDown" || event.key === "ArrowRight") {
@@ -685,9 +705,6 @@
         if (event.key === "r" || event.key === "R") {
           event.preventDefault();
           runReviewToolbarAction("reject", "Marking reject...", "Marked delete");
-        }
-        if (event.key === "Escape") {
-          closeOverlay("lightbox-overlay");
         }
       });
 

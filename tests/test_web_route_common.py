@@ -114,6 +114,13 @@ def test_send_json_error_writes_status_and_error_body_without_cache_header() -> 
     }
 
 
+def test_send_json_rejects_nonfinite_values() -> None:
+    handler = _RecordingHandler()
+
+    with pytest.raises(ValueError, match="Out of range float values"):
+        send_json(handler, {"score": float("nan")})
+
+
 def test_response_helpers_ignore_client_disconnects(tmp_path: Path) -> None:
     asset = tmp_path / "asset.css"
     asset.write_bytes(b"body {}")

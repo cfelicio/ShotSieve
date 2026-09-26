@@ -142,10 +142,17 @@ def _handle_file_action_post_routes(handler: Any, context: WebRouteContext, pars
 
     if parsed.path == "/api/files/delete":
         payload = deps.read_json_body(handler, max_body_size=context.max_request_body_size)
-        delete_result = _route(context, "_execute_delete_request", _execute_delete_request)(
-            context, payload, progress_callback=None, cancel_check=None
+        from shotsieve.web_route_jobs import _run_admitted_operation
+
+        admitted, delete_result = _run_admitted_operation(
+            handler,
+            context,
+            lambda: _route(context, "_execute_delete_request", _execute_delete_request)(
+                context, payload, progress_callback=None, cancel_check=None
+            ),
         )
-        emit_json(handler, delete_result)
+        if admitted:
+            emit_json(handler, delete_result)
         return True
 
     if parsed.path == "/api/files/delete/start":
@@ -155,13 +162,20 @@ def _handle_file_action_post_routes(handler: Any, context: WebRouteContext, pars
 
     if parsed.path == "/api/files/export":
         payload = deps.read_json_body(handler, max_body_size=context.max_request_body_size)
-        export_result = _route(context, "_execute_export_request", _execute_export_request)(
-            context, payload, progress_callback=None, cancel_check=None
-        )
-        emit_json(
+        from shotsieve.web_route_jobs import _run_admitted_operation
+
+        admitted, export_result = _run_admitted_operation(
             handler,
-            _route(context, "_export_result_payload", _export_result_payload)(export_result),
+            context,
+            lambda: _route(context, "_execute_export_request", _execute_export_request)(
+                context, payload, progress_callback=None, cancel_check=None
+            ),
         )
+        if admitted:
+            emit_json(
+                handler,
+                _route(context, "_export_result_payload", _export_result_payload)(export_result),
+            )
         return True
 
     if parsed.path == "/api/files/export/start":
@@ -269,24 +283,37 @@ def _execute_delete_request(
         preview_cache_root = deps.get_preview_cache_root(connection, db_path=context.db_path, persist=False)
         if selection is None:
             file_ids = deps.required_int_list(payload.get("file_ids"), name="file_ids")
-            _route(context, "_validate_page_revision", _validate_page_revision)(connection, deps, payload)
-            total = total_hint if total_hint is not None else len(file_ids)
-            if progress_callback is not None:
-                try:
-                    progress_callback(0, total, "deleting_files")
-                except InterruptedError as exc:
-                    stopped = FileOperationSummary(action="delete", delete_from_disk=delete_from_disk)
-                    _append_unprocessed_operation_rows(connection, stopped, file_ids, action="delete", error=exc)
-                    attach_file_operation_summary(exc, stopped, cancelled=True)
-                    raise
-            return _route(context, "_delete_result_payload", _delete_result_payload)(deps.delete_files(
-                connection,
-                file_ids=file_ids,
-                delete_from_disk=delete_from_disk,
-                preview_cache_root=preview_cache_root,
-                progress_callback=_route(context, "_operation_progress_callback", _operation_progress_callback)(progress_callback, phase="deleting_files", offset=0, total_hint=total),
-                cancel_check=cancel_check,
-            ))
+            snapshot_active = _begin_consistent_snapshot(connection)
+            try:
+                _route(context, "_validate_page_revision", _validate_page_revision)(
+                    connection,
+                    deps,
+                    payload,
+                    file_ids=file_ids,
+                )
+                total = total_hint if total_hint is not None else len(file_ids)
+                if progress_callback is not None:
+                    try:
+                        progress_callback(0, total, "deleting_files")
+                    except InterruptedError as exc:
+                        stopped = FileOperationSummary(action="delete", delete_from_disk=delete_from_disk)
+                        _append_unprocessed_operation_rows(connection, stopped, file_ids, action="delete", error=exc)
+                        attach_file_operation_summary(exc, stopped, cancelled=True)
+                        raise
+                result = _route(context, "_delete_result_payload", _delete_result_payload)(deps.delete_files(
+                    connection,
+                    file_ids=file_ids,
+                    delete_from_disk=delete_from_disk,
+                    preview_cache_root=preview_cache_root,
+                    progress_callback=_route(context, "_operation_progress_callback", _operation_progress_callback)(progress_callback, phase="deleting_files", offset=0, total_hint=total),
+                    cancel_check=cancel_check,
+                ))
+            except Exception:
+                _finish_consistent_snapshot(connection, active=snapshot_active, success=False)
+                raise
+            else:
+                _finish_consistent_snapshot(connection, active=snapshot_active, success=True)
+                return result
 
         snapshot_active, batches = _begin_bulk_selection_snapshot(context, connection, deps, selection)
         operation_summary = FileOperationSummary(action="delete", delete_from_disk=delete_from_disk)
@@ -397,43 +424,56 @@ def _execute_export_request(
         preview_cache_root = deps.get_preview_cache_root(connection, db_path=context.db_path, persist=False)
         if selection is None:
             file_ids = deps.required_int_list(payload.get("file_ids"), name="file_ids")
-            _route(context, "_validate_page_revision", _validate_page_revision)(connection, deps, payload)
-            total = total_hint if total_hint is not None else len(file_ids)
-            if progress_callback is not None:
-                try:
-                    progress_callback(0, total, phase)
-                except InterruptedError as exc:
-                    stopped = FileOperationSummary(action=mode)
-                    _append_unprocessed_operation_rows(connection, stopped, file_ids, action=mode, error=exc)
-                    attach_file_operation_summary(exc, stopped, cancelled=True)
-                    raise
+            snapshot_active = _begin_consistent_snapshot(connection)
             try:
-                return deps.export_files(
+                _route(context, "_validate_page_revision", _validate_page_revision)(
                     connection,
+                    deps,
+                    payload,
                     file_ids=file_ids,
-                    destination=destination,
-                    mode=mode,
-                    preview_cache_root=preview_cache_root,
-                    progress_callback=_route(context, "_operation_progress_callback", _operation_progress_callback)(progress_callback, phase=phase, offset=0, total_hint=total),
-                    cancel_check=cancel_check,
                 )
-            except Exception as exc:
-                # Destination validation happens before the export worker has
-                # a row-level summary.  Retain the frozen IDs anyway so an
-                # asynchronous failure is rendered as a result instead of
-                # disappearing behind a failed result request.
-                if operation_summary_from_exception(exc) is None:
-                    failed_summary = FileOperationSummary(action=mode)
-                    _append_unprocessed_operation_rows(
+                total = total_hint if total_hint is not None else len(file_ids)
+                if progress_callback is not None:
+                    try:
+                        progress_callback(0, total, phase)
+                    except InterruptedError as exc:
+                        stopped = FileOperationSummary(action=mode)
+                        _append_unprocessed_operation_rows(connection, stopped, file_ids, action=mode, error=exc)
+                        attach_file_operation_summary(exc, stopped, cancelled=True)
+                        raise
+                try:
+                    result = deps.export_files(
                         connection,
-                        failed_summary,
-                        file_ids,
-                        action=mode,
-                        error=exc,
+                        file_ids=file_ids,
+                        destination=destination,
+                        mode=mode,
+                        preview_cache_root=preview_cache_root,
+                        progress_callback=_route(context, "_operation_progress_callback", _operation_progress_callback)(progress_callback, phase=phase, offset=0, total_hint=total),
+                        cancel_check=cancel_check,
                     )
-                    failed_summary.fatal_error = str(exc)
-                    attach_file_operation_summary(exc, failed_summary)
+                except Exception as exc:
+                    # Destination validation happens before the export worker has
+                    # a row-level summary.  Retain the frozen IDs anyway so an
+                    # asynchronous failure is rendered as a result instead of
+                    # disappearing behind a failed result request.
+                    if operation_summary_from_exception(exc) is None:
+                        failed_summary = FileOperationSummary(action=mode)
+                        _append_unprocessed_operation_rows(
+                            connection,
+                            failed_summary,
+                            file_ids,
+                            action=mode,
+                            error=exc,
+                        )
+                        failed_summary.fatal_error = str(exc)
+                        attach_file_operation_summary(exc, failed_summary)
+                    raise
+            except Exception:
+                _finish_consistent_snapshot(connection, active=snapshot_active, success=False)
                 raise
+            else:
+                _finish_consistent_snapshot(connection, active=snapshot_active, success=True)
+                return result
 
         snapshot_active, batches = _begin_bulk_selection_snapshot(context, connection, deps, selection)
         operation_summary = FileOperationSummary(action="export")

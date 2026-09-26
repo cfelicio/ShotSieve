@@ -356,6 +356,7 @@ def test_files_export_direct_failure_retains_unprocessed_ids(tmp_path: Path):
         required_int_list=lambda value, *, name: list(value),
         database=lambda _path: _DatabaseContext(),
         review_selection_revision=lambda _connection, **kwargs: "rev-1",
+        list_review_browser_file_ids=lambda _connection, **kwargs: [] if kwargs.get("after_id", 0) else [7, 8],
         get_preview_cache_root=lambda _connection, *, db_path, persist: tmp_path / "previews",
         export_files=fail_export_files,
     )
@@ -539,10 +540,11 @@ def test_files_delete_route_accepts_file_ids_with_matching_page_revision(tmp_pat
         required_choice=lambda value, *, name, choices: value if value in choices else (_ for _ in ()).throw(ValueError(name)),
         optional_string=lambda value: value if isinstance(value, str) else None,
         coerce_bool=lambda value, *, default: default if value is None else bool(value),
-        database=lambda _path: _DatabaseContext(),
-        review_selection_revision=lambda _connection, **kwargs: "rev-match",
-        get_preview_cache_root=lambda _connection, *, db_path, persist: preview_root,
-        delete_files=fake_delete_files,
+            database=lambda _path: _DatabaseContext(),
+            review_selection_revision=lambda _connection, **kwargs: "rev-match",
+            list_review_browser_file_ids=lambda _connection, **kwargs: [] if kwargs.get("after_id", 0) else [1, 2, 3],
+            get_preview_cache_root=lambda _connection, *, db_path, persist: preview_root,
+            delete_files=fake_delete_files,
     )
     context = route_module.WebRouteContext(
         db_path=tmp_path / "shotsieve.db",

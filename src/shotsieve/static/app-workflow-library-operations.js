@@ -15,6 +15,7 @@
     const {
       clearTrackedJob = () => {},
       markTrackedJobUnknown = () => {},
+      requestServerCancellation = null,
       setBusyMessage,
       setBusyPhaseProgress,
       trackJob = () => {},
@@ -101,7 +102,8 @@
       shouldFinish,
       onFinished,
     }) {
-      const startPayload = await postJson(startPath, payload, { signal: state.abortController?.signal });
+      const startSignal = state.abortController?.signal;
+      const startPayload = await postJson(startPath, payload);
       const jobId = String(startPayload?.job_id || "");
       if (!jobId) {
         throw new Error(startFailureMessage || `${label} failed to start.`);
@@ -112,6 +114,12 @@
         onStarted(jobId);
       }
       trackJob({ kind, jobId, statusPath, resultPath, cancelPath, label });
+      if (startSignal?.aborted && typeof requestServerCancellation === "function") {
+        await requestServerCancellation();
+        const error = new Error("Operation cancelled.");
+        error.name = "AbortError";
+        throw error;
+      }
 
       try {
         const result = await poll(jobId);

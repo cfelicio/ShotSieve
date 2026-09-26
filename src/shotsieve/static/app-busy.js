@@ -434,6 +434,7 @@
       formatBusyStatusMessage,
       clearTrackedJob,
       markTrackedJobUnknown,
+      requestServerCancellation,
       renderBusyState,
       renderRecoveryState,
       setBusy,

@@ -35,6 +35,37 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- Corrected mixed-batch Windows path-key collision reporting so an unrelated
+  file before colliding entries is indexed safely while conflicting entries
+  remain diagnosed and existing catalog rows are preserved.
+- Retained learned-IQA sidecar recovery backups when both staged publication
+  and rollback fail, and surfaced the recovery path with both error contexts.
+- Advanced library-scope generations from independently tracked activations so
+  real input changes cannot apply stale A-to-B-to-A responses or duplicate
+  queue loads.
+- Prevented Windows Unicode path-key collisions from silently replacing a
+  catalog row; conflicting scan entries now remain unindexed with diagnostics,
+  including when preview generation already failed for the item.
+- Bound explicit review, delete, and export file IDs to their current page
+  selection and revision, rejecting stale or cross-library requests before
+  mutation.
+- Unified synchronous mutation routes and analysis job starts under shutdown
+  admission, recorded analysis thread-start failures as terminal jobs, made
+  shutdown cancel and wait for every job family, and centralized analysis-job
+  lock release through worker completion.
+- Preserved the previous runtime install through staged publication rollback
+  and restored executable permissions from Unix runtime tar archives after
+  child extraction.
+- Refused packaged macOS runtime selection on Intel hosts instead of selecting
+  the arm64 CPU archive; Intel Macs now receive clear source-install guidance.
+- Added rollback for learned-IQA sidecar merges so failed package copies do not
+  remove the prior learned runtime or overwrite loaded native runtime entries.
+- Refreshed comparison inputs when source fingerprints change, rejected
+  non-finite learned scores, and made API JSON serialization strict.
+- Prevented frontend job-start races from losing server job identity, guarded
+  late review and library-scope responses, and surfaced partial scan failures
+  with Analysis Diagnostics guidance. Shared workspace refreshes and stale
+  scan/score completions now also preserve the newly selected library scope.
 - Fixed `c10_xpu.dll` load failures on direct Windows EXE launches by adding
   sidecar DLL directories to the process `PATH` as well as `AddDllDirectory`.
   Verified the pinned XPU wheel with real CPU tensor and TorchVision native

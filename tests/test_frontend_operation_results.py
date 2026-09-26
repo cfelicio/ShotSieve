@@ -529,6 +529,110 @@ def test_scan_and_score_share_job_lifecycle_without_losing_kind_specific_polling
             assert result["markCalls"] == 1
 
 
+def test_tracked_job_survives_abort_while_start_response_is_delayed(chromium_page):
+    page, _ = chromium_page
+    result = page.evaluate(
+        """
+        async () => {
+          const calls = [];
+          const controller = new AbortController();
+          const state = {
+            abortController: controller,
+            activeJob: null,
+            recoveryJob: null,
+            scanJobId: null,
+          };
+          let releaseStart;
+          let startEntered;
+          const startEnteredPromise = new Promise((resolve) => { startEntered = resolve; });
+          const startResponsePromise = new Promise((resolve) => { releaseStart = resolve; });
+          let startOptions;
+
+          const workflow = window.ShotSieveWorkflowLibraryOperations.createWorkflowLibraryOperations({
+            api: {
+              fetchJson: async () => ({}),
+              postJson: async (url, payload, options) => {
+                calls.push(["start", url, payload]);
+                startOptions = options;
+                startEntered();
+                await startResponsePromise;
+                return { job_id: "delayed-scan-job" };
+              },
+            },
+            busy: {
+              clearTrackedJob: (jobId) => calls.push(["clear", jobId]),
+              markTrackedJobUnknown: () => calls.push(["unknown"]),
+              requestServerCancellation: async () => {
+                calls.push(["cancel", state.scanJobId]);
+                return true;
+              },
+              trackJob: (job) => {
+                calls.push(["track", job.jobId]);
+                state.activeJob = { ...job };
+              },
+            },
+            formatting: { formatDuration: () => "0s" },
+            notifications: { showToast: () => {} },
+            pollingModule: {
+              createResultFetcher: () => async () => ({}),
+              createStatusFetcher: () => async () => ({}),
+            },
+            review: { refreshWorkspace: async () => {} },
+            state,
+          });
+
+          const runPromise = workflow.runTrackedJob({
+            startPath: "/api/scan/start",
+            payload: { root: "C:/photos" },
+            kind: "scan",
+            label: "Scan",
+            startFailureMessage: "Scan job failed to start.",
+            statusPath: "/api/scan/status",
+            resultPath: "/api/scan/result",
+            cancelPath: "/api/scan/cancel",
+            stateKey: "scanJobId",
+            poll: async (jobId) => {
+              calls.push(["poll", jobId, controller.signal.aborted]);
+              const error = new Error("cancelled after start");
+              error.name = "AbortError";
+              throw error;
+            },
+          });
+
+          await startEnteredPromise;
+          controller.abort();
+          releaseStart();
+          let errorName = null;
+          try {
+            await runPromise;
+          } catch (error) {
+            errorName = error.name;
+          }
+
+          return {
+            errorName,
+            startCount: calls.filter((call) => call[0] === "start").length,
+            startUsedAbortSignal: Boolean(startOptions?.signal),
+            sequence: calls.map((call) => call[0]),
+            trackedJobId: state.activeJob?.jobId || null,
+            stateJobId: state.scanJobId,
+            pollSawAbort: calls.find((call) => call[0] === "poll")?.[2] || false,
+          };
+        }
+        """,
+    )
+
+    assert result == {
+        "errorName": "AbortError",
+        "startCount": 1,
+        "startUsedAbortSignal": False,
+        "sequence": ["start", "track", "cancel"],
+        "trackedJobId": "delayed-scan-job",
+        "stateJobId": "delayed-scan-job",
+        "pollSawAbort": False,
+    }
+
+
 def test_analyze_stops_after_model_unavailable_or_failed_scoring(chromium_page):
     page, _ = chromium_page
     results = page.evaluate(

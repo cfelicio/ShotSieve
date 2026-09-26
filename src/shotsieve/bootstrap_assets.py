@@ -14,8 +14,9 @@ import urllib.parse
 import urllib.request
 import zipfile
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, NoReturn
+from uuid import uuid4
 
 from shotsieve.release_targets import runtime_pack_release_targets
 from shotsieve.runtime_support import source_checkout_root
@@ -27,6 +28,16 @@ DEFAULT_RELEASE_REPO = "cfelicio/ShotSieve"
 DEFAULT_MANIFEST_URL = "https://github.com/cfelicio/ShotSieve/releases/latest/download/bootstrap-manifest.json"
 DEFAULT_DOWNLOAD_TIMEOUT_SECONDS = 60
 SHA256_PATTERN = re.compile(r"^[0-9a-fA-F]{64}$")
+RUNTIME_MANIFEST_NAME = ".asset-manifest.json"
+RUNTIME_MANIFEST_VERSION = 1
+APPLE_SILICON_MACHINE_NAMES = frozenset({"arm64", "aarch64"})
+
+
+def _packaged_macos_architecture_error(machine_name: str) -> str:
+    return (
+        "Packaged macOS runtime packs currently support Apple Silicon (arm64) only; "
+        f"detected architecture '{machine_name}'. Intel macOS must use a source installation."
+    )
 
 
 @dataclass(slots=True, frozen=True)
@@ -89,11 +100,24 @@ def select_runtime_target(*, system_name: str, machine_name: str, has_nvidia: bo
         return "linux-nvidia-cuda" if has_nvidia else "linux-cpu"
 
     if system == "darwin":
-        if machine in {"arm64", "aarch64"}:
+        if machine in APPLE_SILICON_MACHINE_NAMES:
             return "macos-apple-mps"
-        return "macos-cpu"
+        raise SystemExit(_packaged_macos_architecture_error(machine_name))
 
     raise SystemExit(f"Unsupported platform '{system_name}' for bootstrap launcher")
+
+
+def validate_runtime_target_for_host(*, target_id: str, system_name: str, machine_name: str) -> None:
+    """Reject explicit packaged macOS targets on unsupported host architectures."""
+    if system_name.casefold() != "darwin" or machine_name.casefold() in APPLE_SILICON_MACHINE_NAMES:
+        return
+
+    normalized_target = str(target_id).strip().casefold()
+    if any(
+        target.id == normalized_target and target.platform == "macos"
+        for target in runtime_pack_release_targets()
+    ):
+        raise SystemExit(_packaged_macos_architecture_error(machine_name))
 
 
 def fetch_manifest(manifest_url: str) -> dict[str, Any]:
@@ -287,6 +311,7 @@ def extract_archive(archive_path: Path, destination: Path) -> None:
 
     with tarfile.open(archive_path, "r:gz") as archive:
         members = archive.getmembers()
+        directory_modes: list[tuple[Path, int]] = []
 
         for member in members:
             _safe_join(destination, member.name)
@@ -298,6 +323,7 @@ def extract_archive(archive_path: Path, destination: Path) -> None:
 
             if member.isdir():
                 target.mkdir(parents=True, exist_ok=True)
+                directory_modes.append((target, member.mode & 0o777))
                 continue
 
             if not member.isfile():
@@ -310,6 +336,10 @@ def extract_archive(archive_path: Path, destination: Path) -> None:
             target.parent.mkdir(parents=True, exist_ok=True)
             with extracted, target.open("wb") as output:
                 shutil.copyfileobj(extracted, output)
+            target.chmod(member.mode & 0o777)
+
+        for target, mode in sorted(directory_modes, key=lambda entry: len(entry[0].parts), reverse=True):
+            target.chmod(mode)
 
 
 def resolve_manifest_url(cli_manifest_url: str | None) -> str:
@@ -525,6 +555,115 @@ def _find_runtime_executable(install_dir: Path, asset: RuntimeAsset) -> Path:
     )
 
 
+def _runtime_payload_files(install_dir: Path) -> list[Path]:
+    metadata_names = {".asset-sha256", RUNTIME_MANIFEST_NAME}
+    files: list[Path] = []
+    for path in install_dir.rglob("*"):
+        if not path.is_file():
+            continue
+        relative = path.relative_to(install_dir)
+        if len(relative.parts) == 1 and relative.name in metadata_names:
+            continue
+        files.append(path)
+    return sorted(files, key=lambda path: path.relative_to(install_dir).as_posix())
+
+
+def _write_runtime_manifest(install_dir: Path, asset: RuntimeAsset, archive_sha256: str) -> None:
+    manifest = {
+        "version": RUNTIME_MANIFEST_VERSION,
+        "asset_id": asset.id,
+        "archive_sha256": archive_sha256,
+        "files": [
+            {
+                "path": path.relative_to(install_dir).as_posix(),
+                "size": path.stat().st_size,
+                "sha256": sha256_file(path),
+            }
+            for path in _runtime_payload_files(install_dir)
+        ],
+    }
+    (install_dir / RUNTIME_MANIFEST_NAME).write_text(
+        json.dumps(manifest, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+
+def _valid_runtime_manifest_path(raw_path: object) -> PurePosixPath | None:
+    if not isinstance(raw_path, str) or not raw_path or "\\" in raw_path:
+        return None
+    path = PurePosixPath(raw_path)
+    if path.is_absolute() or path == PurePosixPath(".") or ".." in path.parts:
+        return None
+    if path.as_posix() != raw_path:
+        return None
+    return path
+
+
+def _runtime_manifest_is_valid(install_dir: Path, asset: RuntimeAsset, archive_sha256: str) -> bool:
+    manifest_path = install_dir / RUNTIME_MANIFEST_NAME
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return False
+
+    if not isinstance(manifest, dict):
+        return False
+    if (
+        manifest.get("version") != RUNTIME_MANIFEST_VERSION
+        or manifest.get("asset_id") != asset.id
+        or manifest.get("archive_sha256") != archive_sha256
+    ):
+        return False
+
+    raw_files = manifest.get("files")
+    if not isinstance(raw_files, list) or not raw_files:
+        return False
+
+    expected_files: dict[PurePosixPath, tuple[int, str]] = {}
+    for entry in raw_files:
+        if not isinstance(entry, dict):
+            return False
+        relative = _valid_runtime_manifest_path(entry.get("path"))
+        size = entry.get("size")
+        digest = entry.get("sha256")
+        if (
+            relative is None
+            or isinstance(size, bool)
+            or not isinstance(size, int)
+            or size < 0
+            or not isinstance(digest, str)
+            or SHA256_PATTERN.fullmatch(digest) is None
+            or relative in expected_files
+        ):
+            return False
+        expected_files[relative] = (size, digest.casefold())
+
+    try:
+        install_root = install_dir.resolve()
+        actual_paths = _runtime_payload_files(install_dir)
+        if any(path.is_symlink() for path in install_dir.rglob("*")):
+            return False
+        actual_files = {
+            path.relative_to(install_dir).as_posix(): path
+            for path in actual_paths
+            if install_root in path.resolve().parents
+        }
+    except (OSError, RuntimeError, ValueError):
+        return False
+
+    if set(expected_files) != {PurePosixPath(path) for path in actual_files}:
+        return False
+
+    for relative, (expected_size, expected_digest) in expected_files.items():
+        path = actual_files[relative.as_posix()]
+        try:
+            if path.stat().st_size != expected_size or sha256_file(path) != expected_digest:
+                return False
+        except (OSError, RuntimeError):
+            return False
+    return True
+
+
 def _frozen_colocated_runtime_executable(asset: RuntimeAsset) -> Path | None:
     if not getattr(sys, "frozen", False):
         return None
@@ -589,6 +728,44 @@ def _download_archive_with_local_fallback(*, asset: RuntimeAsset, archive_path: 
     )
 
 
+def _runtime_backup_paths(installs_dir: Path, asset_id: str) -> list[Path]:
+    return list(installs_dir.glob(f".{asset_id}.backup-*"))
+
+
+def _recover_runtime_backup(install_dir: Path) -> None:
+    backups = _runtime_backup_paths(install_dir.parent, install_dir.name)
+    if not backups:
+        return
+    if install_dir.exists():
+        for backup in backups:
+            shutil.rmtree(backup, ignore_errors=True)
+        return
+
+    backup = max(backups, key=lambda path: path.stat().st_mtime)
+    shutil.move(str(backup), str(install_dir))
+    for stale_backup in backups:
+        if stale_backup != backup:
+            shutil.rmtree(stale_backup, ignore_errors=True)
+
+
+def _publish_runtime_install(staged_dir: Path, install_dir: Path) -> None:
+    backup_dir = install_dir.parent / f".{install_dir.name}.backup-{uuid4().hex}"
+    if install_dir.exists():
+        shutil.move(str(install_dir), str(backup_dir))
+    try:
+        shutil.move(str(staged_dir), str(install_dir))
+    except BaseException:
+        if install_dir.exists():
+            shutil.rmtree(install_dir, ignore_errors=True)
+        if backup_dir.exists():
+            shutil.move(str(backup_dir), str(install_dir))
+        raise
+    if backup_dir.exists():
+        # A cleanup failure leaves a recoverable backup beside the validated
+        # install; it must not turn a successful publication into a failed one.
+        shutil.rmtree(backup_dir, ignore_errors=True)
+
+
 def ensure_runtime_asset(asset: RuntimeAsset, *, runtime_root: Path, force_refresh: bool = False) -> Path:
     if not force_refresh:
         colocated = _frozen_colocated_runtime_executable(asset)
@@ -600,14 +777,15 @@ def ensure_runtime_asset(asset: RuntimeAsset, *, runtime_root: Path, force_refre
     downloads_dir = runtime_root / "downloads"
     installs_dir = runtime_root / "installs"
     install_dir = installs_dir / asset.id
+    _recover_runtime_backup(install_dir)
     marker_path = install_dir / ".asset-sha256"
 
-    if not force_refresh and install_dir.exists() and marker_path.exists():
+    if not force_refresh and install_dir.exists() and marker_path.exists() and not marker_path.is_symlink():
         try:
             existing_hash = marker_path.read_text(encoding="utf-8").strip().casefold()
         except (OSError, UnicodeError):
             existing_hash = ""
-        if existing_hash == expected_sha256:
+        if existing_hash == expected_sha256 and _runtime_manifest_is_valid(install_dir, asset, expected_sha256):
             try:
                 return _find_runtime_executable(install_dir, asset)
             except SystemExit:
@@ -637,11 +815,10 @@ def ensure_runtime_asset(asset: RuntimeAsset, *, runtime_root: Path, force_refre
         temp_path = Path(temp_dir)
         extract_archive(archive_path, temp_path)
         _find_runtime_executable(temp_path, asset)
+        _write_runtime_manifest(temp_path, asset, expected_sha256)
         (temp_path / ".asset-sha256").write_text(expected_sha256, encoding="utf-8")
 
-        if install_dir.exists():
-            shutil.rmtree(install_dir)
-        shutil.move(str(temp_path), str(install_dir))
+        _publish_runtime_install(temp_path, install_dir)
 
     try:
         archive_path.unlink(missing_ok=True)

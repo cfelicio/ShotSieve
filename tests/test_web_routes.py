@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import io
 import json
+import math
 import socket
 import threading
 import time
@@ -74,6 +75,23 @@ def test_decode_budget_request_accepts_custom_megapixels_and_rejects_unsafe_valu
 
     with pytest.raises(ValueError, match="between 1 and 256"):
         parse_max_decode_pixels(257)
+
+
+def test_integer_request_boundary_rejects_invalid_json_number_shapes() -> None:
+    from shotsieve.web_request import required_int, required_int_list
+
+    assert required_int(7, name="id", minimum=1) == 7
+    assert required_int(7.0, name="id", minimum=1) == 7
+    assert required_int(" 7 ", name="id", minimum=1) == 7
+    assert required_int_list(["1", 2, 3.0], name="file_ids") == [1, 2, 3]
+
+    for value in (True, False, 1.5, -2.25, math.nan, math.inf, -math.inf, [], {}):
+        with pytest.raises(ValueError, match="must be an integer"):
+            required_int(value, name="id", minimum=1)
+
+    for value in ([True], [1.5], [math.nan], [math.inf]):
+        with pytest.raises(ValueError, match="must be an integer"):
+            required_int_list(value, name="file_ids")
 
 
 def test_compare_request_rejects_unknown_model_names() -> None:

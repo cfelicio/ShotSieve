@@ -28,6 +28,8 @@
     const { showToast } = notifications;
 
     const overlayFocusReturn = new Map();
+    let libraryScopeGeneration = 0;
+    let lastActivatedLibraryRoot;
     const OVERLAY_SELECTORS = ["#lightbox-overlay"];
     function overlayNodes() {
       return OVERLAY_SELECTORS
@@ -352,14 +354,26 @@
 
     async function activateLibraryScope(root) {
       const normalizedRoot = String(root || "").trim();
+      if (lastActivatedLibraryRoot !== normalizedRoot) {
+        libraryScopeGeneration += 1;
+      }
+      lastActivatedLibraryRoot = normalizedRoot;
       const libraryRootInput = document.getElementById("library-root-input");
       if (libraryRootInput) {
         libraryRootInput.value = normalizedRoot;
       }
       setReviewScope(normalizedRoot);
       saveUiState();
-      await refreshOverview();
-      if (grid?.loadQueue) {
+      const scopeRequest = {
+        generation: libraryScopeGeneration,
+        root: normalizedRoot,
+      };
+      const [overviewCurrent, diagnosticsCurrent] = await Promise.all([
+        refreshOverview(scopeRequest),
+        loadAnalysisDiagnostics(scopeRequest),
+      ]);
+      if (overviewCurrent && diagnosticsCurrent && isCurrentLibraryScope(scopeRequest)
+        && grid?.loadQueue) {
         await grid.loadQueue();
       }
     }
@@ -599,35 +613,55 @@
       hint.textContent = descriptions[profile] || "";
     }
 
-    async function refreshOverview() {
-      const root = currentLibraryRoot();
+    function isCurrentLibraryScope({ generation, root }) {
+      return generation === libraryScopeGeneration && currentLibraryRoot() === root;
+    }
+
+    async function refreshOverview(scopeRequest = null) {
+      const request = scopeRequest || {
+        generation: libraryScopeGeneration,
+        root: currentLibraryRoot(),
+      };
+      const root = request.root;
       const query = root ? `?root=${encodeURIComponent(root)}` : "";
-      state.overview = await fetchJson(`/api/overview${query}`);
+      const overview = await fetchJson(`/api/overview${query}`);
+      if (!isCurrentLibraryScope(request)) {
+        return false;
+      }
+      state.overview = overview;
       if (grid?.renderSummary) {
         grid.renderSummary();
       }
       populateRootFilters();
+      return true;
     }
 
-    async function loadAnalysisDiagnostics() {
-      const root = currentLibraryRoot();
+    async function loadAnalysisDiagnostics(scopeRequest = null) {
+      const request = scopeRequest || {
+        generation: libraryScopeGeneration,
+        root: currentLibraryRoot(),
+      };
+      const root = request.root;
       const query = new URLSearchParams({ limit: "100" });
       if (root) {
         query.set("root", root);
       }
       const payload = await fetchJson(`/api/analysis-diagnostics?${query.toString()}`);
+      if (!isCurrentLibraryScope(request)) {
+        return false;
+      }
       const total = Number(payload.total || 0);
       const items = Array.isArray(payload.items) ? payload.items : [];
       const summary = document.getElementById("analysis-diagnostics-summary");
       const list = document.getElementById("analysis-diagnostics-list");
       if (!summary || !list) {
-        return;
+        return true;
       }
 
       if (!total) {
         summary.textContent = "All discovered photos in the current library have a quality score.";
         list.innerHTML = "";
-        return;
+        return true;
       }
 
       const scope = root ? "this library" : "all cached libraries";
@@ -642,6 +676,7 @@
           </article>
         `;
       }).join("");
+      return true;
     }
 
     async function loadOptions() {
@@ -652,8 +687,17 @@
 
     async function refreshWorkspace() {
       await loadOptions();
-      await refreshOverview();
-      await loadAnalysisDiagnostics();
+      const scopeRequest = {
+        generation: libraryScopeGeneration,
+        root: currentLibraryRoot(),
+      };
+      const [overviewCurrent, diagnosticsCurrent] = await Promise.all([
+        refreshOverview(scopeRequest),
+        loadAnalysisDiagnostics(scopeRequest),
+      ]);
+      if (!overviewCurrent || !diagnosticsCurrent || !isCurrentLibraryScope(scopeRequest)) {
+        return false;
+      }
 
       if (grid?.renderSummary) {
         grid.renderSummary();
@@ -664,6 +708,7 @@
       if (grid?.loadQueue) {
         await grid.loadQueue();
       }
+      return true;
     }
 
     return {

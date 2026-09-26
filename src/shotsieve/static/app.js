@@ -108,6 +108,7 @@ function showToast(message, tone = "success") {
 const {
   clearTrackedJob,
   markTrackedJobUnknown,
+  requestServerCancellation,
   renderBusyState,
   setBusyMessage,
   setBusyPhaseProgress,
@@ -152,6 +153,7 @@ const workflows = workflowsModule.createWorkflows({
   busy: {
     clearTrackedJob,
     markTrackedJobUnknown,
+    requestServerCancellation,
     setBusyMessage,
     setBusyPhaseProgress,
     setBusyProgress,

@@ -1,6 +1,7 @@
 """Tests for scan lifecycle, preview invalidation, and scan path handling."""
 from __future__ import annotations
 
+import platform
 from pathlib import Path
 
 from PIL import Image
@@ -43,6 +44,169 @@ def test_scan_populates_cache_and_preview(tmp_path: Path) -> None:
     assert row["preview_status"] == "ready"
     assert row["scan_status"] == "new"
     assert Path(row["preview_path"]).exists()
+
+
+def test_scan_skips_windows_unicode_path_key_collisions(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Distinct Windows paths that casefold to one key are reported, not merged."""
+    monkeypatch.setattr(platform, "system", lambda: "Windows")
+
+    db_path = tmp_path / "data" / "shotsieve.db"
+    preview_dir = tmp_path / "previews"
+    photo_dir = tmp_path / "photos"
+    photo_dir.mkdir()
+    (photo_dir / "straße.jpg").write_bytes(b"german sharp s")
+    (photo_dir / "strasse.jpg").write_bytes(b"ss spelling")
+    initialize_database(db_path)
+
+    with connect(db_path) as connection:
+        summary = scan_root(
+            connection,
+            root=photo_dir,
+            recursive=True,
+            extensions=(".jpg",),
+            preview_dir=preview_dir,
+            generate_previews=True,
+        )
+        rows = connection.execute("SELECT path FROM files").fetchall()
+        run = connection.execute(
+            "SELECT status, error_text FROM scan_runs ORDER BY id DESC LIMIT 1"
+        ).fetchone()
+
+    assert summary.files_seen == 2
+    assert summary.files_added == 0
+    assert summary.files_failed == 2
+    assert rows == []
+    assert run["status"] == "completed_with_errors"
+    assert "Path-key collision detected" in run["error_text"]
+
+
+def test_scan_reports_mixed_batch_path_key_collisions_after_unrelated_file(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A collision after a safe item does not abort the scan batch."""
+    monkeypatch.setattr(platform, "system", lambda: "Windows")
+
+    db_path = tmp_path / "data" / "shotsieve.db"
+    preview_dir = tmp_path / "previews"
+    photo_dir = tmp_path / "photos"
+    photo_dir.mkdir()
+    (photo_dir / "aaa.jpg").write_bytes(b"safe")
+    (photo_dir / "straße.jpg").write_bytes(b"german sharp s")
+    (photo_dir / "strasse.jpg").write_bytes(b"ss spelling")
+    initialize_database(db_path)
+
+    with connect(db_path) as connection:
+        summary = scan_root(
+            connection,
+            root=photo_dir,
+            recursive=True,
+            extensions=(".jpg",),
+            preview_dir=preview_dir,
+            generate_previews=False,
+        )
+        rows = connection.execute("SELECT path FROM files ORDER BY path").fetchall()
+        run = connection.execute(
+            "SELECT status, error_text FROM scan_runs ORDER BY id DESC LIMIT 1"
+        ).fetchone()
+
+    assert summary.files_seen == 3
+    assert summary.files_added == 1
+    assert summary.files_failed == 2
+    assert [Path(row["path"]).name for row in rows] == ["aaa.jpg"]
+    assert run["status"] == "completed_with_errors"
+    assert run["error_text"].count("Path-key collision detected") == 1
+
+
+def test_scan_preserves_existing_row_on_incoming_path_key_collision(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(platform, "system", lambda: "Windows")
+
+    db_path = tmp_path / "data" / "shotsieve.db"
+    preview_dir = tmp_path / "previews"
+    photo_dir = tmp_path / "photos"
+    photo_dir.mkdir()
+    existing_path = photo_dir / "straße.jpg"
+    existing_path.write_bytes(b"original")
+    initialize_database(db_path)
+
+    with connect(db_path) as connection:
+        first_summary = scan_root(
+            connection,
+            root=photo_dir,
+            recursive=True,
+            extensions=(".jpg",),
+            preview_dir=preview_dir,
+            generate_previews=False,
+        )
+        existing_path.unlink()
+        incoming_path = photo_dir / "strasse.jpg"
+        incoming_path.write_bytes(b"replacement")
+        second_summary = scan_root(
+            connection,
+            root=photo_dir,
+            recursive=True,
+            extensions=(".jpg",),
+            preview_dir=preview_dir,
+            generate_previews=False,
+        )
+        row = connection.execute("SELECT path, size_bytes FROM files").fetchone()
+
+    assert first_summary.files_added == 1
+    assert second_summary.files_added == 0
+    assert second_summary.files_failed == 1
+    assert row["path"] == str(existing_path.resolve())
+    assert row["size_bytes"] == len(b"original")
+
+
+def test_scan_preserves_existing_row_on_mixed_batch_incoming_collision(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(platform, "system", lambda: "Windows")
+
+    db_path = tmp_path / "data" / "shotsieve.db"
+    preview_dir = tmp_path / "previews"
+    photo_dir = tmp_path / "photos"
+    photo_dir.mkdir()
+    existing_path = photo_dir / "straße.jpg"
+    existing_path.write_bytes(b"original")
+    (photo_dir / "aaa.jpg").write_bytes(b"safe")
+    initialize_database(db_path)
+
+    with connect(db_path) as connection:
+        first_summary = scan_root(
+            connection,
+            root=photo_dir,
+            recursive=True,
+            extensions=(".jpg",),
+            preview_dir=preview_dir,
+            generate_previews=False,
+        )
+        existing_path.unlink()
+        incoming_path = photo_dir / "strasse.jpg"
+        incoming_path.write_bytes(b"replacement")
+        second_summary = scan_root(
+            connection,
+            root=photo_dir,
+            recursive=True,
+            extensions=(".jpg",),
+            preview_dir=preview_dir,
+            generate_previews=False,
+        )
+        rows = connection.execute("SELECT path, size_bytes FROM files ORDER BY path").fetchall()
+
+    assert first_summary.files_added == 2
+    assert second_summary.files_added == 0
+    assert second_summary.files_failed == 1
+    assert [Path(row["path"]).name for row in rows] == ["aaa.jpg", "straße.jpg"]
+    existing_row = next(row for row in rows if Path(row["path"]).name == "straße.jpg")
+    assert existing_row["size_bytes"] == len(b"original")
 
 
 def test_scan_root_passes_raw_preview_mode_to_preview_generation(monkeypatch, tmp_path: Path) -> None:

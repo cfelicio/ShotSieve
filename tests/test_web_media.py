@@ -12,6 +12,7 @@ from urllib.request import Request, urlopen
 
 import pytest
 from PIL import Image
+from playwright.sync_api import Error as PlaywrightError
 
 from shotsieve.db import database, initialize_database
 from shotsieve.export import export_files
@@ -178,6 +179,97 @@ class TestMediaStreaming:
         assert content_length is not None
         body = response.read()
         assert len(body) == int(content_length)
+
+    def test_active_source_media_is_downloaded_and_sandboxed(self, test_server):
+        base_url, db_path, tmp_path = test_server
+        photo_dir = tmp_path / "photos"
+        photo_dir.mkdir()
+        source_path = photo_dir / "unsafe.svg"
+        source_body = b'<svg xmlns="http://www.w3.org/2000/svg"><script>window.pwned = true;</script></svg>'
+        source_path.write_bytes(source_body)
+
+        initialize_database(db_path)
+        with database(db_path) as connection:
+            cursor = connection.execute(
+                """
+                INSERT INTO files(path, path_key, size_bytes, format, preview_status, scan_status)
+                VALUES(?, ?, ?, 'svg', 'not_requested', 'unchanged')
+                """,
+                (str(source_path.resolve()), canonical_path_key(source_path), len(source_body)),
+            )
+            connection.execute(
+                """
+                INSERT INTO scan_runs(started_time, completed_time, root_path, status)
+                VALUES('now', 'now', ?, 'completed')
+                """,
+                (str(photo_dir.resolve()),),
+            )
+            file_id = cursor.lastrowid
+
+        response = urlopen(f"{base_url}/api/media/source?id={file_id}")
+        assert response.headers.get("Content-Type") == "application/octet-stream"
+        assert response.headers.get("Content-Disposition", "").startswith("attachment;")
+        assert response.headers.get("Content-Security-Policy") == "sandbox"
+        assert response.read() == source_body
+
+    def test_active_source_media_cannot_execute_script_or_post_to_api(self, test_server, chromium_page):
+        base_url, db_path, tmp_path = test_server
+        page, _ = chromium_page
+        photo_dir = tmp_path / "svg-library"
+        photo_dir.mkdir()
+        source_path = photo_dir / "unsafe.svg"
+        source_path.write_text(
+            """
+            <svg xmlns="http://www.w3.org/2000/svg">
+              <script>
+                window.shotsieveSvgExecuted = true;
+                fetch('/api/review/batch', {method: 'POST', body: '{}'});
+              </script>
+            </svg>
+            """,
+            encoding="utf-8",
+        )
+
+        initialize_database(db_path)
+        with database(db_path) as connection:
+            cursor = connection.execute(
+                """
+                INSERT INTO files(path, path_key, size_bytes, format, preview_status, scan_status)
+                VALUES(?, ?, ?, 'svg', 'not_requested', 'unchanged')
+                """,
+                (str(source_path.resolve()), canonical_path_key(source_path), source_path.stat().st_size),
+            )
+            connection.execute(
+                """
+                INSERT INTO scan_runs(started_time, completed_time, root_path, status)
+                VALUES('now', 'now', ?, 'completed')
+                """,
+                (str(photo_dir.resolve()),),
+            )
+            file_id = cursor.lastrowid
+
+        api_posts: list[str] = []
+        page.on(
+            "request",
+            lambda request: api_posts.append(request.url)
+            if request.method == "POST" and "/api/" in request.url
+            else None,
+        )
+
+        try:
+            with page.expect_download(timeout=5000) as download_info:
+                try:
+                    page.goto(f"{base_url}/api/media/source?id={file_id}")
+                except PlaywrightError:
+                    # Chromium reports ERR_ABORTED for some download navigations.
+                    pass
+            download = download_info.value
+            assert download.suggested_filename == source_path.name
+        except PlaywrightError as exc:
+            pytest.fail(f"active source did not take the download path: {exc}")
+
+        assert page.evaluate("window.shotsieveSvgExecuted") is None
+        assert api_posts == []
 
     def test_media_preview_returns_valid_image(self, test_server):
         base_url, db_path, tmp_path = test_server

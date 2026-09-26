@@ -509,37 +509,39 @@ def _validate_selection_revision(connection: Any, deps: WebRouteDependencies, se
         raise ValueError("Selected results changed. Refresh the queue and select again.")
 
 
-def _validate_page_revision(connection: Any, deps: WebRouteDependencies, payload: dict[str, object]) -> None:
+def _validate_page_revision(
+    connection: Any,
+    deps: WebRouteDependencies,
+    payload: dict[str, object],
+    *,
+    file_ids: list[int] | None = None,
+) -> None:
     page_revision = deps.optional_string(payload.get("selection_revision"))
     page_selection = payload.get("page_selection")
     if not page_revision:
         raise ValueError("selection_revision is required for file_ids operations")
     if not page_selection or not isinstance(page_selection, dict):
         raise ValueError("page_selection is required for file_ids operations")
-    current = deps.review_selection_revision(
-        connection,
-        scope=page_selection.get("scope", "review-browser"),
-        root=deps.optional_string(page_selection.get("root")),
-        marked=page_selection.get("marked", "all"),
-        issues=page_selection.get("issues", "all"),
-        query=deps.optional_string(page_selection.get("query")),
-        min_score=_optional_payload_float(deps, page_selection.get("min_score"), name="page_selection.min_score"),
-        max_score=_optional_payload_float(deps, page_selection.get("max_score"), name="page_selection.max_score"),
-        formats=_optional_payload_string_list(deps, page_selection.get("formats"), name="page_selection.formats"),
-        min_mp=_optional_payload_float(deps, page_selection.get("min_mp"), name="page_selection.min_mp"),
-        max_mp=_optional_payload_float(deps, page_selection.get("max_mp"), name="page_selection.max_mp"),
-        min_width=_optional_payload_int(deps, page_selection.get("min_width"), name="page_selection.min_width"),
-        max_width=_optional_payload_int(deps, page_selection.get("max_width"), name="page_selection.max_width"),
-        min_height=_optional_payload_int(deps, page_selection.get("min_height"), name="page_selection.min_height"),
-        max_height=_optional_payload_int(deps, page_selection.get("max_height"), name="page_selection.max_height"),
-        min_edge=_optional_payload_int(deps, page_selection.get("min_edge"), name="page_selection.min_edge"),
-        max_edge=_optional_payload_int(deps, page_selection.get("max_edge"), name="page_selection.max_edge"),
-        min_size=_optional_payload_int(deps, page_selection.get("min_size"), name="page_selection.min_size"),
-        max_size=_optional_payload_int(deps, page_selection.get("max_size"), name="page_selection.max_size"),
-        metadata=page_selection.get("metadata", "all"),
+    selection = _parse_selection_payload(
+        deps,
+        {"selection": page_selection, "selection_revision": page_revision},
     )
-    if page_revision != current:
-        raise ValueError("Selected results changed. Refresh the queue and select again.")
+    if selection is None:  # pragma: no cover - guarded by the page_selection check above
+        raise ValueError("page_selection is required for file_ids operations")
+
+    _validate_selection_revision(connection, deps, selection)
+
+    if file_ids is None:
+        return
+
+    selected_ids = {
+        int(selected_id)
+        for batch in _iter_selection_file_id_batches(connection, deps, selection)
+        for selected_id in batch
+    }
+    unbound_ids = sorted(set(file_ids).difference(selected_ids))
+    if unbound_ids:
+        raise ValueError("file_ids must belong to the supplied page_selection")
 
 
 def _require_root_for_destructive_selection(selection: dict[str, object]) -> None:
@@ -711,7 +713,7 @@ def serve_static(handler: Any, name: str, content_type: str, *, static_dir: Path
 
 
 def send_json(handler: Any, payload: object) -> None:
-    body = json.dumps(payload).encode("utf-8")
+    body = json.dumps(payload, allow_nan=False).encode("utf-8")
     _send_body(
         handler,
         body,
@@ -740,7 +742,7 @@ def send_bytes(
 
 
 def send_json_error(handler: Any, status: HTTPStatus, message: str) -> None:
-    body = json.dumps({"error": message}).encode("utf-8")
+    body = json.dumps({"error": message}, allow_nan=False).encode("utf-8")
     _send_body(
         handler,
         body,

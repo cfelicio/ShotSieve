@@ -376,7 +376,7 @@
       renderDetail();
     }
 
-    function applyReviewUpdate(updatedDetail) {
+    function applyReviewUpdate(updatedDetail, { submittedId = null } = {}) {
       const fileId = Number(updatedDetail?.id);
       if (!Number.isInteger(fileId) || fileId <= 0) {
         return false;
@@ -390,12 +390,18 @@
         };
       }
 
-      state.activeId = fileId;
-      state.detail = state.detail?.id === fileId
-        ? { ...state.detail, ...updatedDetail }
-        : updatedDetail;
+      const isCurrentSubmission = submittedId === null
+        || Number(state.activeId) === Number(submittedId);
+      if (isCurrentSubmission) {
+        state.activeId = fileId;
+        state.detail = state.detail?.id === fileId
+          ? { ...state.detail, ...updatedDetail }
+          : updatedDetail;
+      }
       renderQueue();
-      renderDetail();
+      if (isCurrentSubmission) {
+        renderDetail();
+      }
       return queueIndex >= 0;
     }
 

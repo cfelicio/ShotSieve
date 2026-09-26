@@ -223,16 +223,18 @@ def required_int(value: object, *, name: str, minimum: int = 0) -> int:
 
     try:
         if isinstance(value, bool):
-            parsed = int(value)
+            raise TypeError(value)
         elif isinstance(value, int):
             parsed = value
         elif isinstance(value, float):
+            if not math.isfinite(value) or not value.is_integer():
+                raise TypeError(value)
             parsed = int(value)
         elif isinstance(value, str):
             parsed = int(value)
         else:
             raise TypeError(value)
-    except (TypeError, ValueError) as exc:
+    except (TypeError, ValueError, OverflowError) as exc:
         raise ValueError(f"{name} must be an integer") from exc
 
     if parsed < minimum:
