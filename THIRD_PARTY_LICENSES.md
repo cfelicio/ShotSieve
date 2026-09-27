@@ -16,7 +16,7 @@ files, and any base model can have different terms. The exact package versions
 used by a release must be taken from that release's target constraints and
 audited before publication. The current learned-IQA pins include
 `pyiqa==0.1.16`, `facexlib==0.3.0`, `timm==1.0.30`,
-`huggingface-hub==1.32.0`, `transformers==5.17.0`, `openai-clip==1.0.1`,
+`huggingface-hub==1.33.0`, `transformers==5.17.0`, `openai-clip==1.0.1`,
 `accelerate==1.15.0`, `sentencepiece==0.2.2`, `einops==0.8.2`,
 `icecream==2.2.0`, and `setuptools==81.0.0` to supply the `pkg_resources` API
 used by OpenAI CLIP.

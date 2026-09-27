@@ -180,7 +180,7 @@ def test_release_constraints_file_exists_with_required_pins() -> None:
     assert "pyiqa==0.1.16" in constraints_text
     assert "facexlib==0.3.0" in constraints_text
     assert "timm==1.0.30" in constraints_text
-    assert "huggingface-hub==1.32.0" in constraints_text
+    assert "huggingface-hub==1.33.0" in constraints_text
     assert "transformers==5.17.0" in constraints_text
     assert "openai-clip==1.0.1" in constraints_text
 

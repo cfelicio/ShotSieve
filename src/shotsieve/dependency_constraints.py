@@ -13,7 +13,7 @@ COMMON_MODEL_REQUIREMENTS = (
     # the non-face topiq_nr model.
     "facexlib==0.3.0",
     "timm==1.0.30",
-    "huggingface-hub==1.32.0",
+    "huggingface-hub==1.33.0",
     "transformers==5.17.0",
     "openai-clip==1.0.1",
     "accelerate==1.15.0",

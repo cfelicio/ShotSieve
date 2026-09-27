@@ -10,8 +10,14 @@ The package requires Python 3.13 or newer. Python 3.14 is the preferred
 development and release interpreter. A basic editable install is:
 
 ```bash
+python -m venv .venv
+python -m pip install --upgrade pip
 python -m pip install -e .
 ```
+
+Use [configuration.md](configuration.md) for cache roots, environment
+variables, and UI analysis settings. Use [architecture.md](architecture.md)
+for source ownership and compatibility boundaries.
 
 Optional extras:
 
@@ -89,7 +95,12 @@ The supported command-line options are:
 shotsieve-desktop --data-dir ./shot-data
 shotsieve-desktop --model-cache-dir ./model-cache
 shotsieve-desktop --host 127.0.0.1 --port 9001 --no-browser
+shotsieve-desktop --check-runtime
 ```
+
+`--check-runtime` checks native Torch/TorchVision operations and learned
+imports, then exits without starting the UI. It does not download model
+weights. The complete CLI and HTTP contract is in [api.md](api.md).
 
 `--data-dir` controls the local database, previews, runtime sidecars, logs,
 and readiness records. `--model-cache-dir` supplies defaults for Hugging Face
@@ -109,6 +120,21 @@ The current release matrix defines ten runtime-pack targets:
 - `windows-cpu`, `windows-nvidia-cuda`, `windows-intel-xpu`, `windows-amd-rocm`
 - `linux-cpu`, `linux-nvidia-cuda`, `linux-intel-xpu`, `linux-amd-rocm`
 - `macos-cpu`, `macos-apple-mps`
+
+The authoritative artifact names are:
+
+| Target | Launcher | Archive |
+| --- | --- | --- |
+| `windows-cpu` | `ShotSieve-CPU.exe` | `ShotSieve-windows-cpu-x64.zip` |
+| `windows-nvidia-cuda` | `ShotSieve-NVIDIA-CUDA.exe` | `ShotSieve-windows-nvidia-cuda-x64.zip` |
+| `windows-intel-xpu` | `ShotSieve-Intel-XPU.exe` | `ShotSieve-windows-intel-xpu-x64.zip` |
+| `windows-amd-rocm` | `ShotSieve-AMD-ROCm.exe` | `ShotSieve-windows-amd-rocm-x64.zip` |
+| `linux-cpu` | `ShotSieve-CPU` | `ShotSieve-linux-cpu-x64.tar.gz` |
+| `linux-nvidia-cuda` | `ShotSieve-NVIDIA-CUDA` | `ShotSieve-linux-nvidia-cuda-x64.tar.gz` |
+| `linux-intel-xpu` | `ShotSieve-Intel-XPU` | `ShotSieve-linux-intel-xpu-x64.tar.gz` |
+| `linux-amd-rocm` | `ShotSieve-AMD-ROCm` | `ShotSieve-linux-amd-rocm-x64.tar.gz` |
+| `macos-cpu` | `ShotSieve-CPU` | `ShotSieve-macos-cpu-arm64.tar.gz` |
+| `macos-apple-mps` | `ShotSieve-Apple-MPS` | `ShotSieve-macos-apple-mps-arm64.tar.gz` |
 
 Both macOS targets are arm64. The bootstrap launcher rejects Intel macOS
 instead of downloading the arm64 `macos-cpu` archive; use the source install
@@ -157,10 +183,11 @@ its manual path publishes a release. Actions artifacts are separate from the
 Releases page, but anyone with repository read access can download them.
 
 The portable release smoke checks archive shape, the launcher, the torchless
-boundary, and launcher `--help` for every target. Frozen `--check-runtime`
-installation/native-import coverage currently runs only for the Windows XPU
-target; other target families require their target-appropriate runtime or model
-smoke workflow before publication.
+boundary, and launcher `--help` for every target. The release and preview
+workflows also perform a fresh target-specific frozen `--check-runtime`
+installation/native-import check for every matrix target. This validates the
+selected sidecar and learned imports; it does not certify every vendor driver
+or hardware combination, which still requires target-system testing.
 
 On first use, the frozen launcher derives its target from its current launcher
 name and may install the matching Torch sidecar under
@@ -231,7 +258,7 @@ The narrower repo-wide dead-import guard is also useful when changing package
 imports:
 
 ```bash
-python -m pip install -e .[lint]
+python -m pip install -e ".[lint]"
 python -m ruff check --select F401 src/shotsieve
 ```
 
@@ -254,6 +281,18 @@ The manual/weekly model-smoke workflow prepares TOPIQ, CLIPIQA, and Q-ReAlign
 Mini with the current stable pins in fresh caches, repeats the checks offline,
 records resolved dependency versions, and uploads sanitized JSON reports. It
 does not upload photos, model weights, or caches.
+
+Build and inspect an installed wheel with:
+
+```bash
+python -m pip install build
+python -m build --wheel --outdir dist
+```
+
+Install the wheel in a temporary environment outside the checkout, run
+`python -m pip check`, and run `shotsieve-desktop --help`. This catches
+missing package data and entry-point problems that an editable install can
+hide. The CI smoke follows this pattern.
 
 ## Performance measurement
 
@@ -282,5 +321,20 @@ distributions, ten runtime packs, checksummed bootstrap manifest, and split
 archive parts when required. Use `-DryRun` on the tag helper to inspect its
 checks before making the tag.
 
+The publish helper requires a clean, checked-out branch synchronized with
+`origin`, fetches tags unless `-SkipFetch` is supplied, rejects pre-release mode,
+and refuses an existing local or remote tag. Run it only after the prepared
+version/changelog changes are committed. Use `-DryRun` before the annotated tag
+is created and pushed.
+
 If artifact publishing is interrupted after a successful build, rerun the
 `ci-release` workflow for the existing tag using its `release_tag` input.
+
+The local PowerShell build script builds Windows artifacts only. PyInstaller
+does not cross-compile these bundles; Linux and macOS packs require their
+native workflow runners. The release workflow is the supported path for the
+complete ten-target matrix.
+
+ShotSieve does not provide a hosted deployment, authentication, Docker/system-
+service, or LAN-serving procedure. The supported operational model is a local
+process and local data/cache directories.

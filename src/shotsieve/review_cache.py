@@ -11,14 +11,13 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, Callable, Iterable, Sequence
 
-from shotsieve.config import BROWSER_SAFE_EXTENSIONS
+from shotsieve.config import BROWSER_SAFE_EXTENSIONS as _BROWSER_SAFE_EXTENSIONS
 from shotsieve.db import (
     infer_preview_cache_roots,
     normalize_resolved_path,
     preview_cache_root_is_claimed,
     root_path_filter,
 )
-from shotsieve.file_operation_state import OperationState
 from shotsieve.models import (
     FilesystemObservation,
     FileOperationResult,
@@ -31,13 +30,15 @@ from shotsieve.preview import clear_preview_cache_dir, delete_managed_preview_fi
 _PRUNE_MISSING_CACHE_BATCH_SIZE = 5000
 _MISSING_CACHE_TOKEN_VERSION = "missing-cache-v1"
 
+# Preserve the historical module-level compatibility export.
+BROWSER_SAFE_EXTENSIONS = _BROWSER_SAFE_EXTENSIONS
+
 
 @dataclass(slots=True)
 class _DeleteRowOutcome:
     """Result of one delete row, kept separate from the aggregate summary."""
 
     result: FileOperationResult
-    state: OperationState
     deleted_id: int | None = None
     warning: BaseException | None = None
     error: BaseException | None = None
@@ -47,10 +48,10 @@ class _DeleteRowOutcome:
 class _MissingEntryState(str, Enum):
     """Lifecycle states for a root-scoped missing-cache candidate."""
 
-    OBSERVED_MISSING = OperationState.OBSERVED_MISSING.value
-    DELETED = OperationState.DELETED.value
-    NOT_PROCESSED = OperationState.NOT_PROCESSED.value
-    CATALOG_UNCERTAIN = OperationState.CATALOG_UNCERTAIN.value
+    OBSERVED_MISSING = "observed_missing"
+    DELETED = "deleted"
+    NOT_PROCESSED = "not_processed"
+    CATALOG_UNCERTAIN = "catalog_uncertain"
 
 
 @dataclass(slots=True)
@@ -168,12 +169,7 @@ def media_path_for_file(connection, *, file_id: int, variant: str) -> Path | Non
     if not source_path.exists():
         return None
 
-    # Generated preview is preferred for browser-fragile formats, but the
-    # source is a deterministic last-resort fallback for any format. Keep the
-    # browser-safe extension vocabulary centralized in config; this branch is
-    # intentionally behavior-neutral for unsafe originals.
-    if source_path.suffix.casefold() in BROWSER_SAFE_EXTENSIONS:
-        return source_path
+    # The source is a deterministic last-resort fallback for any format.
     return source_path
 
 
@@ -713,7 +709,6 @@ def _delete_row(
                     error=exc,
                     retry_safe=True,
                 ),
-                state=OperationState.FAILED,
             )
 
         source_observation = observe_filesystem_path(resolved_source_path)
@@ -727,7 +722,6 @@ def _delete_row(
                     retry_safe=source_observation.state == "missing",
                     source_observation=source_observation,
                 ),
-                state=OperationState.OBSERVED_MISSING,
             )
 
         try:
@@ -743,11 +737,6 @@ def _delete_row(
                     retry_safe=outcome == "failed",
                     outcome=outcome,
                     source_observation=source_after,
-                ),
-                state=(
-                    OperationState.FAILED
-                    if outcome == "failed"
-                    else OperationState.UNCERTAIN
                 ),
             )
 
@@ -767,11 +756,6 @@ def _delete_row(
         )
         return _DeleteRowOutcome(
             result=result,
-            state=(
-                OperationState.CATALOG_UNCERTAIN
-                if result.outcome == "uncertain"
-                else OperationState.FAILED
-            ),
             deleted_id=int(row["id"]) if catalog_deleted else None,
             error=exc,
             needs_rollback=needs_rollback,
@@ -798,7 +782,6 @@ def _delete_row(
             stage="catalog_update" if not delete_from_disk else "source_removal",
             source_state=(source_observation.state if source_observation is not None else "unknown"),
         ),
-        state=OperationState.DELETED,
         deleted_id=int(row["id"]),
         warning=warning,
     )

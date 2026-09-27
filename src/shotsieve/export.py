@@ -9,7 +9,6 @@ from pathlib import Path
 from typing import Callable
 
 from shotsieve.db import normalize_path_case
-from shotsieve.file_operation_state import OperationState
 from shotsieve.models import (
     FilesystemObservation,
     FileOperationResult,
@@ -50,7 +49,6 @@ class _ExportRowOutcome:
     """Result of one export row, including whether the batch must stop."""
 
     result: FileOperationResult
-    state: OperationState
     copied: int = 0
     moved: int = 0
     warnings: list[tuple[str, BaseException | str]] = field(default_factory=list)
@@ -215,7 +213,6 @@ def _process_export_row(
                 fallback="Source file not found",
                 source_observation=source_observation,
             ),
-            state=OperationState.OBSERVED_MISSING,
         )
 
     try:
@@ -232,7 +229,6 @@ def _process_export_row(
                 source_observation=source_observation,
                 destination_observation=exc.observation,
             ),
-            state=OperationState.FAILED,
         )
     except (OSError, ValueError) as exc:
         return _ExportRowOutcome(
@@ -245,7 +241,6 @@ def _process_export_row(
                 retry_safe=True,
                 source_observation=source_observation,
             ),
-            state=OperationState.FAILED,
         )
 
     if mode == "copy":
@@ -269,11 +264,9 @@ def _copy_export_row(row, *, source: Path, target: Path, mode: str) -> _ExportRo
         destination_observation = observe_filesystem_path(target)
         if collision:
             outcome = "failed"
-            state = OperationState.FAILED
             retry_safe = True
         else:
             outcome = "failed" if destination_observation.state == "missing" else "uncertain"
-            state = OperationState.FAILED if outcome == "failed" else OperationState.UNCERTAIN
             retry_safe = outcome == "failed"
         return _ExportRowOutcome(
             result=_result_from_error(
@@ -287,7 +280,6 @@ def _copy_export_row(row, *, source: Path, target: Path, mode: str) -> _ExportRo
                 source_observation=observe_filesystem_path(source),
                 destination_observation=destination_observation,
             ),
-            state=state,
         )
     except Exception as exc:
         destination_observation = observe_filesystem_path(target)
@@ -303,7 +295,6 @@ def _copy_export_row(row, *, source: Path, target: Path, mode: str) -> _ExportRo
                 source_observation=observe_filesystem_path(source),
                 destination_observation=destination_observation,
             ),
-            state=OperationState.UNCERTAIN,
             error=exc,
         )
 
@@ -316,7 +307,6 @@ def _copy_export_row(row, *, source: Path, target: Path, mode: str) -> _ExportRo
             outcome="success",
             stage="transfer",
         ),
-        state=OperationState.COMPLETED,
         copied=1,
         warnings=(
             [("transfer_metadata", metadata_warning)]
@@ -344,7 +334,6 @@ def _move_export_row(
         destination_after = observe_filesystem_path(target)
         if collision:
             outcome = "failed"
-            state = OperationState.FAILED
             retry_safe = True
         else:
             outcome = (
@@ -352,7 +341,6 @@ def _move_export_row(
                 if source_after.state == "present" and destination_after.state == "missing"
                 else "uncertain"
             )
-            state = OperationState.FAILED if outcome == "failed" else OperationState.UNCERTAIN
             retry_safe = outcome == "failed"
         return _ExportRowOutcome(
             result=_result_from_error(
@@ -366,7 +354,6 @@ def _move_export_row(
                 source_observation=source_after,
                 destination_observation=destination_after,
             ),
-            state=state,
         )
     except Exception as exc:
         source_after = observe_filesystem_path(source)
@@ -383,7 +370,6 @@ def _move_export_row(
                 source_observation=source_after,
                 destination_observation=destination_after,
             ),
-            state=OperationState.UNCERTAIN,
             error=exc,
         )
 
@@ -417,14 +403,12 @@ def _move_export_row(
                     source_observation=observe_filesystem_path(source),
                     destination_observation=observe_filesystem_path(target),
                 ),
-                state=OperationState.CATALOG_UNCERTAIN,
                 error=restore_error,
                 error_cause=exc,
                 needs_rollback=True,
             )
         return _ExportRowOutcome(
             result=result,
-            state=OperationState.CATALOG_UNCERTAIN,
             error=exc,
             needs_rollback=needs_rollback,
         )
@@ -451,7 +435,6 @@ def _move_export_row(
             outcome="success",
             stage="catalog_update",
         ),
-        state=OperationState.COMPLETED,
         moved=1,
         warnings=warnings,
     )

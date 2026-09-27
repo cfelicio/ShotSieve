@@ -86,7 +86,11 @@ Useful options:
 shotsieve-desktop --data-dir ./shot-data
 shotsieve-desktop --model-cache-dir ./model-cache
 shotsieve-desktop --host 127.0.0.1 --port 9001 --no-browser
+shotsieve-desktop --check-runtime
 ```
+
+See [configuration.md](docs/configuration.md) for CLI precedence, cache
+environment variables, offline mode, and UI analysis settings.
 
 Source checkouts and frozen bundles default to a `data/` directory next to the
 checkout or launcher. Installed packages outside a checkout use the platform
@@ -150,6 +154,16 @@ server binds to; it does not enable remote or LAN access.
 
 - [docs/building.md](docs/building.md) - source installs, testing, runtime
   packs, and release builds.
+- [docs/architecture.md](docs/architecture.md) - data flow, ownership,
+  persistence, jobs, and compatibility boundaries.
+- [docs/configuration.md](docs/configuration.md) - CLI, environment, cache,
+  model, and UI analysis configuration.
+- [docs/api.md](docs/api.md) - local CLI, HTTP route, job, and frontend
+  interface reference.
+- [docs/troubleshooting.md](docs/troubleshooting.md) - common setup, runtime,
+  browser, cache, and operation failures.
+- [docs/contributing.md](docs/contributing.md) - safe changes and verification
+  guidance.
 - [docs/intel-xpu.md](docs/intel-xpu.md) - Intel XPU prerequisites and smoke
   evidence.
 - [docs/amd-rocm.md](docs/amd-rocm.md) - AMD ROCm prerequisites and smoke

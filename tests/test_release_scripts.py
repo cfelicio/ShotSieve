@@ -24,6 +24,7 @@ RELEASE_CONSTRAINTS_PATH = PROJECT_ROOT / "scripts" / "release-constraints.txt"
 XPU_CONSTRAINTS_PATH = PROJECT_ROOT / "scripts" / "source-constraints-xpu.txt"
 ROCM_CONSTRAINTS_PATH = PROJECT_ROOT / "scripts" / "source-constraints-rocm.txt"
 RELEASE_WORKFLOW_PATH = PROJECT_ROOT / ".github" / "workflows" / "release.yml"
+PREVIEW_WORKFLOW_PATH = PROJECT_ROOT / ".github" / "workflows" / "preview-build.yml"
 LOCAL_ONLY_REPO_RELATIVE_PATHS = (
     "blog.md",
     ".github/agents/anvil.agent.md",
@@ -133,6 +134,23 @@ def test_release_workflow_stages_oversized_assets_as_verified_parts() -> None:
     assert "--output-root release-publish" in workflow
     assert "--archive-root release-publish" in workflow
     assert "release-publish/**/*.part-*" in workflow
+
+
+def test_portable_workflows_require_target_specific_frozen_runtime_smoke() -> None:
+    for workflow_path in (RELEASE_WORKFLOW_PATH, PREVIEW_WORKFLOW_PATH):
+        workflow = workflow_path.read_text(encoding="utf-8")
+
+        assert "Exercise frozen target runtime installation and native imports" in workflow
+        assert "--data-dir $smokeData --check-runtime --no-browser" in workflow
+        assert "$plan.target.id -ne $expectedTargetId" in workflow
+        assert "$runtimeReport.target -ne $expectedTargetId" in workflow
+        assert "cpu_tensor_ok" in workflow
+        assert "torchvision_nms_ok" in workflow
+        assert "learned_imports_ok" in workflow
+        assert "if: matrix.id == 'windows-intel-xpu'" not in workflow
+        runtime_check_start = workflow.index("Exercise frozen target runtime installation and native imports")
+        upload_start = workflow.index("uses: actions/upload-artifact@v6", runtime_check_start)
+        assert runtime_check_start < upload_start
 
 
 def test_release_workflow_uses_node24_actions_and_supports_manual_recovery() -> None:
@@ -427,7 +445,7 @@ def test_local_only_blog_and_github_automation_paths_are_not_tracked() -> None:
 def test_build_guide_documents_repo_wide_dead_import_validation() -> None:
     build_doc_text = (PROJECT_ROOT / "docs" / "building.md").read_text(encoding="utf-8")
 
-    assert 'python -m pip install -e .[lint]' in build_doc_text
+    assert 'python -m pip install -e ".[lint]"' in build_doc_text
     assert 'python -m ruff check --select F401 src/shotsieve' in build_doc_text
 
 

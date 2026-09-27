@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from functools import partial
 from http import HTTPStatus
 import threading
-from typing import Any, cast
+from typing import Any, TypeVar, cast
 from urllib.parse import parse_qs, urlparse
 
 from shotsieve.config import normalize_raw_preview_mode
@@ -44,6 +44,8 @@ _scan_offset_consumed = _scan_runner._scan_offset_consumed
 _scan_one_root = _scan_runner._scan_one_root
 _scan_root_report = _scan_runner._scan_root_report
 _scan_root_report_from_exception = _scan_runner._scan_root_report_from_exception
+
+_AdmissionResult = TypeVar("_AdmissionResult")
 
 
 def _route(context: WebRouteContext, name: str, fallback: Callable[..., Any]) -> Callable[..., Any]:
@@ -258,6 +260,55 @@ def _handle_cache_post_routes(handler: Any, context: WebRouteContext, parsed: An
     return True
 
 
+def _with_operation_admission(
+    handler: Any,
+    context: WebRouteContext,
+    setup: Callable[[Callable[[], None]], _AdmissionResult],
+) -> _AdmissionResult | None:
+    """Admit one operation and release its shared lock if setup fails.
+
+    The lifecycle lock is held only while checking shutdown state, acquiring
+    the operation lock, and starting the job setup. The returned release
+    callback owns the operation lock after setup succeeds and is safe to call
+    more than once when a worker-start race overlaps with cleanup.
+    """
+    server = getattr(handler, "server", None)
+    lifecycle_lock = getattr(server, "operation_lifecycle_lock", None)
+
+    def admit_and_setup() -> _AdmissionResult | None:
+        if server is not None and not getattr(server, "accepting_operations", True):
+            _route(context, "send_json_error", send_json_error)(
+                handler,
+                HTTPStatus.SERVICE_UNAVAILABLE,
+                "The server is shutting down and cannot start new work.",
+            )
+            return None
+        if not _route(context, "try_acquire_operation_lock", try_acquire_operation_lock)(handler, context):
+            return None
+
+        release_guard = threading.Lock()
+        released = False
+
+        def release_operation_lock() -> None:
+            nonlocal released
+            with release_guard:
+                if released:
+                    return
+                released = True
+                context.operation_lock.release()
+
+        try:
+            return setup(release_operation_lock)
+        except BaseException:
+            release_operation_lock()
+            raise
+
+    if lifecycle_lock is None:
+        return admit_and_setup()
+    with lifecycle_lock:
+        return admit_and_setup()
+
+
 def _start_operation_job(
     handler: Any,
     context: WebRouteContext,
@@ -273,27 +324,9 @@ def _start_operation_job(
 ) -> None:
     """Start an operation job with one shared lock/registry lifecycle."""
     deps = cast(WebRouteDependencies, context.dependency_views.jobs)
-    server = getattr(handler, "server", None)
-    lifecycle_lock = getattr(server, "operation_lifecycle_lock", None)
-    response_payload: dict[str, object] | None = None
 
-    def start_job() -> None:
-        nonlocal response_payload
-        if server is not None and not getattr(server, "accepting_operations", True):
-            _route(context, "send_json_error", send_json_error)(
-                handler,
-                HTTPStatus.SERVICE_UNAVAILABLE,
-                "The server is shutting down and cannot start new work.",
-            )
-            return
-        if not _route(context, "try_acquire_operation_lock", try_acquire_operation_lock)(handler, context):
-            return
-
-        try:
-            job_id = registry.create(initial_progress=initial_progress)
-        except Exception:
-            context.operation_lock.release()
-            raise
+    def start_job(release_operation_lock: Callable[[], None]) -> dict[str, object]:
+        job_id = registry.create(initial_progress=initial_progress)
 
         def run_job() -> None:
             try:
@@ -319,21 +352,17 @@ def _start_operation_job(
                     summary=failure.summary,
                 )
             finally:
-                context.operation_lock.release()
+                release_operation_lock()
 
         try:
             deps.thread_factory(target=run_job, daemon=True).start()
         except Exception as exc:
             registry.fail(job_id, error=str(exc))
-            context.operation_lock.release()
             raise
-        response_payload = {"job_id": job_id, "status": "running"}
 
-    if lifecycle_lock is None:
-        start_job()
-    else:
-        with lifecycle_lock:
-            start_job()
+        return {"job_id": job_id, "status": "running"}
+
+    response_payload = _with_operation_admission(handler, context, start_job)
     if response_payload is not None:
         _route(context, "send_json", send_json)(handler, response_payload)
 
@@ -344,32 +373,17 @@ def _run_admitted_operation(
     operation: Callable[[], object],
 ) -> tuple[bool, object | None]:
     """Run one synchronous compatibility operation under shared admission."""
-    server = getattr(handler, "server", None)
-    lifecycle_lock = getattr(server, "operation_lifecycle_lock", None)
-
-    def admit_operation() -> bool:
-        if server is not None and not getattr(server, "accepting_operations", True):
-            _route(context, "send_json_error", send_json_error)(
-                handler,
-                HTTPStatus.SERVICE_UNAVAILABLE,
-                "The server is shutting down and cannot start new work.",
-            )
-            return False
-        if not _route(context, "try_acquire_operation_lock", try_acquire_operation_lock)(handler, context):
-            return False
-        return True
-
-    if lifecycle_lock is None:
-        admitted = admit_operation()
-    else:
-        with lifecycle_lock:
-            admitted = admit_operation()
-    if not admitted:
+    release_operation_lock = _with_operation_admission(
+        handler,
+        context,
+        lambda release: release,
+    )
+    if release_operation_lock is None:
         return False, None
     try:
         return True, operation()
     finally:
-        context.operation_lock.release()
+        release_operation_lock()
 
 
 def _start_analysis_job(
@@ -383,38 +397,9 @@ def _start_analysis_job(
 ) -> None:
     """Admit and start a scan/score/compare job with common cleanup."""
     deps = cast(WebRouteDependencies, context.dependency_views.jobs)
-    server = getattr(handler, "server", None)
-    lifecycle_lock = getattr(server, "operation_lifecycle_lock", None)
-    response_payload: dict[str, object] | None = None
 
-    def start_job() -> None:
-        nonlocal response_payload
-        if server is not None and not getattr(server, "accepting_operations", True):
-            _route(context, "send_json_error", send_json_error)(
-                handler,
-                HTTPStatus.SERVICE_UNAVAILABLE,
-                "The server is shutting down and cannot start new work.",
-            )
-            return
-        if not _route(context, "try_acquire_operation_lock", try_acquire_operation_lock)(handler, context):
-            return
-
-        lock_release_guard = threading.Lock()
-        lock_released = False
-
-        def release_operation_lock() -> None:
-            nonlocal lock_released
-            with lock_release_guard:
-                if lock_released:
-                    return
-                lock_released = True
-                context.operation_lock.release()
-
-        try:
-            job_id = registry.create(initial_progress=initial_progress)
-        except Exception:
-            release_operation_lock()
-            raise
+    def start_job(release_operation_lock: Callable[[], None]) -> dict[str, object]:
+        job_id = registry.create(initial_progress=initial_progress)
 
         try:
             worker = worker_factory(job_id)
@@ -428,15 +413,11 @@ def _start_analysis_job(
             deps.thread_factory(target=run_job, daemon=True).start()
         except Exception as exc:
             registry.fail(job_id, error=f"{label} job failed to start: {exc}")
-            release_operation_lock()
             raise
-        response_payload = {"job_id": job_id, "status": "running"}
 
-    if lifecycle_lock is None:
-        start_job()
-    else:
-        with lifecycle_lock:
-            start_job()
+        return {"job_id": job_id, "status": "running"}
+
+    response_payload = _with_operation_admission(handler, context, start_job)
     if response_payload is not None:
         _route(context, "send_json", send_json)(handler, response_payload)
 

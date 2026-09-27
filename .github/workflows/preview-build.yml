@@ -209,8 +209,7 @@ jobs:
 
           & $launcher --help | Out-Null
 
-      - name: Exercise frozen Windows XPU first-run installation and native imports
-        if: matrix.id == 'windows-intel-xpu'
+      - name: Exercise frozen target runtime installation and native imports
         shell: pwsh
         env:
           SHOTSIEVE_BOOTSTRAP_AUTO_INSTALL_TORCH: "1"
@@ -219,10 +218,32 @@ jobs:
           TRANSFORMERS_OFFLINE: "1"
         run: |
           $plan = Get-Content bundle-plan.json -Raw | ConvertFrom-Json
+          $expectedTargetId = '${{ matrix.id }}'
+          if ($plan.target.id -ne $expectedTargetId) {
+            throw "Bundle plan target '$($plan.target.id)' does not match matrix target '$expectedTargetId'"
+          }
           $launcher = Join-Path $plan.distPath $plan.target.executableName
-          & $launcher --check-runtime --no-browser
-          if ($LASTEXITCODE -ne 0) {
-            throw "Frozen XPU runtime installation or native import check failed"
+          $smokeData = Join-Path $PWD "runtime-smoke-data"
+          $runtimeOutput = @(& $launcher --data-dir $smokeData --check-runtime --no-browser 2>&1)
+          $runtimeExitCode = $LASTEXITCODE
+          $runtimeOutput | ForEach-Object { Write-Host $_ }
+          if ($runtimeExitCode -ne 0) {
+            throw "Frozen $expectedTargetId runtime installation or native import check failed"
+          }
+          $runtimeJson = $runtimeOutput |
+            Where-Object { $_ -is [string] -and $_ -match '^\s*\{.*\}\s*$' } |
+            Select-Object -Last 1
+          if (-not $runtimeJson) {
+            throw "Frozen $expectedTargetId runtime check did not emit a JSON report"
+          }
+          $runtimeReport = $runtimeJson | ConvertFrom-Json
+          if ($runtimeReport.target -ne $expectedTargetId) {
+            throw "Frozen runtime reported target '$($runtimeReport.target)' instead of '$expectedTargetId'"
+          }
+          foreach ($field in @('cpu_tensor_ok', 'torchvision_nms_ok', 'learned_imports_ok')) {
+            if (-not $runtimeReport.$field) {
+              throw "Frozen $expectedTargetId runtime reported $field=false"
+            }
           }
 
       - name: Upload preview bundle artifact

@@ -109,7 +109,9 @@ downloading model weights or starting the UI. It exits nonzero on failure and
 prints `accelerator_available` separately; `false` with passing CPU operations
 means CPU learned models remain usable. If an accelerator is available, the
 check also runs a tensor operation on it. Preview and release CI run this
-check on the frozen Windows XPU executable after a fresh sidecar installation.
+check on each matching frozen target after a fresh sidecar installation. The
+XPU result still reports accelerator availability separately, so a passing CPU
+and native-import check is not a claim of Intel hardware certification.
 
 ## Install on Linux
 

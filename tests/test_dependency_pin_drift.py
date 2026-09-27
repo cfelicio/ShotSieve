@@ -72,6 +72,13 @@ def test_release_model_constraints_match_runtime_source_of_truth() -> None:
     )
 
 
+def test_third_party_license_inventory_matches_model_pins() -> None:
+    license_text = (PROJECT_ROOT / "THIRD_PARTY_LICENSES.md").read_text(encoding="utf-8")
+    for requirement in COMMON_MODEL_REQUIREMENTS:
+        package, version = requirement.split("==", 1)
+        assert f"`{package}=={version}`" in license_text
+
+
 def test_pyproject_dependency_floors_match_qualified_versions() -> None:
     metadata = tomllib.loads((PROJECT_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
     project = metadata["project"]
@@ -93,9 +100,9 @@ def test_pyproject_dependency_floors_match_qualified_versions() -> None:
     assert _requirements_from_project(extras["test"]) == {
         "pytest": "9.1.1",
         "playwright": "1.63.0",
-        "ruff": "0.16.8",
+        "ruff": "0.16.9",
     }
-    assert _requirements_from_project(extras["lint"]) == {"ruff": "0.16.8"}
+    assert _requirements_from_project(extras["lint"]) == {"ruff": "0.16.9"}
 
     expected_models = _pins_from_lines(list(COMMON_MODEL_REQUIREMENTS))
     assert _requirements_from_project(extras["learned-iqa"]) == {
@@ -109,6 +116,7 @@ def test_pyproject_dependency_floors_match_qualified_versions() -> None:
         "pyinstaller": "6.22.3",
     }
     assert "setuptools>=81.0.0,<82" in extras["learned-iqa"]
+    assert "huggingface-hub>=1.33.0,<2.0" in extras["learned-iqa"]
     assert "setuptools>=81.0.0,<82" in extras["windows-build"]
 
 
