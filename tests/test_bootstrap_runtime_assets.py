@@ -1029,6 +1029,41 @@ def test_frozen_amd_install_uses_bundled_selector_wheel_and_stable_index(
     assert str(selector_wheel_dir) in args_text
 
 
+def test_frozen_amd_install_uses_packaged_selector_with_custom_data_dir(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured_args: list[list[str]] = []
+
+    def fake_pip_main(args):
+        captured_args.append(list(args))
+        return 0
+
+    executable = tmp_path / "ShotSieve-AMD-ROCm"
+    executable.write_bytes(b"launcher")
+    packaged_wheel_dir = tmp_path / "data" / "runtime" / "wheels"
+    packaged_wheel_dir.mkdir(parents=True)
+    packaged_wheel = packaged_wheel_dir / "rocm-10.0.0-py3-none-any.whl"
+    packaged_wheel.write_bytes(b"packaged-selector-wheel")
+
+    monkeypatch.setattr(sidecar_module.sys, "frozen", True, raising=False)
+    monkeypatch.setattr(sidecar_module.sys, "executable", str(executable), raising=False)
+    monkeypatch.setattr(sidecar_module, "_load_embedded_pip_main", lambda: fake_pip_main)
+    monkeypatch.setattr(sidecar_module, "_patch_distlib_finder_for_frozen", lambda: None)
+    monkeypatch.setattr(sidecar_module, "_patch_pip_scriptmaker_for_embedded_install", lambda: None)
+    monkeypatch.setattr(sidecar_module, "path_has_torch", lambda _path: True)
+
+    smoke_site_packages = tmp_path / "runtime-smoke-data" / "runtime" / "site-packages" / "windows-amd-rocm"
+    installed = sidecar_module._install_torch_sidecar_with_embedded_pip(
+        runtime="rocm",
+        site_packages=smoke_site_packages,
+    )
+
+    assert installed is True
+    assert len(captured_args) == 1
+    assert str(packaged_wheel) in " ".join(captured_args[0])
+
+
 def test_frozen_amd_install_fails_cleanly_without_selector_wheel(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -1090,6 +1125,17 @@ def test_frozen_learned_iqa_install_uses_openai_clip_source_fallback(
 
     assert installed is True
     assert calls == [tmp_path]
+
+
+def test_learned_iqa_packages_keep_huggingface_hub_pinned() -> None:
+    packages = sidecar_module._learned_iqa_packages_for_runtime("cpu")
+    hub_requirements = [
+        package
+        for package in packages
+        if package.split("==", 1)[0].casefold() == "huggingface-hub"
+    ]
+
+    assert hub_requirements == ["huggingface-hub==1.33.0"]
 
 
 def test_embedded_install_learned_iqa_sidecar_installs_opencv_headless(

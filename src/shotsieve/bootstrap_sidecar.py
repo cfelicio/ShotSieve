@@ -240,6 +240,15 @@ def sidecar_site_packages_dir(runtime_root: Path, target_id: str) -> Path:
     return runtime_root / DEFAULT_TORCH_SITE_PACKAGES_DIRNAME / target_id
 
 
+def _rocm_selector_wheel_candidates(site_packages: Path) -> tuple[Path, ...]:
+    """Return packaged and data-root locations for the frozen ROCm selector."""
+    candidates: list[Path] = []
+    if getattr(sys, "frozen", False):
+        candidates.append(Path(sys.executable).resolve().parent / "data" / "runtime" / "wheels")
+    candidates.append(site_packages.parent.parent / "wheels")
+    return tuple(dict.fromkeys(candidates))
+
+
 def _target_parts(target_id: str | None, runtime: str | None) -> tuple[str, str, str]:
     raw_target = str(target_id or "").strip().casefold()
     canonical_target = canonical_release_target_id(raw_target) if raw_target else ""
@@ -861,18 +870,22 @@ def _install_torch_sidecar_with_embedded_pip(
                 getattr(sys, "frozen", False)
                 and plan.runtime == "rocm"
             ):
-                selector_wheel_dir = site_packages.parent.parent / "wheels"
-                selector_wheels = sorted(
-                    selector_wheel_dir.glob("rocm-10.0.0-*.whl")
-                )
-                if len(selector_wheels) != 1:
+                selector_wheel_dir: Path | None = None
+                selector_wheels: list[Path] = []
+                for candidate_dir in _rocm_selector_wheel_candidates(site_packages):
+                    candidate_wheels = sorted(candidate_dir.glob("rocm-10.0.0-*.whl"))
+                    if candidate_wheels:
+                        selector_wheel_dir = candidate_dir
+                        selector_wheels = candidate_wheels
+                        break
+                if selector_wheel_dir is None or len(selector_wheels) != 1:
                     output_func(
                         "The bundled ROCm 10 selector wheel is missing or ambiguous. "
                         "Reinstall the complete ShotSieve runtime pack before retrying."
                     )
                     _append_debug_log(
                         package_name="rocm==10.0.0",
-                        install_args=[str(selector_wheel_dir)],
+                        install_args=[str(path) for path in _rocm_selector_wheel_candidates(site_packages)],
                         return_code=1,
                         stdout_text="",
                         stderr_text="Expected exactly one bundled rocm-10.0.0-*.whl.",
@@ -973,7 +986,6 @@ def _learned_iqa_packages_for_runtime(runtime: str) -> list[str]:
         "requests",
         "tqdm",
         "scipy",
-        "huggingface-hub",
         "pandas",
         # Direct dependencies of the torch-dependent packages above.  They
         # are installed explicitly so those packages can use --no-deps.
