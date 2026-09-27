@@ -1146,10 +1146,15 @@ _PRESERVED_RUNTIME_SIDECAR_ENTRIES = frozenset(
 )
 
 
+def _is_preserved_runtime_sidecar_entry(name: str) -> bool:
+    normalized_name = name.casefold()
+    return normalized_name.startswith("_rocm_sdk_") or name in _PRESERVED_RUNTIME_SIDECAR_ENTRIES
+
+
 def _copy_learned_sidecar_entries(source_dir: Path, destination_dir: Path) -> None:
     destination_dir.mkdir(parents=True, exist_ok=True)
     for source_path in source_dir.iterdir():
-        if source_path.name in _PRESERVED_RUNTIME_SIDECAR_ENTRIES:
+        if _is_preserved_runtime_sidecar_entry(source_path.name):
             continue
         destination_path = destination_dir / source_path.name
         if source_path.is_dir() and not source_path.is_symlink():
@@ -1165,7 +1170,7 @@ def _copy_learned_sidecar_entries(source_dir: Path, destination_dir: Path) -> No
 
 def _remove_learned_sidecar_entries(site_packages: Path) -> None:
     for entry in site_packages.iterdir():
-        if entry.name in _PRESERVED_RUNTIME_SIDECAR_ENTRIES:
+        if _is_preserved_runtime_sidecar_entry(entry.name):
             continue
         if entry.is_dir() and not entry.is_symlink():
             shutil.rmtree(entry, ignore_errors=True)

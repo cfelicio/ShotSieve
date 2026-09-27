@@ -577,8 +577,8 @@ def test_learned_iqa_merge_preserves_loaded_runtime_entries(tmp_path: Path) -> N
     (site_packages / "torch" / "lib" / "c10_xpu.dll").write_bytes(b"loaded-native-runtime")
     (site_packages / "Library" / "bin").mkdir(parents=True)
     (site_packages / "Library" / "bin" / "sycl9.dll").write_bytes(b"loaded-sycl-runtime")
-    (site_packages / "_rocm_sdk_core" / "bin").mkdir(parents=True)
-    (site_packages / "_rocm_sdk_core" / "bin" / "amdhip64_7.dll").write_bytes(b"loaded-rocm-runtime")
+    (site_packages / "_rocm_sdk_libraries" / "bin").mkdir(parents=True)
+    (site_packages / "_rocm_sdk_libraries" / "bin" / "hipblas.dll").write_bytes(b"loaded-rocm-runtime")
     (site_packages / "nvidia" / "cuda_runtime" / "lib").mkdir(parents=True)
     (site_packages / "nvidia" / "cuda_runtime" / "lib" / "cudart64.dll").write_bytes(b"loaded-cuda-runtime")
     (site_packages / "transformers").mkdir()
@@ -588,8 +588,8 @@ def test_learned_iqa_merge_preserves_loaded_runtime_entries(tmp_path: Path) -> N
     (staging_dir / "torch" / "lib" / "c10_xpu.dll").write_bytes(b"new-staged-runtime")
     (staging_dir / "Library" / "bin").mkdir(parents=True)
     (staging_dir / "Library" / "bin" / "sycl9.dll").write_bytes(b"new-staged-sycl-runtime")
-    (staging_dir / "_rocm_sdk_core" / "bin").mkdir(parents=True)
-    (staging_dir / "_rocm_sdk_core" / "bin" / "amdhip64_7.dll").write_bytes(b"new-staged-rocm-runtime")
+    (staging_dir / "_rocm_sdk_libraries" / "bin").mkdir(parents=True)
+    (staging_dir / "_rocm_sdk_libraries" / "bin" / "hipblas.dll").write_bytes(b"new-staged-rocm-runtime")
     (staging_dir / "nvidia" / "cuda_runtime" / "lib").mkdir(parents=True)
     (staging_dir / "nvidia" / "cuda_runtime" / "lib" / "cudart64.dll").write_bytes(b"new-staged-cuda-runtime")
     (staging_dir / "pyiqa").mkdir()
@@ -605,7 +605,7 @@ def test_learned_iqa_merge_preserves_loaded_runtime_entries(tmp_path: Path) -> N
 
     assert (site_packages / "torch" / "lib" / "c10_xpu.dll").read_bytes() == b"loaded-native-runtime"
     assert (site_packages / "Library" / "bin" / "sycl9.dll").read_bytes() == b"loaded-sycl-runtime"
-    assert (site_packages / "_rocm_sdk_core" / "bin" / "amdhip64_7.dll").read_bytes() == b"loaded-rocm-runtime"
+    assert (site_packages / "_rocm_sdk_libraries" / "bin" / "hipblas.dll").read_bytes() == b"loaded-rocm-runtime"
     assert (site_packages / "nvidia" / "cuda_runtime" / "lib" / "cudart64.dll").read_bytes() == b"loaded-cuda-runtime"
     assert not (site_packages / "transformers" / "stale.py").exists()
     assert (site_packages / "transformers" / "fresh.py").read_text(encoding="utf-8") == "fresh"
