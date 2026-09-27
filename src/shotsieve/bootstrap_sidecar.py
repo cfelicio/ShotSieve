@@ -1131,6 +1131,11 @@ _PRESERVED_RUNTIME_SIDECAR_ENTRIES = frozenset(
         "Library",
         "bin",
         "lib",
+        # Vendor runtime packages contain DLLs/shared libraries that Torch
+        # loads before learned-IQA repair begins.  They are not covered by
+        # the generic torch/lib or Library roots below.
+        "_rocm_sdk_core",
+        "nvidia",
         "torch",
         "torchgen",
         "torchvision",
