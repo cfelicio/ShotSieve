@@ -17,6 +17,28 @@ CASE_INSENSITIVE_PATH_PLATFORMS = {"Windows"}
 TEXT_PREFIX_UPPER_BOUND = "\U0010FFFF"
 _SCAN_DIAGNOSTIC_ATTRIBUTE = "_shotsieve_scan_diagnostic"
 _SCAN_DIAGNOSTIC_PERSISTED_ATTRIBUTE = "_shotsieve_scan_diagnostic_persisted"
+_SQLITE_ID_BATCH_SIZE = 500
+
+
+def iter_sqlite_id_batches(connection, file_ids: Sequence[int]) -> Iterator[Sequence[int]]:
+    """Yield ID batches that stay within SQLite's bound-variable limit.
+
+    The 500-ID default is safe for connection wrappers without ``getlimit``
+    and matches the review-selection batch size. Native SQLite connections may
+    be configured with a lower limit, so honor it when available.
+    """
+    batch_size = _SQLITE_ID_BATCH_SIZE
+    getlimit = getattr(connection, "getlimit", None)
+    if callable(getlimit):
+        batch_size = min(
+            batch_size,
+            int(getlimit(sqlite3.SQLITE_LIMIT_VARIABLE_NUMBER)),
+        )
+    if batch_size < 1:
+        raise ValueError("SQLite variable limit must allow at least one ID")
+
+    for offset in range(0, len(file_ids), batch_size):
+        yield file_ids[offset : offset + batch_size]
 
 
 class _ShotSieveConnection(sqlite3.Connection):

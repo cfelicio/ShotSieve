@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any, cast
 from urllib.parse import parse_qs
 
+from shotsieve.db import iter_sqlite_id_batches
 from shotsieve.models import (
     FileOperationResult,
     FileOperationSummary,
@@ -571,12 +572,13 @@ def _append_unprocessed_operation_rows(
     execute = getattr(connection, "execute", None)
     if callable(execute):
         try:
-            placeholders = ",".join("?" for _ in file_ids)
-            rows = execute(
-                f"SELECT id, path FROM files WHERE id IN ({placeholders})",
-                tuple(file_ids),
-            ).fetchall()
-            rows_by_id = {int(row["id"]): row for row in rows}
+            for id_batch in iter_sqlite_id_batches(connection, file_ids):
+                placeholders = ",".join("?" for _ in id_batch)
+                rows = execute(
+                    f"SELECT id, path FROM files WHERE id IN ({placeholders})",
+                    tuple(id_batch),
+                ).fetchall()
+                rows_by_id.update({int(row["id"]): row for row in rows})
         except Exception:
             rows_by_id = {}
     accounted_ids = {item.file_id for item in summary.items}

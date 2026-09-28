@@ -414,17 +414,48 @@
   }
 
   async function fetchJson(url, options = {}) {
-    const signal = options.signal || null;
-    const response = await fetch(url, { ...options, signal });
-    const contentType = response.headers.get("Content-Type") || "";
-    const payload = contentType.includes("application/json") ? await response.json() : null;
+    const {
+      signal: callerSignal = null,
+      timeoutMs = null,
+      ...requestOptions
+    } = options;
+    const hasTimeout = Number.isFinite(Number(timeoutMs)) && Number(timeoutMs) > 0;
+    const timeoutController = hasTimeout ? new AbortController() : null;
+    const signal = timeoutController?.signal || callerSignal;
+    let timeoutId = null;
+    let abortListener = null;
 
-    if (!response.ok) {
-      const message = payload?.error || `Request failed: ${response.status}`;
-      throw new Error(message);
+    if (timeoutController) {
+      timeoutId = window.setTimeout(() => timeoutController.abort(), Number(timeoutMs));
+      if (callerSignal) {
+        if (callerSignal.aborted) {
+          timeoutController.abort();
+        } else {
+          abortListener = () => timeoutController.abort();
+          callerSignal.addEventListener("abort", abortListener, { once: true });
+        }
+      }
     }
 
-    return payload;
+    try {
+      const response = await fetch(url, { ...requestOptions, signal });
+      const contentType = response.headers.get("Content-Type") || "";
+      const payload = contentType.includes("application/json") ? await response.json() : null;
+
+      if (!response.ok) {
+        const message = payload?.error || `Request failed: ${response.status}`;
+        throw new Error(message);
+      }
+
+      return payload;
+    } finally {
+      if (timeoutId !== null) {
+        window.clearTimeout(timeoutId);
+      }
+      if (callerSignal && abortListener) {
+        callerSignal.removeEventListener("abort", abortListener);
+      }
+    }
   }
 
   function postJson(url, payload, { signal } = {}) {

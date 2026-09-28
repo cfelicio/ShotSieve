@@ -80,7 +80,7 @@ def test_batch_review_state_updates_avoids_per_file_lookup_queries(tmp_path: Pat
     preview_dir = tmp_path / "previews"
     photo_dir = tmp_path / "photos"
     photo_dir.mkdir()
-    for name in ("a.jpg", "b.jpg", "c.jpg", "d.jpg"):
+    for name in ("a.jpg", "b.jpg", "c.jpg", "d.jpg", "e.jpg", "f.jpg"):
         create_image(photo_dir / name)
 
     initialize_database(db_path)
@@ -91,6 +91,7 @@ def test_batch_review_state_updates_avoids_per_file_lookup_queries(tmp_path: Pat
 
         traced_sql: list[str] = []
         connection.set_trace_callback(traced_sql.append)
+        connection.setlimit(sqlite3.SQLITE_LIMIT_VARIABLE_NUMBER, 5)
         try:
             updated = update_review_state_batch(
                 connection,
@@ -112,7 +113,7 @@ def test_batch_review_state_updates_avoids_per_file_lookup_queries(tmp_path: Pat
         if "FROM files WHERE id =" in sql
     ]
 
-    assert updated == 4
+    assert updated == 6
     assert per_file_review_selects == []
     assert per_file_file_selects == []
 
@@ -170,6 +171,28 @@ def test_delete_files_removes_source_and_cache(tmp_path: Path) -> None:
     assert not source_path.exists()
     assert not preview_path.exists()
     assert count == 0
+
+
+def test_delete_files_batches_ids_at_connection_variable_limit(tmp_path: Path) -> None:
+    db_path = tmp_path / "data" / "shotsieve.db"
+    preview_dir = tmp_path / "previews"
+    photo_dir = tmp_path / "photos"
+    photo_dir.mkdir()
+    for name in ("a.jpg", "b.jpg", "c.jpg"):
+        create_image(photo_dir / name)
+    initialize_database(db_path)
+
+    with connect(db_path) as connection:
+        scan_root(connection, root=photo_dir, recursive=True, extensions=(".jpg",), preview_dir=preview_dir)
+        file_ids = [row["id"] for row in connection.execute("SELECT id FROM files ORDER BY id").fetchall()]
+        connection.setlimit(sqlite3.SQLITE_LIMIT_VARIABLE_NUMBER, 2)
+
+        result = delete_files(connection, file_ids=file_ids, delete_from_disk=False, preview_cache_root=preview_dir)
+        remaining = connection.execute("SELECT COUNT(*) AS count FROM files").fetchone()["count"]
+
+    assert result["deleted_count"] == 3
+    assert result["failed_count"] == 0
+    assert remaining == 0
 
 
 def test_delete_post_mutation_failure_is_uncertain_and_not_retry_safe(

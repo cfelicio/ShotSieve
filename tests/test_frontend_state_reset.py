@@ -125,6 +125,34 @@ def test_frontend_boot_retries_a_transient_options_failure(chromium_page) -> Non
         page.unroute("**/api/options*", fail_first_options_request)
 
 
+def test_frontend_fetch_json_timeout_aborts_stalled_request(chromium_page) -> None:
+    page, _ = chromium_page
+    result = page.evaluate(
+        """
+        async () => {
+          const originalFetch = window.fetch;
+          window.fetch = (_url, options = {}) => new Promise((_resolve, reject) => {
+            options.signal?.addEventListener(
+              "abort",
+              () => reject(new DOMException("aborted", "AbortError")),
+              { once: true },
+            );
+          });
+          try {
+            await window.ShotSieveUtils.fetchJson("/stalled", { timeoutMs: 10 });
+            return { rejected: false };
+          } catch (error) {
+            return { rejected: true, name: error?.name || "" };
+          } finally {
+            window.fetch = originalFetch;
+          }
+        }
+        """,
+    )
+
+    assert result == {"rejected": True, "name": "AbortError"}
+
+
 def test_public_workflow_facade_preserves_library_and_review_behavior(chromium_page) -> None:
     page, _ = chromium_page
     result = page.evaluate(

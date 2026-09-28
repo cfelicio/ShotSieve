@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
 
-from shotsieve.db import normalize_path_case
+from shotsieve.db import iter_sqlite_id_batches, normalize_path_case
 from shotsieve.models import (
     FilesystemObservation,
     FileOperationResult,
@@ -116,12 +116,14 @@ def export_files(
     # database ID ordering.
     unique_ids = list(dict.fromkeys(file_ids))
 
-    placeholders = ",".join("?" for _ in unique_ids)
-    selected_rows = connection.execute(
-        f"SELECT id, path, preview_path FROM files WHERE id IN ({placeholders})",
-        unique_ids,
-    ).fetchall()
-    rows_by_id = {row["id"]: row for row in selected_rows}
+    rows_by_id = {}
+    for id_batch in iter_sqlite_id_batches(connection, unique_ids):
+        placeholders = ",".join("?" for _ in id_batch)
+        selected_rows = connection.execute(
+            f"SELECT id, path, preview_path FROM files WHERE id IN ({placeholders})",
+            id_batch,
+        ).fetchall()
+        rows_by_id.update({row["id"]: row for row in selected_rows})
     rows = [rows_by_id[file_id] for file_id in unique_ids if file_id in rows_by_id]
 
     # Validate: all requested IDs must exist in the database.

@@ -14,6 +14,7 @@ from typing import Any, Callable, Iterable, Sequence
 from shotsieve.config import BROWSER_SAFE_EXTENSIONS as _BROWSER_SAFE_EXTENSIONS
 from shotsieve.db import (
     infer_preview_cache_roots,
+    iter_sqlite_id_batches,
     normalize_resolved_path,
     preview_cache_root_is_claimed,
     root_path_filter,
@@ -180,11 +181,14 @@ def remove_files_from_cache(
     preview_cache_root: Path | None = None,
 ) -> int:
     normalized_ids = normalize_file_ids(file_ids)
-    selected_rows = connection.execute(
-        f"SELECT id, path, preview_path FROM files WHERE id IN ({','.join('?' for _ in normalized_ids)})",
-        tuple(normalized_ids),
-    ).fetchall()
-    rows_by_id = {row["id"]: row for row in selected_rows}
+    rows_by_id = {}
+    for id_batch in iter_sqlite_id_batches(connection, normalized_ids):
+        placeholders = ",".join("?" for _ in id_batch)
+        selected_rows = connection.execute(
+            f"SELECT id, path, preview_path FROM files WHERE id IN ({placeholders})",
+            tuple(id_batch),
+        ).fetchall()
+        rows_by_id.update({row["id"]: row for row in selected_rows})
     rows = [rows_by_id[file_id] for file_id in normalized_ids if file_id in rows_by_id]
 
     for row in rows:
@@ -614,11 +618,14 @@ def delete_files(
 ) -> dict[str, object]:
     normalized_ids = normalize_file_ids(file_ids)
     trusted_roots = _trusted_delete_roots(connection) if delete_from_disk else ()
-    selected_rows = connection.execute(
-        f"SELECT id, path, path_key, preview_path, move_managed FROM files WHERE id IN ({','.join('?' for _ in normalized_ids)})",
-        tuple(normalized_ids),
-    ).fetchall()
-    rows_by_id = {row["id"]: row for row in selected_rows}
+    rows_by_id = {}
+    for id_batch in iter_sqlite_id_batches(connection, normalized_ids):
+        placeholders = ",".join("?" for _ in id_batch)
+        selected_rows = connection.execute(
+            f"SELECT id, path, path_key, preview_path, move_managed FROM files WHERE id IN ({placeholders})",
+            tuple(id_batch),
+        ).fetchall()
+        rows_by_id.update({row["id"]: row for row in selected_rows})
     rows = [rows_by_id[file_id] for file_id in normalized_ids if file_id in rows_by_id]
 
     if len(rows) != len(normalized_ids):

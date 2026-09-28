@@ -1,4 +1,5 @@
 from pathlib import Path
+import sqlite3
 from typing import cast
 
 import pytest
@@ -362,6 +363,32 @@ def test_remove_files_from_cache_removes_managed_preview(tmp_path: Path) -> None
     assert source_path.exists()
     assert not preview_path.exists()
     assert count == 0
+
+
+def test_remove_files_from_cache_batches_ids_at_connection_variable_limit(tmp_path: Path) -> None:
+    db_path = tmp_path / "data" / "shotsieve.db"
+    preview_dir = tmp_path / "custom-previews"
+    photo_dir = tmp_path / "photos"
+    photo_dir.mkdir()
+    for name in ("a.jpg", "b.jpg", "c.jpg"):
+        create_image(photo_dir / name)
+    initialize_database(db_path)
+
+    with connect(db_path) as connection:
+        scan_root(connection, root=photo_dir, recursive=True, extensions=(".jpg",), preview_dir=preview_dir)
+        rows = connection.execute("SELECT id, path, preview_path FROM files ORDER BY id").fetchall()
+        file_ids = [row["id"] for row in rows]
+        source_paths = [Path(row["path"]) for row in rows]
+        preview_paths = [Path(row["preview_path"]) for row in rows]
+        connection.setlimit(sqlite3.SQLITE_LIMIT_VARIABLE_NUMBER, 2)
+
+        removed = remove_files_from_cache(connection, file_ids=file_ids, preview_cache_root=preview_dir)
+        remaining = connection.execute("SELECT COUNT(*) AS count FROM files").fetchone()["count"]
+
+    assert removed == 3
+    assert remaining == 0
+    assert all(path.exists() for path in source_paths)
+    assert all(not path.exists() for path in preview_paths)
 
 
 def test_clear_cache_scope_all_wipes_preview_cache(tmp_path: Path) -> None:

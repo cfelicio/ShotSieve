@@ -7,7 +7,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Iterable
 
-from shotsieve.db import normalize_resolved_path, root_path_filter
+from shotsieve.db import iter_sqlite_id_batches, normalize_resolved_path, root_path_filter
 from shotsieve.performance import log_duration, monotonic_seconds
 from shotsieve.review_cache import (
     _PRUNE_MISSING_CACHE_BATCH_SIZE,
@@ -715,23 +715,25 @@ def update_review_state_batch(
     if delete_marked is True and export_marked is True:
         raise ValueError("delete_marked and export_marked cannot both be true")
 
-    placeholders = ",".join("?" for _ in normalized_ids)
-
-    existing_file_ids = {
-        int(row["id"])
-        for row in connection.execute(
+    existing_file_ids: set[int] = set()
+    for id_batch in iter_sqlite_id_batches(connection, normalized_ids):
+        placeholders = ",".join("?" for _ in id_batch)
+        rows = connection.execute(
             f"SELECT id FROM files WHERE id IN ({placeholders})",
-            tuple(normalized_ids),
+            tuple(id_batch),
         ).fetchall()
-    }
+        existing_file_ids.update(int(row["id"]) for row in rows)
     if len(existing_file_ids) != len(normalized_ids):
         raise ValueError("One or more file_ids do not exist in the cache")
 
-    existing_rows = connection.execute(
-        f"SELECT file_id, decision_state, delete_marked, export_marked FROM review_state WHERE file_id IN ({placeholders})",
-        tuple(normalized_ids),
-    ).fetchall()
-    existing_by_id = {int(row["file_id"]): row for row in existing_rows}
+    existing_by_id = {}
+    for id_batch in iter_sqlite_id_batches(connection, normalized_ids):
+        placeholders = ",".join("?" for _ in id_batch)
+        existing_rows = connection.execute(
+            f"SELECT file_id, decision_state, delete_marked, export_marked FROM review_state WHERE file_id IN ({placeholders})",
+            tuple(id_batch),
+        ).fetchall()
+        existing_by_id.update({int(row["file_id"]): row for row in existing_rows})
 
     upserts: list[tuple[int, str, int, int, str]] = []
     for file_id in normalized_ids:

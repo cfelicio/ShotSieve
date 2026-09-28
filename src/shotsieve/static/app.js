@@ -61,6 +61,15 @@ const {
   formatNumber,
 } = appUtils;
 
+const BOOTSTRAP_REQUEST_TIMEOUT_MS = 15000;
+let bootstrapInProgress = true;
+const bootstrapFetchJson = (url, options = {}) => fetchJson(
+  url,
+  bootstrapInProgress
+    ? { ...options, timeoutMs: BOOTSTRAP_REQUEST_TIMEOUT_MS }
+    : options,
+);
+
 const reviewModule = window.ShotSieveReview;
 if (!reviewModule) {
   throw new Error("ShotSieve review module failed to load.");
@@ -127,7 +136,7 @@ const gridController = window.ShotSieveGrid.createGridController({
   formatting: { escapeHtml, formatNumber, getScoreColor, pathDirectory, pathLeaf },
   reviewModule,
   notifications: { showToast },
-  api: { fetchJson },
+  api: { fetchJson: bootstrapFetchJson },
   stateModule,
   appUtils,
   handleError: (err) => console.error(err),
@@ -141,7 +150,7 @@ const controller = window.ShotSieveController.createController({
   uiStore,
   appUtils,
   stateModule,
-  api: { fetchJson, postJson },
+  api: { fetchJson: bootstrapFetchJson, postJson },
   workflows: workflowsHolder,
   grid: gridController,
   notifications: { showToast },
@@ -315,6 +324,7 @@ async function boot() {
     try {
       await controller.refreshWorkspace();
       renderComparisonResults();
+      bootstrapInProgress = false;
       document.body.dataset.appReady = "true";
       return;
     } catch (error) {

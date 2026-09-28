@@ -80,6 +80,7 @@ class TestCopyFiles:
         dest.mkdir()
 
         with database(db_path) as connection:
+            connection.setlimit(sqlite3.SQLITE_LIMIT_VARIABLE_NUMBER, 1)
             result = export_files(
                 connection,
                 file_ids=[ids_by_name["alpha.jpg"], ids_by_name["beta.jpg"]],
