@@ -39,6 +39,7 @@ APP_DIRNAME = "ShotSieve"
 PORTABLE_DATA_DIRNAME = "data"
 TORCH_AUTO_INSTALL_ENV = "SHOTSIEVE_BOOTSTRAP_AUTO_INSTALL_TORCH"
 LEARNED_IQA_AUTO_INSTALL_ENV = "SHOTSIEVE_BOOTSTRAP_AUTO_INSTALL_LEARNED_IQA"
+RUNTIME_REEXEC_TARGET_ENV = "SHOTSIEVE_RUNTIME_REEXEC_TARGET"
 LEARNED_IQA_MISSING_MODULE_PACKAGE_HINTS = {
     "yaml": "pyyaml",
     "cv2": "opencv-python-headless",
@@ -325,6 +326,37 @@ def _prepend_runtime_pythonpath(path: Path) -> None:
     prepare_runtime_dll_search_path(path)
     if path_text not in sys.path:
         sys.path.insert(0, path_text)
+
+
+def _maybe_reexec_linux_cuda_launcher(data_dir: Path, target_id: str) -> None:
+    """Restart a frozen Linux CUDA launcher after its sidecar is available.
+
+    The dynamic loader reads ``LD_LIBRARY_PATH`` before the process starts.
+    Updating it from inside the first frozen process is not sufficient for
+    CUDA's shared libraries, so restart once with the sidecar paths inherited
+    from process startup. Source installs and non-CUDA targets keep the
+    existing in-process path activation behavior.
+    """
+    if (
+        sys.platform != "linux"
+        or not getattr(sys, "frozen", False)
+        or target_id != "linux-nvidia-cuda"
+        or os.environ.get(RUNTIME_REEXEC_TARGET_ENV) == target_id
+    ):
+        return
+
+    runtime_root = (data_dir / "runtime").resolve()
+    site_packages = sidecar_site_packages_dir(runtime_root, target_id)
+    if not (
+        torch_sidecar_is_valid(site_packages, target_id=target_id, runtime="cuda")
+        and path_has_torch(site_packages)
+    ):
+        return
+
+    _prepend_runtime_pythonpath(site_packages)
+    launch_env = os.environ.copy()
+    launch_env[RUNTIME_REEXEC_TARGET_ENV] = target_id
+    os.execve(sys.executable, [sys.executable, *sys.argv[1:]], launch_env)
 
 
 def _sidecar_torch_has_usable_cuda(site_packages: Path) -> bool:
@@ -658,10 +690,12 @@ def main() -> None:
     data_dir = Path(args.data_dir).expanduser().resolve() if args.data_dir else default_data_dir()
     data_dir.mkdir(parents=True, exist_ok=True)
     recover_orphaned_preparation(data_dir)
-    installed_torch_runtime = maybe_prepare_torch_runtime(data_dir)
     detected_target = canonical_release_target_id(
         runtime_target_id_from_executable_name() or _fallback_runtime_target_id()
     )
+    _maybe_reexec_linux_cuda_launcher(data_dir, detected_target)
+    installed_torch_runtime = maybe_prepare_torch_runtime(data_dir)
+    _maybe_reexec_linux_cuda_launcher(data_dir, detected_target)
     torch_available = bool(
         installed_torch_runtime
         or _target_torch_package_is_available(data_dir, detected_target)

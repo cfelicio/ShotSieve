@@ -416,6 +416,50 @@ def test_runtime_pythonpath_updates_use_shared_composer(monkeypatch: pytest.Monk
     assert sys.path[0] == str(sidecar)
 
 
+def test_frozen_linux_cuda_launcher_reexecs_after_sidecar_is_ready(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    data_dir = tmp_path / "data"
+    site_packages = (data_dir / "runtime" / "site-packages" / "linux-nvidia-cuda").resolve()
+    site_packages.mkdir(parents=True)
+    monkeypatch.setattr(desktop_module.sys, "platform", "linux")
+    monkeypatch.setattr(desktop_module.sys, "frozen", True, raising=False)
+    executable = str(tmp_path / "ShotSieve-NVIDIA-CUDA")
+    monkeypatch.setattr(desktop_module.sys, "executable", executable)
+    monkeypatch.setattr(desktop_module.sys, "argv", ["launcher", "--check-runtime"])
+    monkeypatch.setenv(desktop_module.RUNTIME_REEXEC_TARGET_ENV, "")
+    monkeypatch.setattr(desktop_module, "torch_sidecar_is_valid", lambda *args, **kwargs: True)
+    monkeypatch.setattr(desktop_module, "path_has_torch", lambda path: path == site_packages)
+
+    prepend_calls: list[Path] = []
+    monkeypatch.setattr(desktop_module, "_prepend_runtime_pythonpath", prepend_calls.append)
+    exec_calls: list[tuple[str, list[str], dict[str, str]]] = []
+
+    def fake_exec(path: str, args: list[str], env: dict[str, str]) -> None:
+        exec_calls.append((path, args, env))
+
+    monkeypatch.setattr(desktop_module.os, "execve", fake_exec)
+
+    desktop_module._maybe_reexec_linux_cuda_launcher(data_dir, "linux-nvidia-cuda")
+
+    assert prepend_calls == [site_packages]
+    assert len(exec_calls) == 1
+    assert exec_calls[0][0] == executable
+    assert exec_calls[0][1] == [executable, "--check-runtime"]
+    assert exec_calls[0][2][desktop_module.RUNTIME_REEXEC_TARGET_ENV] == "linux-nvidia-cuda"
+
+
+def test_frozen_linux_cuda_launcher_does_not_reexec_twice(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    monkeypatch.setattr(desktop_module.sys, "platform", "linux")
+    monkeypatch.setattr(desktop_module.sys, "frozen", True, raising=False)
+    monkeypatch.setenv(desktop_module.RUNTIME_REEXEC_TARGET_ENV, "linux-nvidia-cuda")
+    monkeypatch.setattr(desktop_module.os, "execve", lambda *args: pytest.fail("must not re-exec twice"))
+
+    desktop_module._maybe_reexec_linux_cuda_launcher(tmp_path, "linux-nvidia-cuda")
+
+
 def test_runtime_bundle_has_usable_cuda_torch_false_when_import_fails(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(desktop_module.importlib.util, "find_spec", lambda name: object() if name == "torch" else None)
 

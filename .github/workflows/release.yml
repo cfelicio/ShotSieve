@@ -318,7 +318,11 @@ jobs:
           $runtimeExitCode = $LASTEXITCODE
           $runtimeOutput | ForEach-Object { Write-Host $_ }
           if ($runtimeExitCode -ne 0) {
-            throw "Frozen $expectedTargetId runtime installation or native import check failed"
+            $diagnostic = @($runtimeOutput | ForEach-Object { $_.ToString() }) -join "`n"
+            if (-not $diagnostic) {
+              $diagnostic = "The launcher emitted no stdout/stderr."
+            }
+            throw "Frozen $expectedTargetId runtime installation or native import check failed:`n$diagnostic"
           }
           $runtimeJson = $runtimeOutput |
             Where-Object { $_ -is [string] -and $_ -match '^\s*\{.*\}\s*$' } |
