@@ -39,6 +39,7 @@ from shotsieve.dependency_constraints import (
 from shotsieve.release_targets import canonical_release_target_id
 from shotsieve.runtime_support import (
     compose_runtime_dll_path,
+    compose_runtime_library_path,
     compose_pythonpath,
     confirm,
     is_interactive_console,
@@ -1473,6 +1474,12 @@ def _sidecar_environment(site_packages: Path) -> dict[str, str]:
     runtime_path = compose_runtime_dll_path(existing=existing_path, sidecar_path=site_packages)
     if runtime_path and runtime_path != (existing_path or ""):
         updates["PATH"] = runtime_path
+    existing_library_path = os.environ.get("LD_LIBRARY_PATH")
+    runtime_library_path = compose_runtime_library_path(
+        existing=existing_library_path, sidecar_path=site_packages,
+    )
+    if runtime_library_path and runtime_library_path != (existing_library_path or ""):
+        updates["LD_LIBRARY_PATH"] = runtime_library_path
     return updates
 
 

@@ -59,6 +59,28 @@ def test_runtime_sidecar_dll_paths_include_target_library_bin_and_torch_lib(
     assert parts[-2:] == ["existing-a", "existing-b"]
 
 
+def test_linux_runtime_sidecar_paths_include_cuda_vendor_libraries(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sidecar = tmp_path / "linux-nvidia-cuda"
+    torch_lib = sidecar / "torch" / "lib"
+    cuda_lib = sidecar / "nvidia" / "cublas" / "lib"
+    torch_lib.mkdir(parents=True)
+    cuda_lib.mkdir(parents=True)
+    monkeypatch.setattr(runtime_support.sys, "platform", "linux")
+
+    existing = os.pathsep.join(["existing-a", str(cuda_lib), "existing-b"])
+    composed = runtime_support.compose_runtime_library_path(
+        existing=existing, sidecar_path=sidecar,
+    )
+
+    parts = composed.split(os.pathsep)
+    assert parts[:3] == [str(sidecar.resolve()), str(torch_lib.resolve()), str(cuda_lib.resolve())]
+    assert parts.count(str(cuda_lib)) == 1
+    assert parts[-2:] == ["existing-a", "existing-b"]
+
+
 @pytest.mark.parametrize("supports_dll_directory", [False, True])
 def test_direct_sidecar_activation_updates_path_for_native_loadlibrary(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, supports_dll_directory: bool,
@@ -84,6 +106,24 @@ def test_direct_sidecar_activation_updates_path_for_native_loadlibrary(
     assert parts.count(str(native.resolve())) == 1
     assert parts[-1] == "original-search-path"
     assert calls.count(str(native.resolve())) == int(supports_dll_directory)
+
+
+def test_direct_linux_sidecar_activation_updates_ld_library_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sidecar = tmp_path / "linux-nvidia-cuda"
+    native = sidecar / "nvidia" / "cuda_runtime" / "lib"
+    native.mkdir(parents=True)
+    (sidecar / "torch" / "lib").mkdir(parents=True)
+    monkeypatch.setattr(runtime_support.sys, "platform", "linux")
+    monkeypatch.setenv("LD_LIBRARY_PATH", "original-search-path")
+
+    runtime_support.prepare_runtime_dll_search_path(sidecar)
+    runtime_support.prepare_runtime_dll_search_path(sidecar)
+
+    parts = os.environ["LD_LIBRARY_PATH"].split(os.pathsep)
+    assert parts.count(str(native.resolve())) == 1
+    assert parts[-1] == "original-search-path"
 
 
 def test_select_runtime_target_prefers_nvidia_cuda_on_windows_and_linux() -> None:

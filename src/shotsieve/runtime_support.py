@@ -73,9 +73,11 @@ def runtime_dll_directories(sidecar_path: Path) -> tuple[Path, ...]:
 
     Intel's XPU runtime wheels install their Windows DLLs below
     ``Library/bin`` in the target directory, while TheRock's multi-arch ROCm
-    wheels use ``_rocm_sdk_*/bin`` package directories. These are not
-    discovered by Torch's normal Windows bootstrap. Keep the search scoped to
-    known runtime directories rather than adding unrelated packages.
+    wheels use ``_rocm_sdk_*/bin`` package directories. CUDA wheels may put
+    their Linux shared libraries below ``nvidia/*/lib``. These are not
+    discovered by the frozen sidecar's normal process environment. Keep the
+    search scoped to known runtime directories rather than adding unrelated
+    packages.
     """
     root = Path(sidecar_path).resolve()
     candidates = (
@@ -89,6 +91,11 @@ def runtime_dll_directories(sidecar_path: Path) -> tuple[Path, ...]:
     # installed SDK packages. Register those specific package bin directories
     # before importing the matching PyTorch wheel.
     candidates += tuple(sorted(root.glob("_rocm_sdk_*/bin")))
+    # CUDA 13 wheels use both the per-library layout (for example,
+    # ``nvidia/cublas/lib``) and the consolidated ``nvidia/cu13/lib`` layout.
+    # The single-level glob covers both without exposing arbitrary package
+    # directories to the dynamic loader.
+    candidates += tuple(sorted(root.glob("nvidia/*/lib")))
 
     directories: list[Path] = []
     seen: set[str] = set()
@@ -108,7 +115,7 @@ def runtime_dll_directories(sidecar_path: Path) -> tuple[Path, ...]:
 
 
 def compose_runtime_dll_path(*, existing: str | None, sidecar_path: Path) -> str:
-    """Prepend sidecar native-library directories to a child-process PATH."""
+    """Prepend sidecar native-library directories to a Windows PATH."""
     if sys.platform != "win32":
         return existing or ""
 
@@ -127,8 +134,33 @@ def compose_runtime_dll_path(*, existing: str | None, sidecar_path: Path) -> str
     return os.pathsep.join(deduplicated)
 
 
+def compose_runtime_library_path(*, existing: str | None, sidecar_path: Path) -> str:
+    """Prepend sidecar shared-library directories to a Linux loader path."""
+    if sys.platform != "linux":
+        return existing or ""
+
+    paths = [str(path) for path in runtime_dll_directories(sidecar_path)]
+    if existing:
+        paths.extend(part for part in existing.split(os.pathsep) if part)
+
+    deduplicated: list[str] = []
+    seen: set[str] = set()
+    for item in paths:
+        if item in seen:
+            continue
+        seen.add(item)
+        deduplicated.append(item)
+    return os.pathsep.join(deduplicated)
+
+
 def prepare_runtime_dll_search_path(sidecar_path: Path) -> tuple[Path, ...]:
-    """Register sidecar DLL directories for the current Windows process."""
+    """Activate sidecar native-library directories for the current process."""
+    if sys.platform == "linux":
+        os.environ["LD_LIBRARY_PATH"] = compose_runtime_library_path(
+            existing=os.environ.get("LD_LIBRARY_PATH"), sidecar_path=sidecar_path,
+        )
+        return runtime_dll_directories(sidecar_path)
+
     if sys.platform != "win32":
         return ()
 
@@ -178,6 +210,7 @@ def source_checkout_root(module_file: str | Path, *, package_name: str) -> Path 
 __all__ = [
     "compose_runtime_dll_path",
     "compose_pythonpath",
+    "compose_runtime_library_path",
     "confirm",
     "is_interactive_console",
     "parse_env_bool",
