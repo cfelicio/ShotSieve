@@ -97,6 +97,7 @@ _OPENAI_CLIP_SOURCE_SHA256 = "cd40bf2f205c096c49524fcbff484339f793b52afd6e7ffad8
 _OPENAI_CLIP_SOURCE_ROOT = "openai-clip-1.0.1"
 _OPENAI_CLIP_DIST_INFO = "openai_clip-1.0.1.dist-info"
 
+
 @dataclass(frozen=True, slots=True)
 class TorchInstallPlan:
     """The complete source contract for one target's torch sidecar."""
@@ -1005,9 +1006,58 @@ _LEARNED_IQA_TOP_LEVEL_ALIASES = {
     "huggingface-hub": ("huggingface_hub",),
 }
 
+# Metadata installed with the accelerator runtime must survive learned-IQA
+# repair unchanged.  Besides being runtime state, recent Torch XPU/ROCm wheels
+# contain extremely deep third-party license trees under their .dist-info
+# directories.  Copying those trees to another sibling directory can exceed
+# Windows' legacy MAX_PATH even when the installed runtime itself is usable.
+_PRESERVED_RUNTIME_METADATA_DISTRIBUTIONS = frozenset(
+    {
+        "torch",
+        "torchvision",
+        "torchaudio",
+        "functorch",
+        "triton",
+        "rocm",
+        "mkl",
+        "tcmlib",
+        "umf",
+    }
+)
+_PRESERVED_RUNTIME_METADATA_PREFIXES = (
+    "_rocm_sdk_",
+    "nvidia_",
+    "intel_",
+    "oneapi_",
+    "onemkl_",
+    "oneccl_",
+    "dpcpp_",
+)
+
 
 def _normalized_distribution_name(value: str) -> str:
     return re.sub(r"[-_.]+", "_", value).casefold()
+
+
+def _sidecar_metadata_distribution_name(entry_name: str) -> str | None:
+    normalized_name = entry_name.casefold()
+    for suffix in (".dist-info", ".egg-info"):
+        if not normalized_name.endswith(suffix):
+            continue
+        stem = normalized_name[: -len(suffix)]
+        if "-" not in stem:
+            return None
+        return _normalized_distribution_name(stem.rsplit("-", 1)[0])
+    return None
+
+
+def _is_preserved_runtime_metadata_entry(name: str) -> bool:
+    distribution_name = _sidecar_metadata_distribution_name(name)
+    if distribution_name is None:
+        return False
+    if distribution_name in _PRESERVED_RUNTIME_METADATA_DISTRIBUTIONS:
+        return True
+    return distribution_name.startswith(_PRESERVED_RUNTIME_METADATA_PREFIXES)
 
 
 def _sidecar_distribution_name(metadata_dir: Path) -> str | None:
@@ -1102,10 +1152,16 @@ def _purge_sidecar_distribution(site_packages: Path, requirement: str) -> None:
 
 
 def _prepare_learned_iqa_staging(*, source_dir: Path, staging_dir: Path, runtime: str) -> None:
-    """Copy the Torch base and remove learned packages before reinstalling."""
+    """Copy the reusable sidecar base and remove learned packages before reinstalling."""
     if source_dir.exists():
         for source_path in source_dir.iterdir():
             if _is_python_bytecode_artifact(source_path.name):
+                continue
+            # Runtime metadata stays in the live sidecar and is not needed by
+            # the learned-IQA pip repair.  Skipping it also avoids traversing
+            # the very deep Torch license trees shipped by current XPU/ROCm
+            # wheels on Windows.
+            if _is_preserved_runtime_metadata_entry(source_path.name):
                 continue
             destination_path = staging_dir / source_path.name
             if source_path.is_dir() and not source_path.is_symlink():
@@ -1149,7 +1205,11 @@ _PRESERVED_RUNTIME_SIDECAR_ENTRIES = frozenset(
 
 def _is_preserved_runtime_sidecar_entry(name: str) -> bool:
     normalized_name = name.casefold()
-    return normalized_name.startswith("_rocm_sdk_") or name in _PRESERVED_RUNTIME_SIDECAR_ENTRIES
+    return bool(
+        normalized_name.startswith("_rocm_sdk_")
+        or name in _PRESERVED_RUNTIME_SIDECAR_ENTRIES
+        or _is_preserved_runtime_metadata_entry(name)
+    )
 
 
 def _copy_learned_sidecar_entries(source_dir: Path, destination_dir: Path) -> None:
