@@ -35,6 +35,12 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- Preserved accelerator runtime package metadata during learned-IQA repairs
+  without copying deeply nested Torch license trees, avoiding Windows path
+  failures while retaining the installed runtime's metadata and licenses.
+- Added the split ROCm library directories to Linux sidecar loader paths and
+  restarted frozen ROCm launchers once after activation so the native loader
+  can resolve transitive libraries such as `libroctracer64.so`.
 - Added a scoped MIOpen bypass for TOPIQ/CLIPIQA BatchNorm on Windows ROCm
   to avoid HIPRTC missing-header compilation failures while retaining
   accelerated convolutions. Included CLIPIQA's unregistered CLIP backbone and
