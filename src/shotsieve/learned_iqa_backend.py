@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-from contextlib import AbstractContextManager, ExitStack, contextmanager, redirect_stderr, redirect_stdout
+from contextlib import AbstractContextManager, ExitStack, contextmanager, nullcontext, redirect_stderr, redirect_stdout
 from dataclasses import dataclass
+from functools import wraps
 import gc
 import io
 import logging
@@ -23,7 +24,7 @@ from .learned_iqa_catalog import (
     is_supported_model_name,
     validate_model_name,
 )
-from .learned_iqa_runtime import LearnedRuntimeUnavailableError
+from .learned_iqa_runtime import LearnedRuntimeUnavailableError, current_system_name
 from .image_conversion import DEFAULT_MAX_DECODE_PIXELS
 
 
@@ -84,6 +85,9 @@ class _GcModuleLike(Protocol):
 
 
 _stdio_capture_lock = threading.Lock()
+# cuDNN's enabled flag also controls MIOpen and is process-wide. Serialize
+# Windows ROCm forwards so another model cannot observe a BatchNorm toggle.
+_windows_rocm_inference_lock = threading.RLock()
 
 
 def _validate_product_model(model_name: str, *, normalize_model_name_fn) -> str:
@@ -123,6 +127,53 @@ def _exception_chain_text(exc: BaseException) -> str:
             parts.append(text)
         current = current.__cause__ or current.__context__
     return " | caused by ".join(parts)
+
+
+def _is_fatal_accelerator_error(exc: BaseException, *, runtime: str | None) -> bool:
+    """Recognize device/runtime failures that smaller image batches cannot fix.
+
+    Keep OOM, unsupported model operators, and generic failures recoverable.
+    Backend-specific error codes avoid treating image errors as device failures.
+    """
+    if runtime not in {"xpu", "cuda", "rocm"}:
+        return False
+    text = _exception_chain_text(exc).casefold()
+    if runtime == "rocm" and (
+        "hiprtc_error_compilation" in text
+        or ("miopen" in text and any(message in text for message in (
+            "code object build failed", "failed to build code object",
+            "hiprtc compilation failed", "hiprtc compile failed",
+            "miopen compilation failed", "miopen compilation failure",
+        )))
+        or ("miopenstatusunknownerror" in text and any(message in text for message in (
+            "compilation failed", "caused by miopen compilation",
+        )))
+    ):
+        return True
+    if runtime == "xpu":
+        return any(code in text for code in (
+            "ur_result_error_device_lost", "ze_result_error_device_lost",
+            "ur_result_error_uninitialized", "ze_result_error_uninitialized",
+        )) or (
+            "level_zero backend failed with error" in text
+            and ("ur_result_error_unknown" in text or "2147483646" in text)
+        )
+    return any(message in text for message in (
+        "device-side assert triggered",
+        "no kernel image is available for execution on the device",
+        "cuda driver is shutting down",
+        "hiperrornobinaryforgpu",
+    ))
+
+
+def _raise_if_fatal_accelerator_error(exc: BaseException, *, runtime: str | None) -> None:
+    if _is_fatal_accelerator_error(exc, runtime=runtime):
+        if isinstance(exc, LearnedBackendUnavailableError):
+            raise exc
+        raise LearnedBackendUnavailableError(
+            f"Fatal {runtime} accelerator failure during learned-IQA scoring: {_exception_chain_text(exc)}. "
+            "Choose CPU or repair and validate the accelerator runtime before retrying."
+        ) from exc
 
 
 def create_metric_safely(pyiqa_module, model_name: str, *, device, configure_runtime_noise_controls_fn, install_runtime_warning_filters_fn):
@@ -237,6 +288,44 @@ def _restore_cudnn_benchmark(backend) -> None:
     delattr(backend, "_previous_cudnn_benchmark")
 
 
+def _native_batchnorm_forward(forward, *, cudnn_backend):
+    @wraps(forward)
+    def wrapped(*args, **kwargs):
+        with _windows_rocm_inference_lock:
+            previous_enabled = cudnn_backend.enabled
+            try:
+                cudnn_backend.enabled = False
+                return forward(*args, **kwargs)
+            finally:
+                cudnn_backend.enabled = previous_enabled
+
+    return wrapped
+
+
+def _configure_windows_rocm_batchnorm(metric, *, torch_module, model_name: str, runtime: str) -> None:
+    """Avoid Windows MIOpen's HIPRTC header failure only during BatchNorm.
+
+    Keep the original forward (including subclass behavior) and restore dispatch
+    before the next convolution. Passing False to torch.batch_norm alone is not
+    sufficient: PyTorch's native selector reads the global cuDNN enabled flag.
+    """
+    if runtime != "rocm" or current_system_name() != "Windows" or model_name not in {"topiq_nr", "clipiqa"}:
+        return
+
+    roots = [metric]
+    if model_name == "clipiqa":
+        # PyIQA 0.1.16 stores CLIP in a plain list to exclude its weights from
+        # state_dict. Its RN50 BatchNorm is invisible to metric.modules().
+        roots.extend(metric.net.clip_model)
+    batchnorm_types = (torch_module.nn.BatchNorm1d, torch_module.nn.BatchNorm2d, torch_module.nn.BatchNorm3d)
+    seen: set[int] = set()
+    for root in roots:
+        for module in root.modules():
+            if isinstance(module, batchnorm_types) and id(module) not in seen:
+                seen.add(id(module))
+                module.forward = _native_batchnorm_forward(module.forward, cudnn_backend=torch_module.backends.cudnn)
+
+
 def initialize_backend(backend, model_name: str, *, device: str | None = None, import_pyiqa_runtime_fn, normalize_model_name_fn, preferred_model_names_fn, resolve_device_fn, create_metric_safely_fn, default_input_sizes=None, default_input_size: int = DEFAULT_INPUT_SIZE) -> None:
     input_sizes = default_input_sizes or DEFAULT_INPUT_SIZES
     canonical_model_name = _validate_product_model(model_name, normalize_model_name_fn=normalize_model_name_fn)
@@ -290,6 +379,9 @@ def initialize_backend(backend, model_name: str, *, device: str | None = None, i
 
     try:
         backend.metric = create_metric_safely_fn(pyiqa, canonical_model_name, device=resolved_device.metric_device)
+        _configure_windows_rocm_batchnorm(
+            backend.metric, torch_module=torch, model_name=canonical_model_name, runtime=resolved_device.runtime,
+        )
     except Exception as exc:
         _restore_cudnn_benchmark(backend)
         raise LearnedBackendUnavailableError(
@@ -388,6 +480,7 @@ def score_paths(backend, image_paths: Sequence[Path], *, batch_size: int = DEFAU
 
                 results.extend(backend._score_tensor_batch(batch_tensor))
             except Exception as exc:
+                _raise_if_fatal_accelerator_error(exc, runtime=runtime)
                 log_module.warning("Batch scoring failed, falling back to individual scoring: %s", exc)
                 prefetch_futures = None
                 for single_path in batch_paths:
@@ -395,6 +488,7 @@ def score_paths(backend, image_paths: Sequence[Path], *, batch_size: int = DEFAU
                         single_tensor = load_batch([single_path])
                         results.extend(backend._score_tensor_batch(single_tensor))
                     except Exception as inner_exc:
+                        _raise_if_fatal_accelerator_error(inner_exc, runtime=runtime)
                         log_module.error("Failed to score image %s: %s", single_path, inner_exc)
                         results.append(
                             result_cls(
@@ -409,10 +503,12 @@ def score_paths(backend, image_paths: Sequence[Path], *, batch_size: int = DEFAU
 
 
 def _score_metric_output(backend, batch_tensor):
-    try:
-        return backend.metric(batch_tensor, return_mos=True, return_dist=True)
-    except TypeError:
-        return backend.metric(batch_tensor)
+    lock = _windows_rocm_inference_lock if getattr(backend, "runtime", None) == "rocm" and current_system_name() == "Windows" else nullcontext()
+    with lock:
+        try:
+            return backend.metric(batch_tensor, return_mos=True, return_dist=True)
+        except TypeError:
+            return backend.metric(batch_tensor)
 
 
 @contextmanager
@@ -437,6 +533,7 @@ def _tensor_autocast_context(backend):
     try:
         autocast_context = cast(AbstractContextManager[object], autocast(runtime, dtype=dtype))
     except Exception as exc:
+        _raise_if_fatal_accelerator_error(exc, runtime=runtime)
         log.warning(
             "Failed to enable %s autocast for learned-IQA model %s: %s; retrying without autocast",
             runtime,
@@ -450,6 +547,7 @@ def _tensor_autocast_context(backend):
         try:
             stack.enter_context(autocast_context)
         except Exception as exc:
+            _raise_if_fatal_accelerator_error(exc, runtime=runtime)
             log.warning(
                 "Failed to enter %s autocast for learned-IQA model %s: %s; retrying without autocast",
                 runtime,
@@ -487,6 +585,7 @@ def score_tensor_batch(backend, batch_tensor, *, flatten_tensor_fn, confidence_v
             try:
                 output = _score_metric_output(backend, batch_tensor)
             except Exception as exc:
+                _raise_if_fatal_accelerator_error(exc, runtime=getattr(backend, "runtime", None))
                 if not autocast_enabled:
                     raise
                 log.warning(

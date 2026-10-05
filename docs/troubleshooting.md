@@ -38,6 +38,40 @@ logs. Sidecar installation and model-weight preparation are separate steps.
 Catalog and Review remain usable when optional AI installation is declined,
 offline, or unsuccessful.
 
+## Runtime installation reports a deeply nested or unwritable folder
+
+ShotSieve checks the final runtime destination before installing or repairing
+Torch and learned-IQA dependencies. The check reserves space for deep native
+header/library paths and probes the destination filesystem before downloading
+packages.
+
+If the path is too deeply nested, move the entire portable ShotSieve folder to
+a shorter location, such as `C:\ShotSieve`, and launch it again. If the check
+reports a permission or filesystem error, confirm that the runtime folder is
+writable and has free space before retrying. A rejected preflight does not
+install runtime files or replace the existing sidecar.
+
+## The accelerator is visible but scoring fails
+
+Device visibility alone does not establish compatibility. Intel XPU selection
+requires an Alchemist-or-newer architecture reported by PyTorch; missing or
+unknown metadata is also rejected. Auto warns and falls back to CPU, while an
+explicit XPU request reports a controlled error. ROCm rejects a concrete GPU
+architecture that is absent from the installed Torch wheel. See the
+[Intel XPU guide](intel-xpu.md) and [AMD ROCm guide](amd-rocm.md) for validation.
+
+Windows ROCm MIOpen can fail to compile BatchNorm with
+`HIPRTC_ERROR_COMPILATION` and a missing `type_traits` header. ShotSieve applies
+a BatchNorm-only workaround to TOPIQ and CLIPIQA, leaving MIOpen convolutions
+enabled; no Visual Studio Build Tools or external compiler installation is
+required. See the [workaround details and validation limits](amd-rocm.md#windows-miopen-batchnorm-workaround).
+
+Clear runtime-wide compiler or fatal device failures abort scoring rather than
+retrying every image. Choose CPU or repair and validate the accelerator runtime
+before retrying. Ordinary batch failures, out-of-memory errors, and a generic
+`miopenStatusUnknownError` still receive individual-image retries; that generic
+status alone does not prove a compiler failure.
+
 ## Downloads fail or offline mode reports a missing asset
 
 Check the effective cache roots and permissions. `--model-cache-dir` provides

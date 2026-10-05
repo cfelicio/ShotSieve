@@ -69,6 +69,13 @@ class LearnedRuntimeUnavailableError(RuntimeError):
 _cached_hw_capabilities: dict[str, object] | None = None
 _hw_capabilities_lock = threading.Lock()
 
+# SYCL's Intel GPU architecture enum, also used by PyTorch's XPU support
+# warning in c10/xpu/XPUFunctions.cpp. Values are exposed as integers by Torch.
+# https://github.com/intel/llvm/blob/sycl/sycl/include/sycl/ext/oneapi/experimental/device_architecture.def
+_XPU_MIN_SUPPORTED_ARCHITECTURE = 0x000000030DC00800  # intel_gpu_acm_g10 (Alchemist)
+_XPU_UNSUPPORTED_WARNING_PATTERN = r".*is not officially supported by PyTorch XPU.*"
+log = logging.getLogger(__name__)
+
 
 def _coerce_vram_mb(value: object) -> int | None:
     if isinstance(value, bool):
@@ -208,9 +215,21 @@ def cuda_runtime_status(torch_module, *, allow_hip: bool = False) -> tuple[bool,
         if getattr(version, "hip", None):
             if not allow_hip:
                 return False, "the installed Torch runtime is a HIP/ROCm build, not an NVIDIA CUDA build"
-            # HIP reuses torch.cuda, but reports AMD gfx architectures, not
-            # NVIDIA SMs. Visibility is the ROCm availability check here;
-            # actual kernel/model support still requires a hardware smoke test.
+            # HIP reports compiled gfx targets and gcnArchName. Only compare
+            # concrete architectures; generic targets have broader compatibility
+            # rules, so their presence still requires a hardware smoke test.
+            get_arch_list = getattr(cuda, "get_arch_list", None)
+            get_properties = getattr(cuda, "get_device_properties", None)
+            if callable(get_arch_list) and callable(get_properties):
+                arches = {str(arch).split(":", 1)[0].casefold() for arch in (get_arch_list() or ())}
+                properties = get_properties()
+                device_arch = str(getattr(properties, "gcnArchName", "")).split(":", 1)[0].casefold()
+                if arches and all(re.fullmatch(r"gfx[0-9a-f]+", arch) for arch in arches):
+                    if re.fullmatch(r"gfx[0-9a-f]+", device_arch) and device_arch not in arches:
+                        return False, (
+                            f"{getattr(properties, 'name', 'The detected AMD GPU')} ({device_arch}) is not supported "
+                            "by the installed Torch ROCm wheel; it has no kernels for this GPU"
+                        )
             return True, None
 
         get_arch_list = getattr(cuda, "get_arch_list", None)
@@ -257,12 +276,44 @@ def has_rocm(torch_module) -> bool:
         return False
 
 
-def has_xpu(torch_module) -> bool:
+def xpu_runtime_status(torch_module) -> tuple[bool, str | None]:
+    """Check the current XPU device against PyTorch's Alchemist support boundary.
+
+    Availability only establishes device visibility. Architecture, unlike GPU
+    names or matrix-instruction support, also covers supported integrated GPUs.
+    XPU's compiled AOT list is insufficient: other targets can use JIT kernels.
+    """
     try:
         xpu = getattr(torch_module, "xpu", None)
-        return bool(xpu and xpu.is_available())
-    except Exception:
-        return False
+        # Torch warns while enumerating unsupported devices. Resolution below
+        # supplies one actionable warning for Auto; diagnostics stay quiet.
+        with warnings.catch_warnings():
+            warnings.filterwarnings("ignore", message=_XPU_UNSUPPORTED_WARNING_PATTERN)
+            if xpu is None or not bool(xpu.is_available()):
+                return False, XPU_UNAVAILABLE_MESSAGE
+            get_properties = getattr(xpu, "get_device_properties", None)
+            if not callable(get_properties):
+                return False, "XPU device compatibility cannot be verified: Torch does not expose device architecture"
+            properties = get_properties()
+            architecture = getattr(properties, "architecture", None)
+            device_name = str(getattr(properties, "name", "The detected XPU GPU"))
+            # The high bits identify Intel GPUs in SYCL's enum. Reject unknown
+            # architectures rather than interpreting an unknown sentinel as newer.
+            if isinstance(architecture, bool) or not isinstance(architecture, int) or architecture <= 0 or architecture >> 56 != 0:
+                return False, f"{device_name}: XPU device compatibility cannot be verified because Torch reports an unknown architecture"
+            if architecture < _XPU_MIN_SUPPORTED_ARCHITECTURE:
+                return False, (
+                    f"{device_name} was detected, but it is not supported by the installed PyTorch XPU runtime"
+                )
+    except Exception as exc:
+        return False, f"XPU device compatibility probe failed: {_sanitize_runtime_cause(exc)}"
+
+    return True, None
+
+
+def has_xpu(torch_module) -> bool:
+    usable, _ = xpu_runtime_status(torch_module)
+    return usable
 
 
 def has_mps(torch_module) -> bool:
@@ -285,6 +336,7 @@ def resolve_device(device: str | None, *, torch_module, import_module=importlib.
     system = current_system_name(system_name)
     requested = normalize_device_target(device, system_name=system)
     failures: list[str] = []
+    xpu_fallback_reason: str | None = None
     if requested == "amd" and system == "Windows":
         failures.append("AMD GPU acceleration is supported only for explicitly listed Windows ROCm combinations; using CPU until that source track is validated.")
 
@@ -300,7 +352,11 @@ def resolve_device(device: str | None, *, torch_module, import_module=importlib.
                 except Exception as exc:
                     failures.append(f"ROCm device initialization failed: {_sanitize_runtime_cause(exc)}")
             else:
-                failures.append(ROCM_UNAVAILABLE_MESSAGE)
+                if getattr(getattr(torch_module, "version", None), "hip", None):
+                    _, reason = cuda_runtime_status(torch_module, allow_hip=True)
+                    failures.append(reason or ROCM_UNAVAILABLE_MESSAGE)
+                else:
+                    failures.append(ROCM_UNAVAILABLE_MESSAGE)
             continue
 
         if runtime == "cuda":
@@ -319,14 +375,17 @@ def resolve_device(device: str | None, *, torch_module, import_module=importlib.
             continue
 
         if runtime == "xpu":
-            if has_xpu(torch_module):
+            usable, reason = xpu_runtime_status(torch_module)
+            if usable:
                 try:
                     device_object = torch_module.device("xpu")
                     return ResolvedDevice(requested=requested, runtime="xpu", metric_device=device_object, tensor_device=device_object, display_device="xpu")
                 except Exception as exc:
                     failures.append(f"XPU device initialization failed: {_sanitize_runtime_cause(exc)}")
             else:
-                failures.append(XPU_UNAVAILABLE_MESSAGE)
+                failures.append(reason or XPU_UNAVAILABLE_MESSAGE)
+                if reason != XPU_UNAVAILABLE_MESSAGE:
+                    xpu_fallback_reason = reason
             continue
 
         if runtime == "mps":
@@ -342,6 +401,8 @@ def resolve_device(device: str | None, *, torch_module, import_module=importlib.
 
         if runtime == "cpu":
             device_object = torch_module.device("cpu")
+            if requested == "auto" and xpu_fallback_reason:
+                log.warning("%s. Falling back to CPU.", xpu_fallback_reason)
             return ResolvedDevice(
                 requested=requested,
                 runtime="cpu",
@@ -874,6 +935,7 @@ __all__ = [
     "has_mps",
     "has_rocm",
     "has_xpu",
+    "xpu_runtime_status",
     "import_pyiqa_runtime",
     "install_runtime_warning_filters",
     "invalidate_hw_cache",

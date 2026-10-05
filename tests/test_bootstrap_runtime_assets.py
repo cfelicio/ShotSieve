@@ -20,6 +20,13 @@ from shotsieve import bootstrap_assets as bootstrap_module
 from shotsieve import bootstrap_sidecar as sidecar_module
 
 
+@pytest.fixture(autouse=True)
+def _allow_runtime_path_for_installer_unit_tests(monkeypatch: pytest.MonkeyPatch) -> None:
+    # These tests isolate pip/staging behavior in pytest's long temporary paths.
+    # Real preflight and installer rejection are covered in test_runtime_path_preflight.
+    monkeypatch.setattr(sidecar_module, "runtime_path_preflight", lambda *args, **kwargs: True)
+
+
 def _new_module(name: str) -> Any:
     return types.ModuleType(name)
 

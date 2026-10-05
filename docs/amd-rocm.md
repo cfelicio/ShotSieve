@@ -72,3 +72,38 @@ The preview build checks dependency resolution and bundles on hosted runners.
 It cannot verify a physical AMD GPU, driver, or model inference path; keep
 hardware claims within the current AMD matrix and record native test evidence
 for the exact system.
+
+## Windows MIOpen BatchNorm workaround
+
+Some Windows ROCm runtimes fail while MIOpen JIT-compiles BatchNorm, reporting
+`MIOpenBatchNormFwdInferSpatial.cpp`, `HIPRTC_ERROR_COMPILATION`, and a missing
+`type_traits` header. This is a runtime compiler failure, not a bad photo.
+
+For Windows ROCm only, ShotSieve wraps TOPIQ and CLIPIQA's BatchNorm forwards
+with `torch.backends.cudnn.enabled = False` and restores the previous value
+in `finally`. PyTorch uses this flag for
+[MIOpen BatchNorm dispatch](https://github.com/pytorch/pytorch/blob/main/aten/src/ATen/native/Normalization.cpp);
+disabling it selects native HIP BatchNorm. The original forward, parameters,
+running statistics, and subclass behavior are preserved. CLIPIQA's
+[unregistered CLIP backbone](https://github.com/chaofengc/IQA-PyTorch/blob/v0.1.16/pyiqa/archs/clipiqa_arch.py)
+is included in the wrapper traversal.
+
+MIOpen remains enabled for convolutions. ROCm acceleration remains active and
+no Visual Studio Build Tools, SDK, or external compiler installation is
+required by this workaround. Native BatchNorm can have different throughput;
+the impact depends on the GPU and model and has not been benchmarked. Because
+the dispatch flag is process-wide, Windows ROCm model forwards share a lock
+to keep concurrent scoring from observing the temporary change. Q-ReAlign
+receives no BatchNorm wrapper. BatchNorm dispatch on other runtimes and Linux
+ROCm is unchanged.
+
+Unmistakable HIPRTC compilation errors and MIOpen code-object compilation
+failures abort the scoring operation immediately, including when first
+encountered during an individual-image fallback. Generic
+`miopenStatusUnknownError`, out-of-memory, and image-specific errors retain
+the existing individual retry behavior.
+
+Mocked regression tests verify dispatch scoping and retries without an AMD
+GPU. Full TOPIQ/CLIPIQA inference with disabled MIOpen must still be qualified
+on a reproducing Windows ROCm machine using the model smoke commands above;
+source inspection and mocked tests do not establish hardware success.

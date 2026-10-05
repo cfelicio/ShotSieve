@@ -15,16 +15,19 @@ def _torch_runtime(name: str, *, available: bool = True) -> ModuleType:
     torch.__spec__ = ModuleSpec("torch", loader=None)
     torch.device = str
     torch.version = SimpleNamespace(hip="10.0.0" if name == "rocm" else None)
-    properties = SimpleNamespace(total_memory=8192 * 1024 * 1024)
+    properties = SimpleNamespace(
+        total_memory=8192 * 1024 * 1024,
+        architecture=0x000000030DC00800,
+    )
     torch.cuda = SimpleNamespace(
         is_available=lambda: available and name in {"cuda", "rocm"},
         get_arch_list=lambda: ["gfx1100", "gfx1151"] if name == "rocm" else ["sm_120"],
         get_device_capability=lambda: (11, 0) if name == "rocm" else (12, 0),
-        get_device_properties=lambda _index: properties,
+        get_device_properties=lambda _index=None: properties,
     )
     torch.xpu = SimpleNamespace(
         is_available=lambda: available and name == "xpu",
-        get_device_properties=lambda _index: properties,
+        get_device_properties=lambda _index=None: properties,
     )
     torch.backends = SimpleNamespace(
         mps=SimpleNamespace(is_available=lambda: available and name == "mps"),

@@ -550,6 +550,10 @@ def test_current_learned_models_and_runtime_resolution() -> None:
             def is_available() -> bool:
                 return True
 
+            @staticmethod
+            def get_device_properties():
+                return types.SimpleNamespace(architecture=0x000000030DC00800)
+
     class MpsTorch:
         @staticmethod
         def device(name: str) -> str:

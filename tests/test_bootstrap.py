@@ -481,7 +481,7 @@ def test_maybe_prepare_torch_runtime_auto_installs_when_enabled(
 
     calls: list[tuple[str, Path]] = []
 
-    def fake_install_torch_sidecar(*, runtime: str, site_packages: Path) -> bool:
+    def fake_install_torch_sidecar(*, runtime: str, site_packages: Path, output_func=print) -> bool:
         calls.append((runtime, site_packages))
         (site_packages / "torch").mkdir(parents=True)
         (site_packages / "torch" / "__init__.py").write_text("", encoding="utf-8")

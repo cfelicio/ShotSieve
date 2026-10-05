@@ -62,6 +62,13 @@ SIDECAR_INSTALL_COMMAND = "--_shotsieve-install-sidecar"
 DISTUTILS_REPLACEMENT_WARNING_PATTERN = r"Setuptools is replacing distutils\..*"
 PIP_UNEXPECTED_IMPORT_WARNING_PATTERN = r"DEPRECATION: Unexpected import of '.*' after pip install started\..*"
 
+# Budget for nested native SDK/header trees and long library basenames (148
+# characters), plus 32 characters of margin. Include separators in the reserve.
+# Do not rely on Python's long-path support: dependency tools may still use
+# legacy Win32 APIs with MAX_PATH=260, including the terminating NUL.
+RUNTIME_PATH_RESERVE = 180
+WINDOWS_RUNTIME_PATH_LIMIT = 259
+
 # The learned-IQA packages are installed after the Torch sidecar and some of
 # them declare Torch as a dependency.  They therefore use --no-deps below so
 # pip cannot replace an already-loaded Torch DLL on Windows.  The initial
@@ -151,7 +158,7 @@ def _install_openai_clip_source(site_packages: Path) -> None:
     """Install the pinned pure-Python openai-clip source package in place."""
     request = urllib.request.Request(
         _OPENAI_CLIP_SOURCE_URL,
-        headers={"User-Agent": "ShotSieve-runtime/0.5.0"},
+        headers={"User-Agent": "ShotSieve-runtime/0.5.1"},
     )
     with urllib.request.urlopen(request, timeout=120) as response:
         archive_bytes = response.read()
@@ -239,6 +246,97 @@ def _suppress_embedded_pip_warnings():
 
 def sidecar_site_packages_dir(runtime_root: Path, target_id: str) -> Path:
     return runtime_root / DEFAULT_TORCH_SITE_PACKAGES_DIRNAME / target_id
+
+
+def runtime_path_preflight(site_packages: Path, *, output_func=print) -> bool:
+    """Check the final portable destination before any download or repair.
+
+    Probe the same filesystem with a generic nested path, even when Windows
+    has enough legacy path headroom. POSIX uses only the filesystem probe.
+    Remove the probe and any empty destination parents created by this check.
+    """
+    site_packages = Path(site_packages)
+    windows = sys.platform == "win32"
+    headroom: int | None = None
+
+    def report_unsafe() -> None:
+        detail = (
+            f"\nPath headroom: {max(0, headroom)} characters available; "
+            f"{RUNTIME_PATH_RESERVE} required.\n"
+            if headroom is not None else "\n"
+        )
+        example = "C:\\ShotSieve" if windows else "~/ShotSieve"
+        output_func(
+            "ShotSieve is located too deeply in the filesystem for its runtime "
+            "dependencies to install safely.\n\n"
+            f"Current runtime location:\n{site_packages}\n"
+            f"{detail}\nMove the entire ShotSieve folder to a shorter location, "
+            f"for example:\n\n{example}\n\n"
+            "Then start ShotSieve again.\n\nNo runtime files were installed."
+        )
+
+    created_parents: list[Path] = []
+    probe_dir: Path | None = None
+    try:
+        site_packages = site_packages.resolve()
+        if windows:
+            path_text = str(site_packages)
+            # Extended prefixes must not bypass the legacy budget.
+            if path_text.startswith("\\\\?\\"):
+                path_text = path_text[4:]
+                if path_text.startswith("UNC\\"):
+                    path_text = "\\\\" + path_text[4:]
+            path_length = len(path_text.encode("utf-16-le")) // 2
+            headroom = WINDOWS_RUNTIME_PATH_LIMIT - path_length
+            if headroom < RUNTIME_PATH_RESERVE:
+                report_unsafe()
+                return False
+        try:
+            missing: list[Path] = []
+            parent = site_packages
+            while not parent.exists():
+                missing.append(parent)
+                parent = parent.parent
+            for parent in reversed(missing):
+                try:
+                    parent.mkdir()
+                except FileExistsError:
+                    continue
+                created_parents.append(parent)
+            # A concurrent repair must not rename the live sidecar while the
+            # probe is being created or removed.
+            with _sidecar_install_lock(site_packages):
+                try:
+                    probe_dir = _create_sidecar_staging_dir(site_packages)
+                    # 1+8+1+36+1+36+1+96 = 180 below the destination.
+                    probe_file = probe_dir / ("d" * 36) / ("d" * 36) / ("f" * 92 + ".tmp")
+                    probe_file.parent.mkdir(parents=True)
+                    probe_file.write_bytes(b"ShotSieve runtime path probe\n")
+                finally:
+                    if probe_dir is not None:
+                        shutil.rmtree(probe_dir)
+        finally:
+            for parent in reversed(created_parents):
+                try:
+                    parent.rmdir()
+                except OSError as exc:
+                    # Another launch may have started using these parents.
+                    if exc.errno not in {errno.ENOTEMPTY, errno.EEXIST, errno.ENOENT}:
+                        raise
+    except TimeoutError as exc:
+        output_func(f"Runtime installation is already in progress: {exc}")
+        return False
+    except OSError as exc:
+        if exc.errno == errno.ENAMETOOLONG or getattr(exc, "winerror", None) == 206:
+            report_unsafe()
+        else:
+            output_func(
+                f"ShotSieve could not verify the runtime location:\n{site_packages}\n\n"
+                f"{exc}\n\nCheck that this folder is writable and try again.\n"
+                "No runtime files were installed."
+            )
+        return False
+    return True
 
 
 def _rocm_selector_wheel_candidates(site_packages: Path) -> tuple[Path, ...]:
@@ -753,6 +851,8 @@ def _install_torch_sidecar_with_embedded_pip(
     force_reinstall: bool = False,
     output_func=print,
 ) -> bool | None:
+    if not runtime_path_preflight(site_packages, output_func=output_func):
+        return False
     suppress_pip = _suppress_embedded_pip_warnings
     with suppress_pip():
         p_distlib = _patch_distlib_finder_for_frozen
@@ -969,6 +1069,8 @@ def install_torch_sidecar(
     output_func=print,
     force_reinstall: bool = False,
 ) -> bool:
+    if not runtime_path_preflight(site_packages, output_func=output_func):
+        return False
     return _run_sidecar_install_subprocess(
         operation="torch",
         runtime=runtime,
@@ -1231,6 +1333,8 @@ def _install_learned_iqa_sidecar_with_embedded_pip(
     force_reinstall: bool = False,
     output_func=print,
 ) -> bool | None:
+    if not runtime_path_preflight(site_packages, output_func=output_func):
+        return False
     suppress_pip = _suppress_embedded_pip_warnings
     with suppress_pip():
         p_distlib = _patch_distlib_finder_for_frozen
@@ -1382,6 +1486,8 @@ def install_learned_iqa_sidecar(
     force_reinstall: bool = False,
 ) -> bool:
     site_packages = Path(site_packages)
+    if not runtime_path_preflight(site_packages, output_func=output_func):
+        return False
     site_packages.parent.mkdir(parents=True, exist_ok=True)
     embedded_install_result: bool | None = False
     staging_dir = _create_sidecar_staging_dir(site_packages.parent)
@@ -1458,7 +1564,9 @@ def maybe_prepare_torch_runtime(
         return {}
 
     output_func("Installing PyTorch runtime dependencies. This may take a few minutes...")
-    installed = install_torch_sidecar(runtime=asset.runtime, site_packages=site_packages)
+    installed = install_torch_sidecar(
+        runtime=asset.runtime, site_packages=site_packages, output_func=output_func,
+    )
     if not installed:
         return {}
 

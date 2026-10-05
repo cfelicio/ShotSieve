@@ -2,7 +2,7 @@
 
 All notable changes to this project will be documented in this file.
 
-## [0.5.0] - Unreleased
+## [0.5.1] - Unreleased
 
 ### Changed
 
@@ -35,6 +35,25 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- Added a scoped MIOpen bypass for TOPIQ/CLIPIQA BatchNorm on Windows ROCm
+  to avoid HIPRTC missing-header compilation failures while retaining
+  accelerated convolutions. Included CLIPIQA's unregistered CLIP backbone and
+  protected concurrent forwards from observing the temporary dispatch change.
+  Q-ReAlign receives no BatchNorm wrapper; other runtimes retain their dispatch.
+- Checked portable runtime path headroom before Torch or learned-IQA
+  installation and repair, with a temporary filesystem probe and guidance to
+  move deeply extracted folders before any dependency downloads. Unwritable
+  runtime locations now report a controlled error without starting installation.
+- Rejected Intel XPU devices older than Alchemist, or with missing/unknown
+  architecture metadata, using PyTorch's reported SYCL architecture. Auto warns
+  and uses CPU; explicit XPU selection reports a controlled error.
+- Rejected concrete ROCm GPU architecture mismatches against the installed
+  Torch wheel while retaining native validation for generic architecture targets.
+- Stopped batch, individual-image, and autocast retries after fatal accelerator
+  failures, including unmistakable HIPRTC/MIOpen compiler errors, CUDA/HIP
+  kernel incompatibilities and device assertions, and fatal Level Zero runtime
+  errors. Ordinary batch failures, out-of-memory errors, and generic
+  `miopenStatusUnknownError` retain the existing individual-image fallback.
 - Corrected mixed-batch Windows path-key collision reporting so an unrelated
   file before colliding entries is indexed safely while conflicting entries
   remain diagnosed and existing catalog rows are preserved.
@@ -127,6 +146,9 @@ All notable changes to this project will be documented in this file.
 
 ### Documentation
 
+- Documented portable runtime path checks, Intel XPU compatibility checks,
+  fatal-error retry behavior, and the Windows ROCm BatchNorm workaround,
+  including its pending native AMD validation and performance measurements.
 - Corrected the malformed AMD ROCm Windows prerequisite bullet.
 - Updated `audit.md` with dispositions and verification for all 16 findings,
   documented remaining evidence limits, clarified the local-only `--host`

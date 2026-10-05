@@ -93,6 +93,16 @@ native import failure is reported separately and prevents a redundant learned
 dependency installation. `WinError 126` alone does not identify the missing
 library and must not be treated as proof of an unsupported GPU or bad driver.
 
+ShotSieve checks the current device's `torch.xpu.get_device_properties().architecture`
+against PyTorch's Alchemist support boundary; `torch.xpu.is_available()` alone
+does not establish compatibility. Auto skips pre-Alchemist hardware with a
+warning and uses CPU. An explicit `--device xpu` request fails with a controlled
+error instead. Missing or unknown architecture metadata also prevents XPU
+selection. The check uses architecture values, not GPU names or an AOT kernel
+list, and does not replace the native smoke test for drivers and model support.
+Fatal Level Zero device failures stop scoring promptly; ordinary batch failures
+still retry images individually.
+
 For an older Iris Xe laptop, use the Windows CPU bundle for the supported CPU
 path without the Intel GPU runtime dependencies. Installing XPU wheels or
 repairing their DLL search path does not extend PyTorch's validated GPU list.

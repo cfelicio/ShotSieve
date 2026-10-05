@@ -30,7 +30,13 @@ binds to loopback; your photo library is not uploaded by ShotSieve.
 A runtime pack proves that the software stack can be built, not that every GPU
 from that vendor is supported. Auto mode can fall back to CPU and reports the
 reason; an explicit `cuda`, `xpu`, `rocm`, or `mps` request fails when that
-runtime is unusable. See the [build guide](docs/building.md),
+runtime is unusable. ShotSieve checks Intel XPU architecture compatibility and
+concrete ROCm GPU architecture mismatches before selecting those runtimes.
+Fatal accelerator failures stop scoring instead of retrying each photo;
+ordinary image or batch failures keep the individual-image fallback.
+Windows ROCm TOPIQ/CLIPIQA use a scoped BatchNorm workaround that preserves
+MIOpen convolutions and requires no external compiler installation.
+See the [build guide](docs/building.md),
 [Intel XPU guide](docs/intel-xpu.md), and [AMD ROCm guide](docs/amd-rocm.md)
 for the pinned boundaries and validation commands.
 
@@ -102,6 +108,12 @@ Portable runtime packs are torchless: PyTorch is installed into the selected
 sidecar on first use after interactive consent or explicit
 `SHOTSIEVE_BOOTSTRAP_AUTO_INSTALL_TORCH=1`. A declined, offline, or failed
 install leaves Catalog and Review available, but learned-IQA scoring disabled.
+Before installing or repairing Torch or learned-IQA dependencies, ShotSieve
+checks the selected sidecar path and probes the filesystem for deep filenames.
+If a portable folder is too deeply nested, move the entire ShotSieve folder
+to a shorter location (for example `C:\ShotSieve`) and start it again. This
+check runs before dependency downloads; the portable `data/runtime/` layout
+is unchanged.
 Model weights are separate downloads and are never included in a release
 archive. Use Settings > **Prepare selected model** after the runtime is ready.
 
