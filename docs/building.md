@@ -188,6 +188,9 @@ workflows also perform a fresh target-specific frozen `--check-runtime`
 installation/native-import check for every matrix target. This validates the
 selected sidecar and learned imports; it does not certify every vendor driver
 or hardware combination, which still requires target-system testing.
+Smoke data uses `RUNNER_TEMP/ss` so Windows dependency installation retains
+the path headroom required by the runtime preflight. Each matrix job has its
+own runner and temporary directory.
 
 On first use, the frozen launcher derives its target from its current launcher
 name and may install the matching Torch sidecar under

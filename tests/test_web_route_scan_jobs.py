@@ -168,17 +168,21 @@ class TestRouteHandlingAsync:
             job_id = json.loads(urlopen(start_request).read().decode("utf-8"))["job_id"]
 
             failed_payload = None
-            deadline = time.time() + 3
-            while time.time() < deadline:
+            # This exercises real scanning and database commits on shared CI
+            # runners; the assertion is about persistence, not scan latency.
+            deadline = time.monotonic() + 15
+            status = None
+            while time.monotonic() < deadline:
                 status = json.loads(
                     urlopen(f"http://127.0.0.1:{port}/api/scan/status?job_id={job_id}").read().decode("utf-8")
                 )
                 if status["status"] == "failed":
                     failed_payload = status
                     break
+                assert status["status"] == "running", status
                 time.sleep(0.05)
 
-            assert failed_payload is not None
+            assert failed_payload is not None, f"Scan did not fail before the deadline; last status: {status}"
             assert failed_payload["summary"]["overall_status"] == "failed"
             assert [item["status"] for item in failed_payload["summary"]["root_results"]] == [
                 "completed",

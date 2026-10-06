@@ -313,7 +313,9 @@ jobs:
             throw "Bundle plan target '$($plan.target.id)' does not match matrix target '$expectedTargetId'"
           }
           $launcher = Join-Path $plan.distPath $plan.target.executableName
-          $smokeData = Join-Path $PWD "runtime-smoke-data"
+          # Keep Windows sidecars short enough for the runtime path preflight.
+          # Matrix jobs have separate runners; RUNNER_TEMP is cleaned by Actions.
+          $smokeData = Join-Path $env:RUNNER_TEMP "ss"
           $runtimeOutput = @(& $launcher --data-dir $smokeData --check-runtime --no-browser 2>&1)
           $runtimeExitCode = $LASTEXITCODE
           $runtimeOutput | ForEach-Object { Write-Host $_ }

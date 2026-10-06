@@ -3,11 +3,12 @@ from __future__ import annotations
 import importlib
 import importlib.util
 import json
+import re
 import shutil
 import subprocess
 import sys
 import tomllib
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from typing import cast
 
 import pytest
@@ -151,6 +152,27 @@ def test_portable_workflows_require_target_specific_frozen_runtime_smoke() -> No
         runtime_check_start = workflow.index("Exercise frozen target runtime installation and native imports")
         upload_start = workflow.index("uses: actions/upload-artifact@v6", runtime_check_start)
         assert runtime_check_start < upload_start
+
+
+@pytest.mark.parametrize("workflow_path", [RELEASE_WORKFLOW_PATH, PREVIEW_WORKFLOW_PATH], ids=["release", "preview"])
+def test_frozen_runtime_smoke_paths_have_windows_install_headroom(workflow_path: Path) -> None:
+    from shotsieve.bootstrap_sidecar import RUNTIME_PATH_RESERVE, WINDOWS_RUNTIME_PATH_LIMIT
+    from shotsieve.release_targets import runtime_pack_release_targets
+
+    workflow = workflow_path.read_text(encoding="utf-8")
+    smoke_step = workflow.split("Exercise frozen target runtime installation and native imports", 1)[1]
+    smoke_path = re.search(r'\$smokeData = Join-Path \$env:RUNNER_TEMP "([^"]+)"', smoke_step)
+    assert smoke_path is not None, "Runtime smoke data must use the runner's temporary directory"
+
+    # Use the hosted Windows runner layout from the failed builds, independent
+    # of this test's checkout depth and operating system.
+    smoke_data = PureWindowsPath("D:/a/_temp") / smoke_path.group(1)
+    for target in runtime_pack_release_targets():
+        if target.platform != "windows":
+            continue
+        destination = smoke_data / "runtime" / "site-packages" / target.id
+        path_length = len(str(destination).encode("utf-16-le")) // 2
+        assert WINDOWS_RUNTIME_PATH_LIMIT - path_length >= RUNTIME_PATH_RESERVE, str(destination)
 
 
 def test_release_workflow_uses_node24_actions_and_supports_manual_recovery() -> None:

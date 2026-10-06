@@ -35,6 +35,10 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- Moved preview and release runtime smoke data to a short runner temporary
+  path so Windows accelerator builds pass the runtime path safety check.
+- Allowed the asynchronous scan persistence test more time on shared CI
+  runners and included the last job status in timeout diagnostics.
 - Preserved accelerator runtime package metadata during learned-IQA repairs
   without copying deeply nested Torch license trees, avoiding Windows path
   failures while retaining the installed runtime's metadata and licenses.
