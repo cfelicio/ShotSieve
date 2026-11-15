@@ -52,6 +52,7 @@ class _ReviewFilterRequest:
     min_size: int | None = None
     max_size: int | None = None
     metadata: str = "all"
+    group_pairs: bool = True
 
 
 def _normalize_review_filter_request(
@@ -74,6 +75,7 @@ def _normalize_review_filter_request(
     min_size: int | None = None,
     max_size: int | None = None,
     metadata: str = "all",
+    group_pairs: bool = True,
 ) -> _ReviewFilterRequest:
     normalized_formats = None
     if formats is not None:
@@ -101,6 +103,7 @@ def _normalize_review_filter_request(
         min_size=min_size,
         max_size=max_size,
         metadata=metadata,
+        group_pairs=bool(group_pairs),
     )
 
 
@@ -108,10 +111,14 @@ def _build_file_filters(
     *,
     root: str | None = None,
     query: str | None = None,
+    group_pairs: bool = False,
 ) -> tuple[list[str], list[object]]:
     path_query = query.casefold() if query else None
     conditions: list[str] = []
     params: list[object] = []
+
+    if group_pairs:
+        conditions.append("files.id NOT IN (SELECT companion_file_id FROM file_pairs)")
 
     if root:
         roots = [Path(p).expanduser().resolve() for p in root.split("|") if p.strip()]
@@ -348,6 +355,7 @@ def _build_review_browser_where(
     min_size: int | None = None,
     max_size: int | None = None,
     metadata: str = "all",
+    group_pairs: bool = True,
 ) -> tuple[str, list[object]]:
     """Build the score-backed WHERE clause for the review browser queue."""
     return _build_review_browser_where_from_request(
@@ -370,6 +378,7 @@ def _build_review_browser_where(
             min_size=min_size,
             max_size=max_size,
             metadata=metadata,
+            group_pairs=group_pairs,
         )
     )
 
@@ -381,7 +390,7 @@ def _build_review_browser_where_from_request(
 ) -> tuple[str, list[object]]:
     """Build browser predicates from one normalized filter request."""
     return _compile_where_clause(
-        _build_file_filters(root=request.root, query=request.query),
+        _build_file_filters(root=request.root, query=request.query, group_pairs=request.group_pairs),
         _build_score_filters(require_scored=True, min_score=request.min_score, max_score=request.max_score),
         _build_review_state_filters(marked=request.marked),
         _build_issue_filters(issues=request.issues),
@@ -405,7 +414,7 @@ def _build_review_state_where_from_request(
 ) -> tuple[str, list[object]]:
     """Build review-state predicates from the same normalized request shape."""
     return _compile_where_clause(
-        _build_file_filters(root=request.root, query=request.query),
+        _build_file_filters(root=request.root, query=request.query, group_pairs=request.group_pairs),
         _build_review_state_filters(marked=request.marked),
         _build_after_id_filter(after_id=after_id),
     )

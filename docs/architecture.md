@@ -51,9 +51,15 @@ Model weights and framework caches use the separate model-cache configuration
 described in [configuration.md](configuration.md).
 
 The catalog uses SQLite with WAL mode, foreign-key enforcement, and additive
-migrations. File paths are normalized before they become catalog keys. Managed
-previews carry a ShotSieve ownership marker; cleanup must remain root-scoped
-and must not treat an unavailable root as an empty directory.
+migrations. File paths are normalized before they become catalog keys. The
+`file_pairs` table records primary rendered files (JPEG, HEIF) and companion
+camera RAW files sharing the same directory and stem. Scoring evaluates the fast
+rendered companion and mirrors the score to the companion RAW in `scores`.
+Review decisions (keep, reject, mark for export or deletion) synchronize across
+linked companions. File exports support configurable pair scoping (`both`,
+`raw_only`, `rendered_only`). Managed previews carry a ShotSieve ownership marker;
+cleanup must remain root-scoped and must not treat an unavailable root as an
+empty directory.
 
 Job status, progress, cancellation, and retained result summaries are
 process-local. A process exit or crash loses the job registry even when the

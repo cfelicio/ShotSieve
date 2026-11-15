@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
 
-from shotsieve.db import iter_sqlite_id_batches, normalize_path_case
+from shotsieve.db import get_all_paired_file_ids, iter_sqlite_id_batches, normalize_path_case
 from shotsieve.models import (
     FilesystemObservation,
     FileOperationResult,
@@ -66,6 +66,8 @@ def export_files(
     preview_cache_root: Path | None = None,
     progress_callback: Callable[[int, int], None] | None = None,
     cancel_check: Callable[[], None] | None = None,
+    pair_mode: str = "both",
+    create_destination: bool = False,
 ) -> ExportSummary:
     """Copy or move files to a destination directory.
 
@@ -76,16 +78,22 @@ def export_files(
         mode: "copy" or "move".
         preview_cache_root: Root directory of preview cache. Used to safely
             clean up old preview files after a move operation.
+        pair_mode: Pairing export mode: "both", "raw_only", or "rendered_only".
+        create_destination: Whether to automatically create the destination
+            directory if it does not already exist.
 
     Returns:
         ExportSummary with counts and any failures.
 
     Raises:
-        ValueError: If mode is invalid, destination doesn't exist, or any
-            file_ids are not found in the database.
+        ValueError: If mode is invalid, destination doesn't exist (and
+            create_destination is False), or any file_ids are not found in the
+            database.
     """
     if mode not in ("copy", "move"):
         raise ValueError(f"Export mode must be 'copy' or 'move', got '{mode}'")
+    if pair_mode not in ("both", "raw_only", "rendered_only", "none"):
+        raise ValueError(f"Export pair_mode must be 'both', 'raw_only', or 'rendered_only', got '{pair_mode}'")
 
     # Keep the spelling supplied by the caller after making relative paths
     # absolute.  Resolving a remote path can perform an unnecessary network
@@ -95,6 +103,16 @@ def export_files(
     if not dest_path.is_absolute():
         dest_path = Path.cwd() / dest_path
     dest_path = Path(os.path.abspath(dest_path))
+
+    # Defense-in-depth: refuse system-critical directories.
+    _reject_system_directory(dest_path)
+
+    if create_destination and not dest_path.exists():
+        try:
+            dest_path.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            raise ValueError(f"Cannot create destination directory {dest_path}: {exc}") from exc
+
     try:
         destination_stat = dest_path.stat()
     except (FileNotFoundError, NotADirectoryError) as exc:
@@ -103,9 +121,6 @@ def export_files(
         raise ValueError(f"Destination directory cannot be accessed: {dest_path}: {exc}") from exc
     if not stat.S_ISDIR(destination_stat.st_mode):
         raise ValueError(f"Destination path is not a directory: {dest_path}")
-
-    # Defense-in-depth: refuse system-critical directories.
-    _reject_system_directory(dest_path)
 
     if not file_ids:
         return ExportSummary()
@@ -131,6 +146,45 @@ def export_files(
     missing_ids = [fid for fid in unique_ids if fid not in found_ids]
     if missing_ids:
         raise ValueError(f"File IDs not found in database: {missing_ids}")
+
+    if pair_mode == "both":
+        target_unique_ids = get_all_paired_file_ids(connection, unique_ids)
+    elif pair_mode == "raw_only":
+        target_unique_ids = []
+        for fid in unique_ids:
+            companion_row = connection.execute(
+                "SELECT companion_file_id FROM file_pairs WHERE primary_file_id = ?",
+                (fid,),
+            ).fetchone()
+            if companion_row is not None:
+                target_unique_ids.append(int(companion_row["companion_file_id"]))
+            else:
+                target_unique_ids.append(fid)
+        target_unique_ids = list(dict.fromkeys(target_unique_ids))
+    elif pair_mode == "rendered_only":
+        target_unique_ids = []
+        for fid in unique_ids:
+            primary_row = connection.execute(
+                "SELECT primary_file_id FROM file_pairs WHERE companion_file_id = ?",
+                (fid,),
+            ).fetchone()
+            if primary_row is not None:
+                target_unique_ids.append(int(primary_row["primary_file_id"]))
+            else:
+                target_unique_ids.append(fid)
+        target_unique_ids = list(dict.fromkeys(target_unique_ids))
+    else:
+        target_unique_ids = unique_ids
+
+    if target_unique_ids != unique_ids:
+        for id_batch in iter_sqlite_id_batches(connection, target_unique_ids):
+            placeholders = ",".join("?" for _ in id_batch)
+            selected_rows = connection.execute(
+                f"SELECT id, path, preview_path FROM files WHERE id IN ({placeholders})",
+                id_batch,
+            ).fetchall()
+            rows_by_id.update({row["id"]: row for row in selected_rows})
+        rows = [rows_by_id[file_id] for file_id in target_unique_ids if file_id in rows_by_id]
 
     summary = ExportSummary()
     total_files = len(rows)

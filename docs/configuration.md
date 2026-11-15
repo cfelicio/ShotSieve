@@ -91,6 +91,12 @@ and supported values are:
 - default extensions cover common JPEG/PNG/TIFF images, HEIF, and the RAW
   extensions defined in `src/shotsieve/config.py`; `raw` and `.raw` expand to
   the supported RAW set;
+- RAW+JPEG and RAW+HEIF pair grouping is enabled by default (`group_pairs=True`),
+  collating same-stem companion pairs into a single card in Review and scoring
+  only the fast rendered companion while mirroring scores to the companion RAW.
+  This can be toggled in Discovery options;
+- pair export mode defaults to `both`, with options for `both`, `raw_only`, and
+  `rendered_only`;
 - recursive scanning is enabled by default;
 - ignore rules are newline-separated patterns;
 - RAW preview mode is `fast`, `auto` (the default), or `high-quality`;

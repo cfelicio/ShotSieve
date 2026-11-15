@@ -4,6 +4,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from functools import partial
 from http import HTTPStatus
+import logging
 import threading
 from typing import Any, TypeVar, cast
 from urllib.parse import parse_qs, urlparse
@@ -42,6 +43,8 @@ _run_scan_job = _scan_runner._run_scan_job
 _scan_job_summary = _scan_runner._scan_job_summary
 _scan_offset_consumed = _scan_runner._scan_offset_consumed
 _scan_one_root = _scan_runner._scan_one_root
+
+log = logging.getLogger(__name__)
 _scan_root_report = _scan_runner._scan_root_report
 _scan_root_report_from_exception = _scan_runner._scan_root_report_from_exception
 
@@ -344,6 +347,7 @@ def _start_operation_job(
                 else:
                     result_handler(registry, job_id, summary)
             except Exception as exc:
+                log.warning("Operation job %s failed: %s", job_id, exc, exc_info=True)
                 failure = exception_payload(exc)
                 registry.fail(
                     job_id,

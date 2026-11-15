@@ -7,7 +7,12 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Iterable
 
-from shotsieve.db import iter_sqlite_id_batches, normalize_resolved_path, root_path_filter
+from shotsieve.db import (
+    get_all_paired_file_ids,
+    iter_sqlite_id_batches,
+    normalize_resolved_path,
+    root_path_filter,
+)
 from shotsieve.performance import log_duration, monotonic_seconds
 from shotsieve.review_cache import (
     _PRUNE_MISSING_CACHE_BATCH_SIZE,
@@ -303,6 +308,7 @@ def count_review_files(
     min_size: int | None = None,
     max_size: int | None = None,
     metadata: str = "all",
+    group_pairs: bool = True,
 ) -> int:
     """Return the total count of files matching the score-backed review browser filters."""
     started_at = monotonic_seconds()
@@ -325,6 +331,7 @@ def count_review_files(
         min_size=min_size,
         max_size=max_size,
         metadata=metadata,
+        group_pairs=group_pairs,
     )
     where_clause, params = _build_review_browser_where_from_request(filter_request)
     sql = f"""
@@ -370,6 +377,7 @@ def review_selection_revision(
     min_size: int | None = None,
     max_size: int | None = None,
     metadata: str = "all",
+    group_pairs: bool = True,
 ) -> str:
     started_at = monotonic_seconds()
     filter_request = _normalize_review_filter_request(
@@ -391,6 +399,7 @@ def review_selection_revision(
         min_size=min_size,
         max_size=max_size,
         metadata=metadata,
+        group_pairs=group_pairs,
     )
     if scope == "review-browser":
         where_clause, params = _build_review_browser_where_from_request(filter_request)
@@ -457,6 +466,7 @@ def list_review_files(
     min_size: int | None = None,
     max_size: int | None = None,
     metadata: str = "all",
+    group_pairs: bool = True,
     limit: int = 60,
     offset: int = 0,
 ) -> list[dict[str, object]]:
@@ -481,6 +491,7 @@ def list_review_files(
         min_size=min_size,
         max_size=max_size,
         metadata=metadata,
+        group_pairs=group_pairs,
     )
     where_clause, params = _build_review_browser_where_from_request(filter_request)
     sql_parts = [
@@ -492,10 +503,18 @@ def list_review_files(
                COALESCE(review_state.decision_state, 'pending') AS decision_state,
                COALESCE(review_state.delete_marked, 0) AS delete_marked,
                COALESCE(review_state.export_marked, 0) AS export_marked,
-               review_state.updated_time
+               review_state.updated_time,
+               companion_file.id AS companion_id,
+               companion_file.path AS companion_path,
+               companion_file.format AS companion_format,
+               companion_file.size_bytes AS companion_size_bytes,
+               companion_file.width AS companion_width,
+               companion_file.height AS companion_height
         FROM files
         LEFT JOIN scores ON scores.file_id = files.id
         LEFT JOIN review_state ON review_state.file_id = files.id
+        LEFT JOIN file_pairs ON file_pairs.primary_file_id = files.id
+        LEFT JOIN files AS companion_file ON companion_file.id = file_pairs.companion_file_id
         """,
         where_clause,
     ]
@@ -505,7 +524,29 @@ def list_review_files(
     params.extend([limit, offset])
 
     rows = connection.execute(" ".join(sql_parts), tuple(params)).fetchall()
-    payload = [dict(row) for row in rows]
+    payload: list[dict[str, object]] = []
+    for row in rows:
+        item = dict(row)
+        c_id = item.pop("companion_id", None)
+        c_path = item.pop("companion_path", None)
+        c_fmt = item.pop("companion_format", None)
+        c_sz = item.pop("companion_size_bytes", None)
+        c_w = item.pop("companion_width", None)
+        c_h = item.pop("companion_height", None)
+        if c_id is not None:
+            item["is_pair"] = True
+            item["companion"] = {
+                "id": int(c_id),
+                "path": c_path,
+                "format": c_fmt,
+                "size_bytes": c_sz,
+                "width": c_w,
+                "height": c_h,
+            }
+        else:
+            item["is_pair"] = False
+            item["companion"] = None
+        payload.append(item)
     log_duration(
         "review.list",
         started_at,
@@ -539,6 +580,7 @@ def list_review_browser_file_ids(
     min_size: int | None = None,
     max_size: int | None = None,
     metadata: str = "all",
+    group_pairs: bool = True,
     limit: int | None = None,
     after_id: int | None = None,
 ) -> list[int]:
@@ -562,6 +604,7 @@ def list_review_browser_file_ids(
         min_size=min_size,
         max_size=max_size,
         metadata=metadata,
+        group_pairs=group_pairs,
     )
     where_clause, params = _build_review_browser_where_from_request(
         filter_request,
@@ -631,15 +674,45 @@ def get_review_file_detail(connection, file_id: int) -> dict[str, object] | None
                COALESCE(review_state.decision_state, 'pending') AS decision_state,
                COALESCE(review_state.delete_marked, 0) AS delete_marked,
                COALESCE(review_state.export_marked, 0) AS export_marked,
-               review_state.updated_time
+               review_state.updated_time,
+               companion_file.id AS companion_id,
+               companion_file.path AS companion_path,
+               companion_file.format AS companion_format,
+               companion_file.size_bytes AS companion_size_bytes,
+               companion_file.width AS companion_width,
+               companion_file.height AS companion_height
         FROM files
         LEFT JOIN scores ON scores.file_id = files.id
         LEFT JOIN review_state ON review_state.file_id = files.id
+        LEFT JOIN file_pairs ON file_pairs.primary_file_id = files.id
+        LEFT JOIN files AS companion_file ON companion_file.id = file_pairs.companion_file_id
         WHERE files.id = ?
         """,
         (file_id,),
     ).fetchone()
-    return dict(row) if row is not None else None
+    if row is None:
+        return None
+    item = dict(row)
+    c_id = item.pop("companion_id", None)
+    c_path = item.pop("companion_path", None)
+    c_fmt = item.pop("companion_format", None)
+    c_sz = item.pop("companion_size_bytes", None)
+    c_w = item.pop("companion_width", None)
+    c_h = item.pop("companion_height", None)
+    if c_id is not None:
+        item["is_pair"] = True
+        item["companion"] = {
+            "id": int(c_id),
+            "path": c_path,
+            "format": c_fmt,
+            "size_bytes": c_sz,
+            "width": c_w,
+            "height": c_h,
+        }
+    else:
+        item["is_pair"] = False
+        item["companion"] = None
+    return item
 
 
 def update_review_state(
@@ -667,36 +740,38 @@ def update_review_state(
     if file_row is None:
         raise ValueError("file_id does not exist in the cache")
 
-    existing = connection.execute(
-        "SELECT decision_state, delete_marked, export_marked FROM review_state WHERE file_id = ?",
-        (file_id,),
-    ).fetchone()
+    target_ids = get_all_paired_file_ids(connection, [file_id])
+    for target_fid in target_ids:
+        existing = connection.execute(
+            "SELECT decision_state, delete_marked, export_marked FROM review_state WHERE file_id = ?",
+            (target_fid,),
+        ).fetchone()
 
-    final_decision_state = decision_state if decision_state is not None else (existing["decision_state"] if existing else "pending")
-    final_delete_marked = int(delete_marked if delete_marked is not None else (existing["delete_marked"] if existing else 0))
-    final_export_marked = int(export_marked if export_marked is not None else (existing["export_marked"] if existing else 0))
+        final_decision_state = decision_state if decision_state is not None else (existing["decision_state"] if existing else "pending")
+        final_delete_marked = int(delete_marked if delete_marked is not None else (existing["delete_marked"] if existing else 0))
+        final_export_marked = int(export_marked if export_marked is not None else (existing["export_marked"] if existing else 0))
 
-    if final_delete_marked and final_export_marked:
-        raise ValueError("delete_marked and export_marked cannot both be true")
+        if final_delete_marked and final_export_marked:
+            raise ValueError("delete_marked and export_marked cannot both be true")
 
-    connection.execute(
-        """
-        INSERT INTO review_state(file_id, decision_state, delete_marked, export_marked, updated_time)
-        VALUES(?, ?, ?, ?, ?)
-        ON CONFLICT(file_id) DO UPDATE SET
-            decision_state = excluded.decision_state,
-            delete_marked = excluded.delete_marked,
-            export_marked = excluded.export_marked,
-            updated_time = excluded.updated_time
-        """,
-        (
-            file_id,
-            final_decision_state,
-            final_delete_marked,
-            final_export_marked,
-            updated_time,
-        ),
-    )
+        connection.execute(
+            """
+            INSERT INTO review_state(file_id, decision_state, delete_marked, export_marked, updated_time)
+            VALUES(?, ?, ?, ?, ?)
+            ON CONFLICT(file_id) DO UPDATE SET
+                decision_state = excluded.decision_state,
+                delete_marked = excluded.delete_marked,
+                export_marked = excluded.export_marked,
+                updated_time = excluded.updated_time
+            """,
+            (
+                target_fid,
+                final_decision_state,
+                final_delete_marked,
+                final_export_marked,
+                updated_time,
+            ),
+        )
 
 
 def update_review_state_batch(
@@ -727,7 +802,8 @@ def update_review_state_batch(
         raise ValueError("One or more file_ids do not exist in the cache")
 
     existing_by_id = {}
-    for id_batch in iter_sqlite_id_batches(connection, normalized_ids):
+    target_ids = get_all_paired_file_ids(connection, normalized_ids)
+    for id_batch in iter_sqlite_id_batches(connection, target_ids):
         placeholders = ",".join("?" for _ in id_batch)
         existing_rows = connection.execute(
             f"SELECT file_id, decision_state, delete_marked, export_marked FROM review_state WHERE file_id IN ({placeholders})",
@@ -736,7 +812,7 @@ def update_review_state_batch(
         existing_by_id.update({int(row["file_id"]): row for row in existing_rows})
 
     upserts: list[tuple[int, str, int, int, str]] = []
-    for file_id in normalized_ids:
+    for file_id in target_ids:
         existing = existing_by_id.get(file_id)
         final_decision_state = decision_state if decision_state is not None else (existing["decision_state"] if existing else "pending")
         final_delete_marked = int(delete_marked if delete_marked is not None else (existing["delete_marked"] if existing else 0))

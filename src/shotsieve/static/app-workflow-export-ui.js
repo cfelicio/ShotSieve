@@ -94,30 +94,92 @@
     }
 
     function installExportDialogEvents() {
-      document.getElementById("browse-export-dir").addEventListener("click", () => openBrowser("export-destination").catch(handleError));
-      document.getElementById("export-confirm").addEventListener("click", () => {
+      const dialog = document.getElementById("export-dialog");
+      if (!dialog || dialog.dataset.eventsInstalled === "true") return;
+      dialog.dataset.eventsInstalled = "true";
+
+      document.getElementById("browse-export-dir")?.addEventListener("click", () => openBrowser("export-destination").catch(handleError));
+
+      const destinationInput = document.getElementById("export-destination");
+      if (destinationInput) {
+        destinationInput.addEventListener("keydown", (event) => {
+          if (event.key === "Enter") {
+            event.preventDefault();
+            document.getElementById("export-confirm")?.click();
+          }
+        });
+      }
+
+      const form = dialog.querySelector("form");
+      if (form) {
+        form.addEventListener("submit", (event) => {
+          if (event.submitter && event.submitter.type === "submit") {
+            return;
+          }
+          event.preventDefault();
+          document.getElementById("export-confirm")?.click();
+        });
+      }
+
+      document.getElementById("export-confirm").addEventListener("click", async () => {
         const destination = document.getElementById("export-destination").value.trim();
-        const request = state.pendingExport || buildSelectedExportRequest(document.getElementById("export-mode").value);
         if (!destination) {
           showToast("Choose a destination folder.", "error");
           return;
         }
-        document.getElementById("export-dialog").close();
+
+        const selectedMode = document.getElementById("export-mode").value;
+        const selectedPairMode = document.getElementById("export-pair-mode")?.value || "both";
+        const baseRequest = state.pendingExport || buildSelectedExportRequest(selectedMode);
+        const request = {
+          ...baseRequest,
+          mode: selectedMode,
+          busyMessage: (count) => `${selectedMode === "move" ? "Moving" : "Copying"} ${count} files...`,
+          successPrefix: selectedMode === "move" ? "Move complete" : "Copy complete",
+        };
+
+        let selectionRequest;
+        try {
+          selectionRequest = await request.resolveRequest();
+        } catch (err) {
+          handleError(err);
+          return;
+        }
+
+        if (!selectionRequest?.count) {
+          showToast(request.emptyResultMessage, "error");
+          return;
+        }
+
+        let folderExists = true;
+        try {
+          await fetchJson(`/api/fs/list?path=${encodeURIComponent(destination)}`);
+        } catch {
+          folderExists = false;
+        }
+
+        let createDestination = false;
+        if (!folderExists) {
+          const confirmCreate = confirm(`Destination folder does not exist:\n${destination}\n\nDo you want to create it?`);
+          if (!confirmCreate) {
+            return;
+          }
+          createDestination = true;
+        }
+
+        if (selectedMode === "move") {
+          const msg = `Move ${selectionRequest.count} file(s) to ${destination}?\n\nThis will remove the original files and replace them at the new location.`;
+          if (!confirm(msg)) {
+            showToast("Move cancelled. Originals were not touched.");
+            return;
+          }
+        }
+
+        dialog.close();
         state.pendingExport = null;
 
         withBusy("Preparing export...", async () => {
-          const selectionRequest = await request.resolveRequest();
-          if (!selectionRequest.count) {
-            showToast(request.emptyResultMessage, "error");
-            return;
-          }
-
-          if (request.mode === "move") {
-            const msg = `Move ${selectionRequest.count} file(s) to ${destination}?\n\nThis will remove the original files and replace them at the new location.`;
-            if (!confirm(msg)) return;
-          }
-
-          const phaseLabel = request.mode === "move" ? "Moving files" : "Exporting files";
+          const phaseLabel = selectedMode === "move" ? "Moving files" : "Exporting files";
           setBusyMessage(request.busyMessage(selectionRequest.count));
           setBusyPhaseProgress({ percent: 0, phaseIndex: 1, phaseCount: 1, phaseLabel });
           const operationRequest = {
@@ -125,8 +187,10 @@
             payload: {
               ...selectionRequest,
               destination,
-              mode: request.mode,
+              mode: selectedMode,
               count: selectionRequest.count,
+              pair_mode: selectedPairMode,
+              create_destination: createDestination,
             },
             fallbackLabel: phaseLabel,
             failureMessage: `${phaseLabel} failed.`,
@@ -136,7 +200,7 @@
           const summary = workflowExport.summarizeExportResult(result);
           const resultLabel = operationTone(result) === "success"
             ? request.successPrefix
-            : `${request.mode === "move" ? "Move" : "Copy"} results`;
+            : `${selectedMode === "move" ? "Move" : "Copy"} results`;
           showToast(`${resultLabel}: ${summary || "no matching files"}.`, operationTone(result));
           await refreshWorkspace();
         }).catch(handleError);

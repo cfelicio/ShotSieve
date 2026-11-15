@@ -27,6 +27,12 @@ def _review_filter_kwargs(deps: WebRouteDependencies, params: dict[str, list[str
     """Parse one set of Review filters for page, count, and revision."""
     formats_raw = deps.first_value(params, "formats", None)
     formats = [format_name.strip() for format_name in formats_raw.split(",") if format_name.strip()] if formats_raw else None
+    raw_group_pairs = deps.first_value(params, "group_pairs", None)
+    group_pairs = True
+    if raw_group_pairs is not None:
+        parsed_group_pairs = deps.optional_bool(raw_group_pairs, name="group_pairs")
+        if parsed_group_pairs is not None:
+            group_pairs = parsed_group_pairs
     return {
         "root": deps.first_value(params, "root", None),
         "marked": deps.first_value(params, "marked", "all"),
@@ -46,6 +52,7 @@ def _review_filter_kwargs(deps: WebRouteDependencies, params: dict[str, list[str
         "min_size": deps.optional_int(deps.first_value(params, "min_size", None)),
         "max_size": deps.optional_int(deps.first_value(params, "max_size", None)),
         "metadata": deps.first_value(params, "metadata", "all"),
+        "group_pairs": group_pairs,
     }
 
 

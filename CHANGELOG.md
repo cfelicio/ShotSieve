@@ -2,7 +2,48 @@
 
 All notable changes to this project will be documented in this file.
 
-## [0.5.1] - Unreleased
+## [0.5.2] - 2026-11-14
+
+### Added
+
+- Interactive photo magnification and pan-and-zoom in the review Lightbox modal:
+  click to zoom up to 250% centered on cursor or tap to fit, mouse wheel to zoom
+  smoothly up to 500%, click-and-drag to pan across details, keyboard shortcuts
+  (+/- zoom, 0/f fit, arrows to pan), and a floating glassmorphic toolbar with
+  zoom level readout and quick actions.
+- Progressive full-resolution lightbox loading: browser-renderable formats (JPEG,
+  PNG, WebP) and RAW+companion pairs automatically upgrade from the fast preview
+  to full source resolution while preserving zoom and pan positions.
+- Automatic RAW+JPEG and RAW+HEIF pair grouping: companion images with identical
+  stems and directories are reconciled into `file_pairs` and presented as a
+  single card with a pair badge in Review.
+- Single-pass scoring optimization: quality scoring runs against the fast
+  rendered companion (JPEG/HEIF) and automatically mirrors score records to the
+  companion RAW in the catalog database.
+- Synchronized pair review workflow: marking keep, reject, export, or delete on
+  either companion keeps both files synchronized in catalog review state.
+- Configurable export pairing modes: export actions support `both` (default),
+  `raw_only`, and `rendered_only` pair scoping in the UI export modal and
+  `/api/files/export` payload.
+- Deletion synchronization: catalog or on-disk file deletion removes both
+  companions and cleans up previews and relational pair links.
+- Discovery and export UI controls: added "Group RAW+JPEG pairs" checkbox in
+  Discovery options and a pair export scope selector in the Export dialog.
+
+### Fixed
+
+- Resolved export dialog failure where pressing Enter inside the destination field
+  silently closed the modal via the form close button instead of initiating the transfer.
+- Fixed mode synchronization bug where switching between Move and Copy in the
+  export dialog was ignored if the modal was opened via the Move toolbar trigger.
+- Added destination folder existence validation with interactive confirmation
+  prompt to create missing destination directories automatically.
+- Prevented silent dismissal on move confirmation cancellation: cancelling the
+  move prompt now leaves the export dialog open with destination and options preserved.
+- Added server-side diagnostics for background operation worker exceptions to ensure
+  terminal and console sessions receive immediate failure logs.
+
+## [0.5.1] - 2026-10-05
 
 ### Changed
 

@@ -182,6 +182,7 @@
             <div class="queue-copy">
               <div class="queue-kicker">
                 <div class="badge-row">
+                  ${item.is_pair ? '<span class="badge badge-pair">RAW+JPG</span>' : ""}
                   ${item.delete_marked ? '<span class="badge badge-reject">reject</span>' : ""}
                   ${item.export_marked ? '<span class="badge badge-select">select</span>' : ""}
                 </div>
@@ -190,7 +191,7 @@
                 <strong class="queue-file">${filename}</strong>
                 <span class="queue-score ${getScoreColor(primaryScore)}">★ ${formatNumberFn(primaryScore)}</span>
               </div>
-              ${item.format ? `<div class="queue-sub"><span class="queue-fmt-tag">${escapeHtml(String(item.format).toUpperCase())}</span></div>` : ""}
+              ${item.format ? `<div class="queue-sub"><span class="queue-fmt-tag">${item.is_pair ? `RAW+${escapeHtml(String(item.format).toUpperCase())}` : escapeHtml(String(item.format).toUpperCase())}</span></div>` : ""}
             </div>
           </button>
         </article>
@@ -337,7 +338,8 @@
       const statPills = [];
       const fmt = detail.format || (detail.path ? detail.path.split('.').pop() : "");
       if (fmt) {
-        statPills.push(`<span class="stat-badge-pill pill-format">${escapeHtml(String(fmt).toUpperCase())}</span>`);
+        const fmtLabel = detail.is_pair && detail.companion ? `RAW+${String(fmt).toUpperCase()}` : String(fmt).toUpperCase();
+        statPills.push(`<span class="stat-badge-pill pill-format">${escapeHtml(fmtLabel)}</span>`);
       }
       const effectiveW = detail.width || naturalW;
       const effectiveH = detail.height || naturalH;

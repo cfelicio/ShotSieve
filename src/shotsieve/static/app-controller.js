@@ -98,7 +98,7 @@
 
     function overlayFocusableElements(overlay) {
       return [...overlay.querySelectorAll(
-        "[data-overlay-initial-focus], [autofocus], button:not([disabled]), [href], input:not([disabled]):not([type='hidden']), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex='-1'])",
+        "[data-overlay-initial-focus], [autofocus], button:not([disabled]):not([tabindex='-1']), [href]:not([tabindex='-1']), input:not([disabled]):not([type='hidden']):not([tabindex='-1']), select:not([disabled]):not([tabindex='-1']), textarea:not([disabled]):not([tabindex='-1']), [tabindex]:not([tabindex='-1'])",
       )].filter((node) => {
         if (!(node instanceof HTMLElement)) {
           return false;
@@ -448,6 +448,18 @@
       document.getElementById("extensions-input").value = persisted.extensions || options.default_extensions.join(",");
       document.getElementById("max-decode-megapixels").value = persisted.maxDecodeMegapixels || String(options.default_max_decode_megapixels || 64);
       document.getElementById("recursive-toggle").checked = persisted.recursive ?? true;
+      const groupPairsToggle = document.getElementById("group-pairs-toggle");
+      if (groupPairsToggle) {
+        groupPairsToggle.checked = persisted.groupRawJpeg ?? true;
+        state.groupRawJpeg = groupPairsToggle.checked;
+        groupPairsToggle.addEventListener("change", () => {
+          state.groupRawJpeg = groupPairsToggle.checked;
+          uiStateStore.scheduleUiStateSave();
+          if (grid?.loadQueue) {
+            grid.loadQueue();
+          }
+        });
+      }
       document.getElementById("ignore-rules-input").value = persisted.ignoreRules || "";
       if (!currentLibraryRoot() && persisted.libraryRoot) {
         document.getElementById("library-root-input").value = persisted.libraryRoot;

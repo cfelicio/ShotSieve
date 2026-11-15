@@ -118,6 +118,22 @@ CREATE TABLE IF NOT EXISTS scan_runs (
 
 CREATE INDEX IF NOT EXISTS idx_scan_runs_started_time
 ON scan_runs(started_time);
+
+CREATE TABLE IF NOT EXISTS file_pairs (
+    primary_file_id INTEGER NOT NULL,
+    companion_file_id INTEGER NOT NULL,
+    pair_type TEXT NOT NULL DEFAULT 'raw_pair',
+    created_time TEXT NOT NULL,
+    PRIMARY KEY (primary_file_id, companion_file_id),
+    FOREIGN KEY(primary_file_id) REFERENCES files(id) ON DELETE CASCADE,
+    FOREIGN KEY(companion_file_id) REFERENCES files(id) ON DELETE CASCADE
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_file_pairs_companion
+ON file_pairs(companion_file_id);
+
+CREATE INDEX IF NOT EXISTS idx_file_pairs_primary
+ON file_pairs(primary_file_id);
 """
 
 SCHEMA_MIGRATIONS = {

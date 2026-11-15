@@ -289,6 +289,12 @@ def optional_bool(value: object, *, name: str) -> bool | None:
         return None
     if isinstance(value, bool):
         return value
+    if isinstance(value, str):
+        normalized = value.strip().casefold()
+        if normalized in {"1", "true", "yes", "on"}:
+            return True
+        if normalized in {"0", "false", "no", "off"}:
+            return False
     raise ValueError(f"{name} must be a boolean")
 
 

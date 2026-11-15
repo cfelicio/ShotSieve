@@ -19,8 +19,11 @@ from typing import cast
 from shotsieve import web_request as _request_helpers
 from shotsieve import web_security as _security_helpers
 from shotsieve.config import (
+    DEFAULT_GROUP_PAIRS,
+    DEFAULT_PAIR_EXPORT_MODE,
     DEFAULT_RAW_PREVIEW_MODE,
     DEFAULT_SUPPORTED_EXTENSIONS,
+    PAIR_EXPORT_MODES,
     RAW_PREVIEW_MODES,
     build_config,
 )
@@ -671,6 +674,9 @@ def build_options_payload(
         "runtime_targets": runtime_targets_ui,
         "default_batch_size": DEFAULT_BATCH_SIZE,
         "preview_capabilities": capabilities,
+        "default_group_pairs": DEFAULT_GROUP_PAIRS,
+        "pair_export_modes": list(PAIR_EXPORT_MODES),
+        "default_pair_export_mode": DEFAULT_PAIR_EXPORT_MODE,
     }
 
 

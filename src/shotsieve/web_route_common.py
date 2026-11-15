@@ -179,6 +179,7 @@ _FILE_DEPENDENCIES = frozenset({
     "list_review_browser_file_ids",
     "list_review_state_file_ids",
     "media_path_for_file",
+    "optional_bool",
     "optional_string",
     "preview_missing_cache_entries",
     "read_json_body",
@@ -470,6 +471,13 @@ def _parse_selection_payload(deps: WebRouteDependencies, payload: dict[str, obje
             name="selection.metadata",
             choices=("all", "valid", "unknown"),
         )
+        raw_group_pairs = raw_selection.get("group_pairs")
+        group_pairs = True
+        if raw_group_pairs is not None:
+            parsed_group_pairs = deps.optional_bool(raw_group_pairs, name="selection.group_pairs")
+            if parsed_group_pairs is not None:
+                group_pairs = parsed_group_pairs
+        selection["group_pairs"] = group_pairs
 
     raw_exclude_ids = payload.get("exclude_file_ids")
     if raw_exclude_ids is None or raw_exclude_ids == []:
@@ -504,6 +512,7 @@ def _validate_selection_revision(connection: Any, deps: WebRouteDependencies, se
         min_size=selection.get("min_size"),
         max_size=selection.get("max_size"),
         metadata=selection.get("metadata", "all"),
+        group_pairs=selection.get("group_pairs", True),
     )
     if selection_revision != current_revision:
         raise ValueError("Selected results changed. Refresh the queue and select again.")
@@ -626,6 +635,7 @@ def _iter_selection_file_id_batches(connection: Any, deps: WebRouteDependencies,
                 min_size=selection.get("min_size"),
                 max_size=selection.get("max_size"),
                 metadata=selection.get("metadata", "all"),
+                group_pairs=selection.get("group_pairs", True),
                 limit=_SELECTION_BATCH_SIZE,
                 after_id=after_id,
             )

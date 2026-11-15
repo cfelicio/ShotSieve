@@ -10,6 +10,8 @@ binds to loopback; your photo library is not uploaded by ShotSieve.
 ## What it does
 
 - Scans local photo folders and builds a reusable catalog.
+- Automatically groups RAW+JPEG and RAW+HEIF pairs as a single image during review and scoring, running scoring on the fast rendered companion and keeping decisions synchronized across both files.
+- Full-screen photo magnification and pan-and-zoom in Review with progressive full-resolution loading for detailed focus checking.
 - Scores supported images with learned quality models when the optional model
   runtime is available.
 - Compares models on the same library.

@@ -35,10 +35,10 @@ to a LAN.
 | Route | Contract |
 | --- | --- |
 | `/api/overview` | Catalog summary; optional `root`. |
-| `/api/options` | UI/runtime options; optional `resource_profile`. |
+| `/api/options` | UI/runtime options; optional `resource_profile`. Includes `default_group_pairs`, `default_pair_export_mode`, and `pair_export_modes`. |
 | `/api/analysis-diagnostics` | Scan/analysis diagnostics; optional `root` and `limit` (default 100, max 500). |
-| `/api/files` and `/api/files/count` | Filtered catalog rows or only the count. Filters include root, review state, query, score, format, dimensions, megapixels, size, and metadata. `/api/files` defaults to 60 rows and caps `limit` at 500. |
-| `/api/file?id=ID` | One catalog file detail. |
+| `/api/files` and `/api/files/count` | Filtered catalog rows or only the count. Filters include root, review state, query, score, format, dimensions, megapixels, size, metadata, and `group_pairs` (boolean, defaults to 1). `/api/files` defaults to 60 rows and caps `limit` at 500. |
+| `/api/file?id=ID` | One catalog file detail. Includes `is_pair` and `companion` metadata. |
 | `/api/review/file-ids` | IDs for a marked selection (`approved`, `rejected`, or `none`); requires `marked` and supports root/selection pagination. |
 | `/api/review/decisions.csv` | CSV export of decisions; requires `root` and `decision=approved`, `rejected`, or `both`. |
 | `/api/fs/roots` and `/api/fs/list` | Local filesystem browsing for existing roots/directories. |
@@ -47,8 +47,9 @@ to a LAN.
 | `/api/*/status` and `/api/*/result` | Status or completed result for the job families below, using `job_id`. |
 
 `/api/files` responses include `items`, `total`, and `selection_revision`.
-Selection-bearing routes use that revision to detect a catalog change before a
-bulk mutation.
+When RAW+JPEG/HEIF pairs are grouped, primary items include `is_pair: true` and
+`companion: { id, path, format, size_bytes }`. Selection-bearing routes use that
+revision to detect a catalog change before a bulk mutation.
 
 ## Write routes
 
@@ -78,7 +79,8 @@ POST /api/files/export/start
 
 Use the `/start` routes for UI-sized or larger selections. Their response
 contains a `job_id` and `status: "running"`; the operation result retains
-per-file outcomes and uncertainty information.
+per-file outcomes and uncertainty information. Export payloads accept `pair_mode`
+(`"both"`, `"raw_only"`, `"rendered_only"`, defaulting to `"both"`).
 
 ### Analysis and cache jobs
 

@@ -13,6 +13,7 @@ from typing import Any, Callable, Iterable, Sequence
 
 from shotsieve.config import BROWSER_SAFE_EXTENSIONS as _BROWSER_SAFE_EXTENSIONS
 from shotsieve.db import (
+    get_all_paired_file_ids,
     infer_preview_cache_roots,
     iter_sqlite_id_batches,
     normalize_resolved_path,
@@ -630,6 +631,17 @@ def delete_files(
 
     if len(rows) != len(normalized_ids):
         raise ValueError("One or more file_ids do not exist in the cache")
+
+    target_ids = get_all_paired_file_ids(connection, normalized_ids)
+    if target_ids != normalized_ids:
+        for id_batch in iter_sqlite_id_batches(connection, target_ids):
+            placeholders = ",".join("?" for _ in id_batch)
+            selected_rows = connection.execute(
+                f"SELECT id, path, path_key, preview_path, move_managed FROM files WHERE id IN ({placeholders})",
+                tuple(id_batch),
+            ).fetchall()
+            rows_by_id.update({row["id"]: row for row in selected_rows})
+        rows = [rows_by_id[file_id] for file_id in target_ids if file_id in rows_by_id]
 
     summary = FileOperationSummary(action="delete", delete_from_disk=delete_from_disk)
     total_files = len(rows)

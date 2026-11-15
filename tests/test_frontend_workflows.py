@@ -644,6 +644,67 @@ def test_lightbox_modal_traps_and_restores_focus(chromium_page) -> None:
     assert restored_id == "detail-image"
 
 
+def test_lightbox_zoom_and_pan_interactions(chromium_page) -> None:
+    chromium_page, expect = chromium_page
+    _open_review_tab(chromium_page)
+
+    detail_image = chromium_page.locator("#detail-image")
+    detail_image.wait_for(state="visible")
+    detail_image.click()
+
+    chromium_page.wait_for_function("() => document.getElementById('lightbox-overlay')?.open === true")
+
+    zoom_level = chromium_page.locator("#lightbox-zoom-level")
+    lightbox_image = chromium_page.locator("#lightbox-image")
+
+    # Initial state is Fit (1x, unzoomed)
+    expect(zoom_level).to_have_text("Fit")
+    assert chromium_page.evaluate("() => document.getElementById('lightbox-image')?.style.transform || ''") == ""
+    assert chromium_page.evaluate("() => document.getElementById('lightbox-zoom-out')?.disabled === true")
+
+    # Click image to zoom in to 250%
+    lightbox_image.click()
+    expect(zoom_level).to_have_text("250%")
+    assert "scale(2.5)" in chromium_page.evaluate("() => document.getElementById('lightbox-image')?.style.transform || ''")
+    assert chromium_page.evaluate("() => document.getElementById('lightbox-image')?.classList.contains('is-zoomed') === true")
+    assert chromium_page.evaluate("() => document.getElementById('lightbox-zoom-out')?.disabled === false")
+
+    # Zoom in via toolbar button
+    chromium_page.locator("#lightbox-zoom-in").click()
+    expect(zoom_level).to_have_text("325%")
+
+    # Zoom out via toolbar button
+    chromium_page.locator("#lightbox-zoom-out").click()
+    expect(zoom_level).to_have_text("250%")
+
+    # Reset via toolbar reset button
+    chromium_page.locator("#lightbox-zoom-reset").click()
+    expect(zoom_level).to_have_text("Fit")
+    assert chromium_page.evaluate("() => document.getElementById('lightbox-image')?.style.transform || ''") == ""
+
+    # Keyboard shortcut '+' to zoom in
+    chromium_page.keyboard.press("+")
+    expect(zoom_level).to_have_text("130%")
+
+    # Keyboard shortcut '0' to reset to fit
+    chromium_page.keyboard.press("0")
+    expect(zoom_level).to_have_text("Fit")
+
+    # Zoom in again and close overlay
+    lightbox_image.click()
+    expect(zoom_level).to_have_text("250%")
+    chromium_page.keyboard.press("Escape")
+    chromium_page.wait_for_function("() => document.getElementById('lightbox-overlay')?.open === false")
+    assert chromium_page.evaluate("() => document.activeElement?.id") == "detail-image"
+
+    # Re-opening resets zoom back to Fit
+    detail_image.click()
+    chromium_page.wait_for_function("() => document.getElementById('lightbox-overlay')?.open === true")
+    expect(zoom_level).to_have_text("Fit")
+    assert chromium_page.evaluate("() => document.getElementById('lightbox-image')?.style.transform || ''") == ""
+    chromium_page.keyboard.press("Escape")
+
+
 def test_folder_browser_path_field_has_explicit_accessible_name(chromium_page) -> None:
     chromium_page, expect = chromium_page
 
@@ -914,3 +975,70 @@ def test_compare_truncation_warning_stays_visible_with_results(chromium_page) ->
     expect(warning).to_contain_text("Comparing first 10,000 of 32,000 files.")
     expect(warning).to_contain_text("Narrow the root or apply filters for a full compare.")
     expect(chromium_page.locator("#compare-card-gallery .compare-result-card")).to_have_count(1)
+
+
+def test_export_dialog_destination_enter_key_creates_dir_and_copies(chromium_page, tmp_path) -> None:
+    page, expect = chromium_page
+    _open_export_dialog(page)
+
+    target_dir = tmp_path / "new_created_culls"
+    assert not target_dir.exists()
+
+    dialog_messages = []
+
+    def handle_dialog(dialog):
+        dialog_messages.append(dialog.message)
+        dialog.accept()
+
+    page.on("dialog", handle_dialog)
+
+    page.locator("#export-destination").fill(str(target_dir))
+    page.locator("#export-mode").select_option("copy")
+    page.locator("#export-destination").press("Enter")
+
+    page.wait_for_function("() => document.getElementById('export-dialog')?.open === false")
+    expect(page.locator("#toast-region")).to_contain_text("Copy complete")
+
+    assert any("Destination folder does not exist" in m for m in dialog_messages)
+    assert target_dir.is_dir()
+
+
+def test_export_dialog_cancel_move_keeps_dialog_open(chromium_page, tmp_path) -> None:
+    page, expect = chromium_page
+    _open_export_dialog(page)
+
+    page.locator("#export-destination").fill(str(tmp_path))
+
+    dialog_messages = []
+
+    def handle_dialog(dialog):
+        dialog_messages.append(dialog.message)
+        dialog.dismiss()
+
+    page.on("dialog", handle_dialog)
+    page.locator("#export-confirm").click()
+
+    assert page.evaluate("() => document.getElementById('export-dialog')?.open === true")
+    expect(page.locator("#toast-region")).to_contain_text("Move cancelled")
+    assert any("remove the original files" in m for m in dialog_messages)
+
+
+def test_export_dialog_mode_switch_to_copy_does_not_prompt_move_warning(chromium_page, tmp_path) -> None:
+    page, expect = chromium_page
+    _open_export_dialog(page)
+
+    page.locator("#export-destination").fill(str(tmp_path))
+    page.locator("#export-mode").select_option("copy")
+
+    dialog_messages = []
+
+    def handle_dialog(dialog):
+        dialog_messages.append(dialog.message)
+        dialog.accept()
+
+    page.on("dialog", handle_dialog)
+    page.locator("#export-confirm").click()
+
+    page.wait_for_function("() => document.getElementById('export-dialog')?.open === false")
+    expect(page.locator("#toast-region")).to_contain_text("Copy complete")
+    assert not any("remove the original files" in m for m in dialog_messages)

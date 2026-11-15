@@ -177,6 +177,24 @@ class TestValidation:
             with pytest.raises(ValueError, match="Destination"):
                 export_files(connection, file_ids=list(ids_by_name.values()), destination=str(tmp_path / "nonexistent"), mode="copy")
 
+    def test_creates_missing_destination_when_requested(self, tmp_path: Path):
+        db_path, _, ids_by_name = setup_library(tmp_path)
+        new_dest = tmp_path / "created_export_dir"
+        assert not new_dest.exists()
+
+        with database(db_path) as connection:
+            result = export_files(
+                connection,
+                file_ids=[ids_by_name["alpha.jpg"]],
+                destination=str(new_dest),
+                mode="copy",
+                create_destination=True,
+            )
+
+        assert result.copied == 1
+        assert new_dest.is_dir()
+        assert (new_dest / "alpha.jpg").is_file()
+
     def test_empty_file_ids_returns_zero_summary(self, tmp_path: Path):
         db_path, _, _ = setup_library(tmp_path)
 

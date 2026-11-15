@@ -416,6 +416,14 @@ def _execute_export_request(
         if mode_raw is None
         else deps.required_choice(mode_raw, name="mode", choices=("copy", "move"))
     )
+    pair_mode_raw = payload.get("pair_mode")
+    pair_mode = (
+        "both"
+        if pair_mode_raw is None
+        else deps.required_choice(pair_mode_raw, name="pair_mode", choices=("both", "raw_only", "rendered_only", "none"))
+    )
+    coerce_bool = getattr(deps, "coerce_bool", None)
+    create_destination = coerce_bool(payload.get("create_destination"), default=False) if callable(coerce_bool) else bool(payload.get("create_destination", False))
     phase = "moving_files" if mode == "move" else "exporting_files"
     total_hint = _route(context, "_progress_total_hint", _progress_total_hint)(deps, payload)
     if not destination:
@@ -451,6 +459,8 @@ def _execute_export_request(
                         preview_cache_root=preview_cache_root,
                         progress_callback=_route(context, "_operation_progress_callback", _operation_progress_callback)(progress_callback, phase=phase, offset=0, total_hint=total),
                         cancel_check=cancel_check,
+                        pair_mode=pair_mode,
+                        create_destination=create_destination,
                     )
                 except Exception as exc:
                     # Destination validation happens before the export worker has
@@ -499,6 +509,8 @@ def _execute_export_request(
                     preview_cache_root=preview_cache_root,
                     progress_callback=_route(context, "_operation_progress_callback", _operation_progress_callback)(progress_callback, phase=phase, offset=processed_so_far, total_hint=batch_total),
                     cancel_check=cancel_check,
+                    pair_mode=pair_mode,
+                    create_destination=create_destination,
                 )
                 if isinstance(batch_result, FileOperationSummary):
                     contract_enabled = True

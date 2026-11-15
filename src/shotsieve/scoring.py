@@ -614,14 +614,15 @@ def score_files(
     progress_callback: Callable[[AnalysisProgress], None] | None = None,
     resource_profile: str | None = None,
     max_decode_pixels: int = DEFAULT_MAX_DECODE_PIXELS,
+    group_pairs: bool = True,
 ) -> ScoreSummary:
     """Score catalog rows while preserving the public progress/lifecycle contract."""
     summary = ScoreSummary()
     selected_backend = validate_model_name(learned_backend_name or DEFAULT_MODEL_NAME)
 
-    rows = fetch_score_rows(connection, raw_root=raw_root, limit=limit, offset=offset)
+    rows = fetch_score_rows(connection, raw_root=raw_root, limit=limit, offset=offset, group_pairs=group_pairs)
     if _refresh_scoring_source_fingerprints(connection, rows):
-        rows = fetch_score_rows(connection, raw_root=raw_root, limit=limit, offset=offset)
+        rows = fetch_score_rows(connection, raw_root=raw_root, limit=limit, offset=offset, group_pairs=group_pairs)
     summary.rows_loaded = len(rows)
     if learned_backend_factory is None:
         def factory(model_name: str) -> LearnedIqaBackend:
@@ -1125,7 +1126,14 @@ def _resolve_roots_argument(raw_root: str | Sequence[str] | Sequence[Path] | Non
         return [Path(p).expanduser().resolve() for p in raw_root if p]
 
 
-def fetch_score_rows(connection, *, raw_root: str | Sequence[str] | Sequence[Path] | None, limit: int | None, offset: int = 0):
+def fetch_score_rows(
+    connection,
+    *,
+    raw_root: str | Sequence[str] | Sequence[Path] | None,
+    limit: int | None,
+    offset: int = 0,
+    group_pairs: bool = True,
+):
     started_at = monotonic_seconds()
     query = [
         """
@@ -1148,6 +1156,9 @@ def fetch_score_rows(connection, *, raw_root: str | Sequence[str] | Sequence[Pat
     ]
     conditions: list[str] = []
     params: list[object] = []
+
+    if group_pairs:
+        conditions.append("files.id NOT IN (SELECT companion_file_id FROM file_pairs)")
 
     roots = _resolve_roots_argument(raw_root)
     if roots:
@@ -1307,6 +1318,58 @@ def upsert_score_row(
             utc_now(),
         ),
     )
+
+    try:
+        companion_rows = connection.execute(
+            """
+            SELECT files.id, files.modified_time, files.size_bytes
+            FROM file_pairs
+            JOIN files ON files.id = file_pairs.companion_file_id
+            WHERE file_pairs.primary_file_id = ?
+            """,
+            (row["id"],),
+        ).fetchall()
+        now_text = utc_now()
+        for companion in companion_rows:
+            connection.execute(
+                """
+                INSERT INTO scores(
+                    file_id, overall_score, learned_backend, learned_raw_score,
+                    learned_score_normalized, learned_confidence, source_modified_time,
+                    source_size_bytes, preset_name, model_version,
+                    image_conversion_version, computed_time
+                )
+                VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(file_id) DO UPDATE SET
+                    overall_score = excluded.overall_score,
+                    learned_backend = excluded.learned_backend,
+                    learned_raw_score = excluded.learned_raw_score,
+                    learned_score_normalized = excluded.learned_score_normalized,
+                    learned_confidence = excluded.learned_confidence,
+                    source_modified_time = excluded.source_modified_time,
+                    source_size_bytes = excluded.source_size_bytes,
+                    preset_name = excluded.preset_name,
+                    model_version = excluded.model_version,
+                    image_conversion_version = excluded.image_conversion_version,
+                    computed_time = excluded.computed_time
+                """,
+                (
+                    companion["id"],
+                    learned.normalized_score,
+                    learned_backend,
+                    learned.raw_score,
+                    learned.normalized_score,
+                    learned.confidence,
+                    companion["modified_time"],
+                    companion["size_bytes"],
+                    LEARNED_ONLY_PRESET,
+                    model_version,
+                    IMAGE_CONVERSION_VERSION,
+                    now_text,
+                ),
+            )
+    except Exception:
+        pass
 
 
 def select_analysis_path(

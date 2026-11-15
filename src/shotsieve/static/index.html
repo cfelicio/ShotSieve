@@ -134,6 +134,7 @@
             </div>
             <div class="toggle-row">
               <label class="checkbox-row"><input id="recursive-toggle" type="checkbox" checked> Search subfolders (recursive)</label>
+              <label class="checkbox-row"><input id="group-pairs-toggle" type="checkbox" checked> Group RAW+JPEG/HEIF pairs</label>
             </div>
           </div>
 
@@ -635,6 +636,14 @@
             <option value="move">Move (relocate files)</option>
           </select>
         </label>
+        <label>
+          <span>Pair Transfer Scope</span>
+          <select id="export-pair-mode">
+            <option value="both" selected>Both files (RAW + JPEG/HEIF)</option>
+            <option value="raw_only">RAW only</option>
+            <option value="rendered_only">JPEG/HEIF only</option>
+          </select>
+        </label>
         <div class="inline-actions">
           <button id="export-confirm" type="button" data-busy-lock="true">Export Now</button>
         </div>
@@ -644,6 +653,12 @@
 
   <dialog id="lightbox-overlay" class="lightbox-overlay overlay-closed" role="dialog" aria-modal="true" aria-label="Photo preview">
     <button id="lightbox-close" type="button" class="lightbox-close" aria-label="Close lightbox" autofocus data-overlay-initial-focus>&times;</button>
+    <div id="lightbox-toolbar" class="lightbox-toolbar" role="toolbar" aria-label="Zoom controls">
+      <button id="lightbox-zoom-out" type="button" class="lightbox-toolbar-btn" aria-label="Zoom out" title="Zoom out (−)" tabindex="-1">−</button>
+      <button id="lightbox-zoom-level" type="button" class="lightbox-toolbar-btn lightbox-zoom-level" aria-label="Toggle zoom level" title="Toggle Fit / 100%" tabindex="-1">Fit</button>
+      <button id="lightbox-zoom-in" type="button" class="lightbox-toolbar-btn" aria-label="Zoom in" title="Zoom in (+)" tabindex="-1">+</button>
+      <button id="lightbox-zoom-reset" type="button" class="lightbox-toolbar-btn" aria-label="Reset zoom" title="Reset zoom (0)" tabindex="-1">Reset</button>
+    </div>
     <img id="lightbox-image" class="lightbox-image" alt="Full-size photo">
   </dialog>
 

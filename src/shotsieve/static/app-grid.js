@@ -68,6 +68,7 @@
         min_size: numericParam("min_size"),
         max_size: numericParam("max_size"),
         metadata: params.get("metadata") || "all",
+        group_pairs: params.get("group_pairs") !== "0",
       };
 
       return {
@@ -147,6 +148,12 @@
 
       const metadataStatus = document.getElementById("filter-metadata-status").value;
       if (metadataStatus && metadataStatus !== "all") params.set("metadata", metadataStatus);
+
+      if (state.groupRawJpeg === false) {
+        params.set("group_pairs", "0");
+      } else {
+        params.set("group_pairs", "1");
+      }
 
       params.set("limit", String(state.pageSize));
       params.set("offset", String(state.page * state.pageSize));

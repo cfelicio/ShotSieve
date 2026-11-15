@@ -15,7 +15,12 @@ RAW_CAMERA_EXTENSIONS = frozenset({
     ".3fr", ".arw", ".cr2", ".cr3", ".dng",
     ".nef", ".orf", ".raf", ".rw2", ".raw",
 })
-HEIF_EXTENSIONS = frozenset({".heic", ".heif"})
+HEIF_EXTENSIONS = frozenset({".heic", ".heif", ".hif"})
+RENDERED_COMPANION_EXTENSIONS = frozenset({".jpg", ".jpeg"}) | HEIF_EXTENSIONS
+DEFAULT_GROUP_PAIRS = True
+APP_METADATA_GROUP_PAIRS_KEY = "group_pairs"
+DEFAULT_PAIR_EXPORT_MODE = "both"
+PAIR_EXPORT_MODES = ("both", "raw_only", "rendered_only")
 PIL_PREVIEWABLE_EXTENSIONS = frozenset({".jpeg", ".jpg", ".png", ".tif", ".tiff"})
 
 #: All formats for which a generated JPEG preview can be produced.
@@ -48,6 +53,8 @@ class AppConfig:
     preview_dir: Path
     supported_extensions: tuple[str, ...]
     raw_preview_mode: str
+    group_pairs: bool = DEFAULT_GROUP_PAIRS
+    pair_export_mode: str = DEFAULT_PAIR_EXPORT_MODE
 
 
 def resolve_db_path(raw_path: str) -> Path:
@@ -98,6 +105,8 @@ def build_config(
     raw_preview_dir: str | None = None,
     raw_extensions: str | None = None,
     raw_preview_mode: str | None = None,
+    group_pairs: bool = DEFAULT_GROUP_PAIRS,
+    pair_export_mode: str = DEFAULT_PAIR_EXPORT_MODE,
 ) -> AppConfig:
     db_path = resolve_db_path(raw_db_path)
     return AppConfig(
@@ -105,4 +114,6 @@ def build_config(
         preview_dir=resolve_preview_dir(raw_preview_dir, db_path=db_path),
         supported_extensions=parse_extensions(raw_extensions),
         raw_preview_mode=normalize_raw_preview_mode(raw_preview_mode),
+        group_pairs=group_pairs,
+        pair_export_mode=pair_export_mode,
     )

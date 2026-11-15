@@ -3,10 +3,15 @@ from __future__ import annotations
 import platform
 import sqlite3
 from contextlib import contextmanager
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterator, Sequence
 
-from shotsieve.config import resolve_preview_dir
+from shotsieve.config import (
+    RAW_CAMERA_EXTENSIONS,
+    RENDERED_COMPANION_EXTENSIONS,
+    resolve_preview_dir,
+)
 from shotsieve.models import ScanRunDiagnostic
 from shotsieve.schema import SCHEMA_MIGRATIONS, SCHEMA_SQL
 
@@ -212,6 +217,25 @@ def _persist_scan_diagnostic_after_rollback(
 
 
 def apply_schema_migrations(connection: sqlite3.Connection) -> None:
+    connection.execute(
+        """
+        CREATE TABLE IF NOT EXISTS file_pairs (
+            primary_file_id INTEGER NOT NULL,
+            companion_file_id INTEGER NOT NULL,
+            pair_type TEXT NOT NULL DEFAULT 'raw_pair',
+            created_time TEXT NOT NULL,
+            PRIMARY KEY (primary_file_id, companion_file_id),
+            FOREIGN KEY(primary_file_id) REFERENCES files(id) ON DELETE CASCADE,
+            FOREIGN KEY(companion_file_id) REFERENCES files(id) ON DELETE CASCADE
+        )
+        """
+    )
+    connection.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_file_pairs_companion ON file_pairs(companion_file_id)"
+    )
+    connection.execute(
+        "CREATE INDEX IF NOT EXISTS idx_file_pairs_primary ON file_pairs(primary_file_id)"
+    )
     for table_name, migrations in SCHEMA_MIGRATIONS.items():
         columns = {
             row[1]
@@ -220,6 +244,142 @@ def apply_schema_migrations(connection: sqlite3.Connection) -> None:
         for column_name, sql in migrations.items():
             if column_name not in columns:
                 connection.execute(sql)
+
+
+def candidate_companion_path_keys(file_path: Path) -> list[str]:
+    """Return normalized path_key candidates for companion RAW or rendered pairs."""
+    suffix = file_path.suffix.casefold()
+    target_extensions: tuple[str, ...]
+    if suffix in RAW_CAMERA_EXTENSIONS:
+        target_extensions = tuple(RENDERED_COMPANION_EXTENSIONS)
+    elif suffix in RENDERED_COMPANION_EXTENSIONS:
+        target_extensions = tuple(RAW_CAMERA_EXTENSIONS)
+    else:
+        return []
+
+    candidates: list[str] = []
+    seen: set[str] = set()
+    for ext in target_extensions:
+        for candidate_ext in (ext.lower(), ext.upper()):
+            candidate_path = file_path.with_suffix(candidate_ext)
+            key = normalize_resolved_path(candidate_path)
+            if key not in seen:
+                seen.add(key)
+                candidates.append(key)
+    return candidates
+
+
+def link_file_pair(
+    connection: sqlite3.Connection,
+    primary_file_id: int,
+    companion_file_id: int,
+    *,
+    pair_type: str = "raw_pair",
+) -> None:
+    """Link a primary rendered file (JPEG/HEIF) with its companion RAW file."""
+    now_text = datetime.now(timezone.utc).isoformat()
+    connection.execute(
+        """
+        INSERT INTO file_pairs(primary_file_id, companion_file_id, pair_type, created_time)
+        VALUES(?, ?, ?, ?)
+        ON CONFLICT(primary_file_id, companion_file_id) DO NOTHING
+        """,
+        (primary_file_id, companion_file_id, pair_type, now_text),
+    )
+
+
+def get_all_paired_file_ids(
+    connection: sqlite3.Connection,
+    file_ids: Sequence[int],
+) -> list[int]:
+    """Return the input file_ids plus any linked companion or primary file IDs."""
+    if not file_ids:
+        return []
+
+    input_ids = list(dict.fromkeys(int(fid) for fid in file_ids if int(fid) > 0))
+    if not input_ids:
+        return []
+
+    all_ids = set(input_ids)
+    for id_batch in iter_sqlite_id_batches(connection, input_ids):
+        placeholders = ",".join("?" for _ in id_batch)
+        batch_tuple = tuple(id_batch)
+        rows_comp = connection.execute(
+            f"SELECT companion_file_id AS paired_id FROM file_pairs WHERE primary_file_id IN ({placeholders})",
+            batch_tuple,
+        ).fetchall()
+        for row in rows_comp:
+            all_ids.add(int(row["paired_id"]))
+
+        rows_prim = connection.execute(
+            f"SELECT primary_file_id AS paired_id FROM file_pairs WHERE companion_file_id IN ({placeholders})",
+            batch_tuple,
+        ).fetchall()
+        for row in rows_prim:
+            all_ids.add(int(row["paired_id"]))
+
+    return sorted(all_ids, key=lambda fid: (fid not in input_ids, input_ids.index(fid) if fid in input_ids else fid))
+
+
+def reconcile_catalog_pairs(
+    connection: sqlite3.Connection,
+    root_path: Path | None = None,
+) -> int:
+    """Detect and record RAW+JPEG/HEIF pairs for unlinked catalog files.
+
+    Returns the number of newly linked pairs.
+    """
+    raw_placeholders = ",".join("?" for _ in RAW_CAMERA_EXTENSIONS)
+    query_parts = [
+        f"""
+        SELECT files.id, files.path, files.path_key
+        FROM files
+        LEFT JOIN file_pairs ON file_pairs.companion_file_id = files.id
+        WHERE file_pairs.companion_file_id IS NULL
+          AND unicode_casefold(files.format) IN ({raw_placeholders})
+        """
+    ]
+    raw_formats = [ext.lstrip(".").casefold() for ext in RAW_CAMERA_EXTENSIONS]
+    params: list[object] = list(raw_formats)
+
+    if root_path is not None:
+        root_clause, root_params = root_path_filter("files.path_key", root_path)
+        query_parts.append(f"AND {root_clause}")
+        params.extend(root_params)
+
+    query_parts.append("ORDER BY files.id ASC")
+    raw_rows = connection.execute(" ".join(query_parts), tuple(params)).fetchall()
+    if not raw_rows:
+        return 0
+
+    newly_linked = 0
+    now_text = datetime.now(timezone.utc).isoformat()
+    for row in raw_rows:
+        raw_id = int(row["id"])
+        raw_path = Path(row["path"])
+        candidates = candidate_companion_path_keys(raw_path)
+        if not candidates:
+            continue
+
+        placeholders = ",".join("?" for _ in candidates)
+        companion_row = connection.execute(
+            f"SELECT id, path FROM files WHERE path_key IN ({placeholders}) LIMIT 1",
+            tuple(candidates),
+        ).fetchone()
+
+        if companion_row is not None:
+            primary_id = int(companion_row["id"])
+            connection.execute(
+                """
+                INSERT INTO file_pairs(primary_file_id, companion_file_id, pair_type, created_time)
+                VALUES(?, ?, 'raw_pair', ?)
+                ON CONFLICT(primary_file_id, companion_file_id) DO NOTHING
+                """,
+                (primary_id, raw_id, now_text),
+            )
+            newly_linked += 1
+
+    return newly_linked
 
 
 def escape_like(value: str) -> str:

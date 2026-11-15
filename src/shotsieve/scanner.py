@@ -516,6 +516,11 @@ def _finalize_completed_scan(
     *,
     last_error: str | None,
 ) -> None:
+    from shotsieve.db import reconcile_catalog_pairs
+    try:
+        reconcile_catalog_pairs(connection)
+    except Exception:
+        pass
     connection.execute(
         """
         UPDATE scan_runs
