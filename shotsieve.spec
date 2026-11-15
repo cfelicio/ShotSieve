@@ -95,6 +95,7 @@ if skip_bundled_torch:
 hiddenimports += [
     "pkg_resources",
     "modulefinder",
+    "pickletools",
     "shotsieve",
     "shotsieve.desktop",
     "shotsieve.web",

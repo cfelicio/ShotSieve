@@ -225,17 +225,24 @@ def _learned_iqa_runtime_import_diagnostic() -> str | None:
     return None
 
 
+_last_torch_import_error: str | None = None
+
+
 def runtime_bundle_has_usable_cuda_torch(*, force_reload: bool = False) -> bool:
+    global _last_torch_import_error
     if force_reload:
         importlib.invalidate_caches()
         _clear_failed_torch_imports()
+        _last_torch_import_error = None
 
     if importlib.util.find_spec("torch") is None:
         return False
 
     try:
         torch_module = importlib.import_module("torch")
-    except Exception:
+        _last_torch_import_error = None
+    except Exception as exc:
+        _last_torch_import_error = f"{type(exc).__name__}: {exc}"
         return False
 
     return cuda_runtime_is_usable(torch_module)
@@ -243,12 +250,19 @@ def runtime_bundle_has_usable_cuda_torch(*, force_reload: bool = False) -> bool:
 
 def _torch_runtime_import_diagnostic() -> str | None:
     """Separate a broken native import from an unavailable accelerator."""
+    global _last_torch_import_error
+    if _last_torch_import_error is not None:
+        return _last_torch_import_error
+    if "torch" in sys.modules:
+        return None
     _clear_failed_torch_imports()
     try:
         importlib.invalidate_caches()
         importlib.import_module("torch")
+        _last_torch_import_error = None
     except Exception as exc:
-        return f"{type(exc).__name__}: {exc}"
+        _last_torch_import_error = f"{type(exc).__name__}: {exc}"
+        return _last_torch_import_error
     return None
 
 
@@ -263,6 +277,7 @@ def _report_xpu_cpu_fallback(output_func) -> None:
 
 def runtime_bundle_has_usable_torch(target_id: str | None, *, force_reload: bool = False) -> bool:
     """Probe the already-importable runtime for the selected target family."""
+    global _last_torch_import_error
     normalized_target = canonical_release_target_id(target_id or "")
     if normalized_target.endswith("-nvidia-cuda"):
         return runtime_bundle_has_usable_cuda_torch(force_reload=force_reload)
@@ -270,13 +285,16 @@ def runtime_bundle_has_usable_torch(target_id: str | None, *, force_reload: bool
     if force_reload:
         importlib.invalidate_caches()
         _clear_failed_torch_imports()
+        _last_torch_import_error = None
 
     if importlib.util.find_spec("torch") is None:
         return False
 
     try:
         torch_module = importlib.import_module("torch")
-    except Exception:
+        _last_torch_import_error = None
+    except Exception as exc:
+        _last_torch_import_error = f"{type(exc).__name__}: {exc}"
         return False
 
     runtime = _runtime_name_from_target_id(normalized_target)
@@ -651,9 +669,11 @@ def check_runtime(data_dir: Path, *, output_func=print) -> bool:
             "learned_imports_ok": True,
             "accelerator_available": accelerator_available,
         }, sort_keys=True))
+        sys.stdout.flush()
         return True
     except Exception as exc:
         output_func(f"Runtime check failed: {type(exc).__name__}: {exc}")
+        sys.stdout.flush()
         return False
 
 
